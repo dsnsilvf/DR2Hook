@@ -1,0 +1,30 @@
+# Compilação e Build
+build/
+bin/
+lib/
+out/
+*.obj
+*.o
+*.dll
+*.pdb
+*.lib
+*.exp
+*.ilk
+
+# Visual Studio & MSVC
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# IDEs e Editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs e Arquivos temporários
+*.log
+*.tmp
+crashdump.dmp
