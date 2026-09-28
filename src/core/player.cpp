@@ -122,6 +122,10 @@ bool Player::CaptureState(CarState &outState) {
       return false;
     }
 
+    // Leitura do quaternion de orientacao
+    accessor->Read(s_vehicleAddress + 0x2e0, &outState.quaternion,
+                   sizeof(Vector4));
+
     Vector3 row0{}, row1{}, row2{};
     if (accessor->Read(s_vehicleAddress + 0x2f0, &row0, sizeof(Vector3)) &&
         accessor->Read(s_vehicleAddress + 0x300, &row1, sizeof(Vector3)) &&
@@ -159,7 +163,7 @@ bool Player::CaptureState(CarState &outState) {
   return true;
 }
 
-bool Player::ApplyState(const CarState &state) {
+bool Player::ApplyState(const CarState &state, RestoreMode mode) {
   if (s_scanner == nullptr || s_vehicleAddress == 0) {
     Logger::Warn(
         "Player::ApplyState: scanner ou vehicleAddress nao configurado.");
@@ -178,7 +182,17 @@ bool Player::ApplyState(const CarState &state) {
     // 1. Escrever posicao física (+0x2d0)
     accessor->Write(s_vehicleAddress + 0x2d0, &state.position, sizeof(Vector3));
 
-    // 2. Escrever orientacao/matriz 3x3 (+0x2f0, +0x300, +0x310)
+    // 2. Escrever quaternion se for válido
+    float quatNormSq = state.quaternion.x * state.quaternion.x +
+                       state.quaternion.y * state.quaternion.y +
+                       state.quaternion.z * state.quaternion.z +
+                       state.quaternion.w * state.quaternion.w;
+    if (quatNormSq > 0.1f) {
+      accessor->Write(s_vehicleAddress + 0x2e0, &state.quaternion,
+                      sizeof(Vector4));
+    }
+
+    // 3. Escrever orientacao/matriz 3x3 (+0x2f0, +0x300, +0x310)
     Vector3 row0{state.rotationMatrix.m[0][0], state.rotationMatrix.m[0][1],
                  state.rotationMatrix.m[0][2]};
     Vector3 row1{state.rotationMatrix.m[1][0], state.rotationMatrix.m[1][1],
@@ -189,13 +203,19 @@ bool Player::ApplyState(const CarState &state) {
     accessor->Write(s_vehicleAddress + 0x300, &row1, sizeof(Vector3));
     accessor->Write(s_vehicleAddress + 0x310, &row2, sizeof(Vector3));
 
-    // 3. Amortecimento inercial e velocidade linear
-    Vector3 zeroAngVel{0.f, 0.f, 0.f};
-    accessor->Write(s_vehicleAddress + 0x320, &state.linearVelocity,
-                    sizeof(Vector3));
-    accessor->Write(s_vehicleAddress + 0x330, &zeroAngVel, sizeof(Vector3));
+    // 4. Velocidade linear e angular de acordo com o modo
+    if (mode == RestoreMode::WithMomentum) {
+      accessor->Write(s_vehicleAddress + 0x320, &state.linearVelocity,
+                      sizeof(Vector3));
+      accessor->Write(s_vehicleAddress + 0x330, &state.angularVelocity,
+                      sizeof(Vector3));
+    } else {
+      Vector3 zeroVel{0.f, 0.f, 0.f};
+      accessor->Write(s_vehicleAddress + 0x320, &zeroVel, sizeof(Vector3));
+      accessor->Write(s_vehicleAddress + 0x330, &zeroVel, sizeof(Vector3));
+    }
 
-    // 4. Sincronizacao de transform visual no container (+0xcd0)
+    // 5. Sincronizacao de transform visual no container (+0xcd0)
     uintptr_t container = 0;
     if (accessor->Read(s_vehicleAddress, &container, sizeof(container)) &&
         container != 0 && accessor->IsValidAddress(container + 0xcd0)) {
@@ -208,7 +228,13 @@ bool Player::ApplyState(const CarState &state) {
 
   // Fallback para teste unitario com mock direto compacto
   CarState sanitizedState = state;
-  sanitizedState.angularVelocity = Vector3{0.f, 0.f, 0.f};
+  if (mode == RestoreMode::WithMomentum) {
+    sanitizedState.linearVelocity = state.linearVelocity;
+    sanitizedState.angularVelocity = state.angularVelocity;
+  } else {
+    sanitizedState.linearVelocity = Vector3{0.f, 0.f, 0.f};
+    sanitizedState.angularVelocity = Vector3{0.f, 0.f, 0.f};
+  }
   for (int i = 0; i < 4; ++i) {
     sanitizedState.wheels[i].suspensionCompression =
         SUSPENSION_STATIC_SAG_RATIO;

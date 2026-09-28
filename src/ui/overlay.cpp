@@ -362,17 +362,38 @@ void OverlayManager::RenderUI() {
         }
 
         ImGui::Spacing();
+        ImGui::Text("Modo de Restauração:");
+        int currentMode = static_cast<int>(SavestateManager::GetRestoreMode());
+        if (ImGui::RadioButton("Normal (Parado)", currentMode == 0)) {
+          SavestateManager::SetRestoreMode(RestoreMode::Normal);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Com Momentum (Dinâmico)", currentMode == 1)) {
+          SavestateManager::SetRestoreMode(RestoreMode::WithMomentum);
+        }
+
+        ImGui::Spacing();
         if (ImGui::Button("Salvar Checkpoint (F5)")) {
           SavestateManager::OnKeyAction(0x74, true); // VK_F5
         }
         ImGui::SameLine();
-        if (ImGui::Button("Restaurar Checkpoint (F6)")) {
-          SavestateManager::OnKeyAction(0x75, true); // VK_F6
+        if (ImGui::Button("Restaurar Normal")) {
+          SavestateManager::RestoreCheckpoint(RestoreMode::Normal);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Restaurar com Momentum")) {
+          SavestateManager::RestoreCheckpoint(RestoreMode::WithMomentum);
         }
 
         if (SavestateManager::HasSavedState()) {
-          ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                             "Checkpoint salvo disponível.");
+          const char *modeLabel = (SavestateManager::GetRestoreMode() ==
+                                   RestoreMode::WithMomentum)
+                                      ? "Com Momentum (F6/F7)"
+                                      : "Normal (F6)";
+          ImGui::TextColored(
+              ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+              "Checkpoint salvo disponível. (Modo da tecla F6: %s)",
+              modeLabel);
         } else {
           ImGui::TextDisabled("Nenhum checkpoint salvo.");
         }

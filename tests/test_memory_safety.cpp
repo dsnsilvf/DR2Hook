@@ -378,32 +378,54 @@ void TestPlayerStateSanitization() {
   TEST_ASSERT_FLOAT_NEAR(capturedState.angularVelocity.x, 2.5f, 0.001f,
                          "AngularVelocity X original capturada");
 
-  // 2. Aplicar estado com sanitização de física
-  bool applyOk = dr2hook::Player::ApplyState(capturedState);
-  TEST_ASSERT(applyOk, "ApplyState deve retornar true");
+  // 2. Aplicar estado normalmente (parado / sem momentum)
+  bool applyOk = dr2hook::Player::ApplyState(capturedState, dr2hook::RestoreMode::Normal);
+  TEST_ASSERT(applyOk, "ApplyState Normal deve retornar true");
 
-  // 3. Ler o estado gravado na memória para verificar a sanitização
+  // 3. Ler o estado gravado na memória para verificar a sanitização normal
   dr2hook::CarState appliedMemoryState{};
   mock.Read(vehicleAddr, &appliedMemoryState, sizeof(dr2hook::CarState));
 
-  // Posição e velocidade linear devem ser preservadas
+  // Posição deve ser preservada
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.position.x, 123.4f, 0.001f,
                          "Posição X preservada");
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.position.y, 567.8f, 0.001f,
                          "Posição Y preservada");
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.position.z, -90.1f, 0.001f,
                          "Posição Z preservada");
-  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.x, 45.0f, 0.001f,
-                         "Velocidade linear X preservada");
 
-  // Velocidade angular residual DEVE SER ZERADA (amortecimento inercial
-  // deliberado)
+  // No modo Normal, velocidade linear e angular DEVEM SER ZERADAS (parado no checkpoint)
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.x, 0.0f, 0.0001f,
+                         "Velocidade linear X zerada no modo Normal");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.y, 0.0f, 0.0001f,
+                         "Velocidade linear Y zerada no modo Normal");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.z, 0.0f, 0.0001f,
+                         "Velocidade linear Z zerada no modo Normal");
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.x, 0.0f, 0.0001f,
-                         "AngularVelocity X zerada");
+                         "AngularVelocity X zerada no modo Normal");
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.y, 0.0f, 0.0001f,
-                         "AngularVelocity Y zerada");
+                         "AngularVelocity Y zerada no modo Normal");
   TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.z, 0.0f, 0.0001f,
-                         "AngularVelocity Z zerada");
+                         "AngularVelocity Z zerada no modo Normal");
+
+  // 4. Aplicar estado com momentum (RestoreMode::WithMomentum)
+  bool applyMomentumOk = dr2hook::Player::ApplyState(capturedState, dr2hook::RestoreMode::WithMomentum);
+  TEST_ASSERT(applyMomentumOk, "ApplyState WithMomentum deve retornar true");
+  mock.Read(vehicleAddr, &appliedMemoryState, sizeof(dr2hook::CarState));
+
+  // Velocidade linear e angular DEVEM SER PRESERVADAS no modo WithMomentum
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.x, 45.0f, 0.001f,
+                         "Velocidade linear X preservada com momentum");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.y, -2.0f, 0.001f,
+                         "Velocidade linear Y preservada com momentum");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.linearVelocity.z, 15.0f, 0.001f,
+                         "Velocidade linear Z preservada com momentum");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.x, 2.5f, 0.001f,
+                         "Velocidade angular X preservada com momentum");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.y, -1.8f, 0.001f,
+                         "Velocidade angular Y preservada com momentum");
+  TEST_ASSERT_FLOAT_NEAR(appliedMemoryState.angularVelocity.z, 3.2f, 0.001f,
+                         "Velocidade angular Z preservada com momentum");
 
   // Todas as 4 rodas DEVEM ESTAR normalizadas para repouso estático (0.35f) e
   // em contato
@@ -493,20 +515,50 @@ void TestSavestateManagerIntegration() {
   TEST_ASSERT(dr2hook::SafetyGuard::CanWriteState(),
               "SafetyGuard libera escrita em DirtFish");
 
+  // Restauração Normal via F6
+  dr2hook::SavestateManager::SetRestoreMode(dr2hook::RestoreMode::Normal);
+  TEST_ASSERT(dr2hook::SavestateManager::GetRestoreMode() == dr2hook::RestoreMode::Normal,
+              "RestoreMode configurado como Normal");
+
   dr2hook::SavestateManager::OnKeyAction(VK_F6, true);
 
   // Memória do veículo deve ser restaurada para a posição original gravada (10,
-  // 20, 30) e com física normalizada
+  // 20, 30) e com velocidades zeradas no modo Normal
   mock.Read(vehicleAddr, &currentVehicle, sizeof(dr2hook::CarState));
   TEST_ASSERT_FLOAT_NEAR(
       currentVehicle.position.x, 10.0f, 0.001f,
       "F6 em modo permitido restaura posição salva (posição x = 10)");
+  TEST_ASSERT_FLOAT_NEAR(currentVehicle.linearVelocity.x, 0.0f, 0.0001f,
+                         "Física restaurada normal possui velocidade linear zerada");
   TEST_ASSERT_FLOAT_NEAR(currentVehicle.angularVelocity.x, 0.0f, 0.0001f,
-                         "Física restaurada possui velocidade angular zerada");
+                         "Física restaurada normal possui velocidade angular zerada");
+
+  // 3. Modificar novamente e testar restauração com momentum via F7
+  movedCarState.position = {500.0f, 600.0f, 700.0f};
+  mock.SetValue(vehicleAddr, movedCarState);
+
+  dr2hook::SavestateManager::OnKeyAction(0x76, true); // VK_F7
+  mock.Read(vehicleAddr, &currentVehicle, sizeof(dr2hook::CarState));
   TEST_ASSERT_FLOAT_NEAR(
-      currentVehicle.wheels[0].suspensionCompression,
-      dr2hook::SUSPENSION_STATIC_SAG_RATIO, 0.0001f,
-      "Física restaurada possui suspensão normalizada para sag estático");
+      currentVehicle.position.x, 10.0f, 0.001f,
+      "F7 restaura posição salva (posição x = 10)");
+  TEST_ASSERT_FLOAT_NEAR(currentVehicle.angularVelocity.x, 1.0f, 0.0001f,
+                         "F7 com momentum preserva velocidade angular original (1.0)");
+
+  // 4. Testar chaveamento de modo do F6 para WithMomentum
+  movedCarState.position = {800.0f, 900.0f, 1000.0f};
+  mock.SetValue(vehicleAddr, movedCarState);
+  dr2hook::SavestateManager::SetRestoreMode(dr2hook::RestoreMode::WithMomentum);
+  TEST_ASSERT(dr2hook::SavestateManager::GetRestoreMode() == dr2hook::RestoreMode::WithMomentum,
+              "RestoreMode configurado como WithMomentum");
+
+  dr2hook::SavestateManager::OnKeyAction(VK_F6, true);
+  mock.Read(vehicleAddr, &currentVehicle, sizeof(dr2hook::CarState));
+  TEST_ASSERT_FLOAT_NEAR(
+      currentVehicle.position.x, 10.0f, 0.001f,
+      "F6 com modo WithMomentum ativo restaura posição salva (posição x = 10)");
+  TEST_ASSERT_FLOAT_NEAR(currentVehicle.angularVelocity.x, 1.0f, 0.0001f,
+                         "F6 com modo WithMomentum ativo preserva velocidade angular (1.0)");
 
   // Finalização
   dr2hook::SavestateManager::Shutdown();

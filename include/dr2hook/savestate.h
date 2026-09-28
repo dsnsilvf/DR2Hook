@@ -13,10 +13,16 @@ public:
   static bool HasSavedState();
   static const CarState &GetSavedState();
 
+  static void SetRestoreMode(RestoreMode mode);
+  static RestoreMode GetRestoreMode();
+  static bool RestoreCheckpoint(RestoreMode mode);
+  static bool RestoreCheckpoint();
+
 private:
   static bool s_initialized;
   static bool s_hasSavedState;
   static CarState s_savedState;
+  static RestoreMode s_restoreMode;
 };
 
 } // namespace dr2hook

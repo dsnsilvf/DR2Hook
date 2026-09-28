@@ -4,6 +4,8 @@
 #include "dr2hook/safety.h"
 #include "dr2hook/ui/overlay.h"
 
+#include <cstring>
+
 #include "lauxlib.h"
 #include "lua.h"
 #include "lualib.h"
@@ -107,7 +109,7 @@ static int Lua_Player_setPosition(lua_State *L) {
   }
   lua_pop(L, 1);
 
-  bool ok = Player::ApplyState(state);
+  bool ok = Player::ApplyState(state, RestoreMode::WithMomentum);
   lua_pushboolean(L, ok ? 1 : 0);
   return 1;
 }
@@ -205,7 +207,7 @@ static int Lua_Player_setVelocity(lua_State *L) {
   }
   lua_pop(L, 1);
 
-  bool ok = Player::ApplyState(state);
+  bool ok = Player::ApplyState(state, RestoreMode::WithMomentum);
   lua_pushboolean(L, ok ? 1 : 0);
   return 1;
 }
@@ -437,9 +439,18 @@ static int Lua_Player_setState(lua_State *L) {
       lua_pop(L, 1);
     }
   }
-  lua_pop(L, 1);
+  RestoreMode mode = RestoreMode::Normal;
+  if (lua_isstring(L, 2)) {
+    const char *m = lua_tostring(L, 2);
+    if (std::strcmp(m, "momentum") == 0 ||
+        std::strcmp(m, "with_momentum") == 0) {
+      mode = RestoreMode::WithMomentum;
+    }
+  } else if (lua_isboolean(L, 2) && lua_toboolean(L, 2)) {
+    mode = RestoreMode::WithMomentum;
+  }
 
-  bool ok = Player::ApplyState(state);
+  bool ok = Player::ApplyState(state, mode);
   lua_pushboolean(L, ok ? 1 : 0);
   return 1;
 }

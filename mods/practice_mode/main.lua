@@ -32,7 +32,7 @@ function onKeyDown(keyCode)
             print("[Practice Mode] Falha ao capturar estado do veiculo.")
         end
 
-    -- F6 (0x75): Restaurar posição e velocidade
+    -- F6 (0x75): Restaurar posição normalmente (parado)
     elseif keyCode == 0x75 then
         if Safety.isRestrictedMode() then
             UI.notify("Restauração bloqueada em modos competitivos!", 3.0)
@@ -40,13 +40,34 @@ function onKeyDown(keyCode)
         end
 
         if savedState ~= nil then
-            local ok = Player.setState(savedState)
+            local ok = Player.setState(savedState, "normal")
             if ok then
-                UI.notify("Retornando ao checkpoint...", 1.5)
-                print("[Practice Mode] Checkpoint restaurado com sucesso.")
+                UI.notify("Retornando ao checkpoint (Normal)...", 1.5)
+                print("[Practice Mode] Checkpoint restaurado normalmente com sucesso.")
             else
                 UI.notify("Falha ao restaurar checkpoint na memoria!", 2.5)
                 print("[Practice Mode] Falha ao aplicar estado do veiculo.")
+            end
+        else
+            UI.notify("Nenhum checkpoint salvo ainda! Pressione F5 primeiro.", 2.5)
+            print("[Practice Mode] Nenhum checkpoint salvo disponivel.")
+        end
+
+    -- F7 (0x76): Restaurar com momentum integral
+    elseif keyCode == 0x76 then
+        if Safety.isRestrictedMode() then
+            UI.notify("Restauração bloqueada em modos competitivos!", 3.0)
+            return
+        end
+
+        if savedState ~= nil then
+            local ok = Player.setState(savedState, "momentum")
+            if ok then
+                UI.notify("Retornando ao checkpoint (Com Momentum)...", 1.5)
+                print("[Practice Mode] Checkpoint restaurado com momentum com sucesso.")
+            else
+                UI.notify("Falha ao restaurar checkpoint na memoria!", 2.5)
+                print("[Practice Mode] Falha ao aplicar estado do veiculo com momentum.")
             end
         else
             UI.notify("Nenhum checkpoint salvo ainda! Pressione F5 primeiro.", 2.5)
