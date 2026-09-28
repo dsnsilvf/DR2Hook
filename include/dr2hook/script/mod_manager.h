@@ -14,6 +14,8 @@ struct ModInstance {
   std::string id;
   std::string name;
   std::string version;
+  std::string author;
+  std::string description;
   std::string mainScriptPath;
   std::string directoryPath;
   bool enabled = true;
@@ -21,15 +23,18 @@ struct ModInstance {
   int refOnTick = LUA_NOREF;
   int refOnKeyDown = LUA_NOREF;
   int refOnStageStart = LUA_NOREF;
+  int refOnRenderUI = LUA_NOREF;
 };
 
 class ModManager {
 public:
   static bool Initialize(const std::string &modsDirectory = "mods");
   static void Shutdown();
+  static void ReloadMods(const std::string &modsDirectory = "mods");
   static void DispatchTick(double deltaTime);
   static void DispatchKeyDown(UINT vkCode);
   static void DispatchStageStart(const std::string &stageName);
+  static void DispatchRenderUI(ModInstance &mod);
   static const std::vector<ModInstance> &GetLoadedMods();
 
 private:
@@ -39,6 +44,7 @@ private:
 
   static std::vector<ModInstance> s_mods;
   static bool s_initialized;
+  static std::string s_lastModsDirectory;
 };
 
 } // namespace dr2hook

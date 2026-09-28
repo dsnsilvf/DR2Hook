@@ -15,6 +15,7 @@ namespace dr2hook {
 
 std::vector<ModInstance> ModManager::s_mods;
 bool ModManager::s_initialized = false;
+std::string ModManager::s_lastModsDirectory = "mods";
 
 // ---------------------------------------------------------------------------
 // Helper simples para extrair strings de JSON sem dependencias externas
@@ -57,6 +58,8 @@ bool ModManager::Initialize(const std::string &modsDirectory) {
   if (s_initialized) {
     Shutdown();
   }
+
+  s_lastModsDirectory = modsDirectory;
 
   if (!LuaEngine::Initialize()) {
     Logger::Error("ModManager::Initialize: falha ao inicializar LuaEngine.");
@@ -113,6 +116,10 @@ void ModManager::Shutdown() {
         luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnStageStart);
         mod.refOnStageStart = LUA_NOREF;
       }
+      if (mod.refOnRenderUI != LUA_NOREF) {
+        luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnRenderUI);
+        mod.refOnRenderUI = LUA_NOREF;
+      }
       mod.enabled = false;
     }
   }
@@ -121,6 +128,13 @@ void ModManager::Shutdown() {
   LuaEngine::Shutdown();
   s_initialized = false;
   Logger::Info("ModManager encerrado com sucesso.");
+}
+
+void ModManager::ReloadMods(const std::string &modsDirectory) {
+  std::string dir = modsDirectory.empty() ? s_lastModsDirectory : modsDirectory;
+  Shutdown();
+  Initialize(dir);
+  Logger::Info("ModManager: todos os mods foram recarregados com sucesso a partir de: " + dir);
 }
 
 bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
@@ -158,6 +172,16 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
     version = "1.0.0";
   }
 
+  std::string author = ExtractJsonString(jsonContent, "author");
+  if (author.empty()) {
+    author = "Desconhecido";
+  }
+
+  std::string description = ExtractJsonString(jsonContent, "description");
+  if (description.empty()) {
+    description = "Sem descrição fornecida.";
+  }
+
   std::string mainFile = ExtractJsonString(jsonContent, "main");
   if (mainFile.empty()) {
     mainFile = "main.lua";
@@ -174,6 +198,8 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.id = id;
   mod.name = name;
   mod.version = version;
+  mod.author = author;
+  mod.description = description;
   mod.directoryPath = dirPath.string();
   mod.mainScriptPath = mainScriptPath.string();
   mod.enabled = true;
@@ -181,6 +207,7 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnTick = LUA_NOREF;
   mod.refOnKeyDown = LUA_NOREF;
   mod.refOnStageStart = LUA_NOREF;
+  mod.refOnRenderUI = LUA_NOREF;
 
   lua_State *L = LuaEngine::GetState();
   if (L == nullptr) {
@@ -237,6 +264,7 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnTick = cacheCallback("onTick");
   mod.refOnKeyDown = cacheCallback("onKeyDown");
   mod.refOnStageStart = cacheCallback("onStageStart");
+  mod.refOnRenderUI = cacheCallback("onRenderUI");
 
   // Invocacao de ciclo de vida onInit
   if (mod.enabled && mod.refOnInit != LUA_NOREF) {
@@ -327,6 +355,15 @@ void ModManager::DispatchStageStart(const std::string &stageName) {
       CallModCallback(mod, mod.refOnStageStart, 1, 0);
     }
   }
+}
+
+void ModManager::DispatchRenderUI(ModInstance &mod) {
+  if (!s_initialized || !mod.enabled || mod.refOnRenderUI == LUA_NOREF) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+  CallModCallback(mod, mod.refOnRenderUI, 0, 0);
 }
 
 const std::vector<ModInstance> &ModManager::GetLoadedMods() { return s_mods; }

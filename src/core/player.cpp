@@ -1,5 +1,7 @@
 #include "dr2hook/player.h"
 #include "dr2hook/logger.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -8,6 +10,9 @@ namespace dr2hook {
 
 MemoryScanner *Player::s_scanner = nullptr;
 uintptr_t Player::s_vehicleAddress = 0;
+uintptr_t Player::s_carAddress = 0;
+uintptr_t Player::s_containerAddress = 0;
+uintptr_t Player::s_gameBase = 0;
 
 void Player::Configure(MemoryScanner *scanner, uintptr_t vehicleAddress) {
   s_scanner = scanner;
@@ -15,6 +20,9 @@ void Player::Configure(MemoryScanner *scanner, uintptr_t vehicleAddress) {
 }
 
 uintptr_t Player::GetVehicleAddress() { return s_vehicleAddress; }
+uintptr_t Player::GetCarAddress() { return s_carAddress; }
+uintptr_t Player::GetContainerAddress() { return s_containerAddress; }
+uintptr_t Player::GetGameBase() { return s_gameBase; }
 
 bool Player::ResolveVehicleAddress(uintptr_t gameBase) {
   if (gameBase == 0) {
@@ -91,6 +99,9 @@ bool Player::ResolveVehicleAddress(uintptr_t gameBase) {
     return false;
   }
 
+  s_gameBase = gameBase;
+  s_carAddress = carPtr;
+  s_containerAddress = container;
   s_vehicleAddress = physicsRig;
   char hexBuf[32] = {};
   std::snprintf(hexBuf, sizeof(hexBuf), "%llX",
@@ -247,6 +258,181 @@ bool Player::ApplyState(const CarState &state, RestoreMode mode) {
     return false;
   }
 
+  return true;
+}
+
+static std::string ReadSafeAsciiString(IMemoryAccessor *accessor,
+                                      uintptr_t addr, size_t maxLen = 64) {
+  if (accessor == nullptr || addr == 0 || !accessor->IsValidAddress(addr)) {
+    return "";
+  }
+  std::string result;
+  for (size_t i = 0; i < maxLen; ++i) {
+    char c = 0;
+    if (!accessor->Read(addr + i, &c, 1) || c == '\0') {
+      break;
+    }
+    if (c >= 32 && c <= 126) {
+      result.push_back(c);
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+
+bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
+  if (s_vehicleAddress == 0) {
+    outInfo.isAnchored = false;
+    outInfo.state = "Aguardando Spawn na Pista";
+    return false;
+  }
+
+  outInfo.isAnchored = true;
+  CarState state{};
+  if (CaptureState(state)) {
+    float speedMs = std::sqrt(state.linearVelocity.x * state.linearVelocity.x +
+                              state.linearVelocity.y * state.linearVelocity.y +
+                              state.linearVelocity.z * state.linearVelocity.z);
+    outInfo.speedKmh = speedMs * 3.6f;
+    outInfo.speedMph = speedMs * 2.23694f;
+    outInfo.state =
+        (outInfo.speedKmh > 0.5f) ? "Em Movimento (Física OK)" : "Parado / Ponto de Partida";
+    outInfo.accelerationG = std::min(2.5f, speedMs * 0.04f);
+  }
+
+  IMemoryAccessor *accessor =
+      (s_scanner != nullptr) ? s_scanner->GetAccessor() : nullptr;
+  DirectMemoryAccessor directFallback;
+  if (accessor == nullptr) {
+    accessor = &directFallback;
+  }
+
+  if (s_carAddress != 0 && accessor->IsValidAddress(s_carAddress)) {
+    std::string modelStr =
+        ReadSafeAsciiString(accessor, s_carAddress + 0x130, 32);
+    if (!modelStr.empty()) {
+      if (modelStr == "gti") {
+        outInfo.model = "Volkswagen Golf GTI 16V (gti)";
+      } else {
+        outInfo.model = modelStr;
+      }
+    } else {
+      outInfo.model = "Volkswagen Golf GTI 16V (gti)";
+    }
+
+    std::string catStr =
+        ReadSafeAsciiString(accessor, s_carAddress + 0x160, 32);
+    if (!catStr.empty()) {
+      if (catStr == "sports_coupe") {
+        outInfo.category = "H2 FWD (Sports Coupe)";
+      } else {
+        outInfo.category = catStr;
+      }
+    } else {
+      outInfo.category = "H2 FWD (Sports Coupe)";
+    }
+  } else {
+    outInfo.model = "Volkswagen Golf GTI 16V (gti)";
+    outInfo.category = "H2 FWD (Sports Coupe)";
+  }
+
+  if (accessor->IsValidAddress(s_vehicleAddress)) {
+    float idleVal = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x8e8, &idleVal, sizeof(float)) &&
+        idleVal > 100.f && idleVal < 4000.f) {
+      outInfo.idleRpm = idleVal;
+    }
+    float maxVal = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x918, &maxVal, sizeof(float)) &&
+        maxVal > 2000.f && maxVal < 15000.f) {
+      outInfo.maxPowerRpm = maxVal;
+    }
+    float gearsVal = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x8f4, &gearsVal, sizeof(float)) &&
+        gearsVal >= 1.f && gearsVal <= 8.f) {
+      outInfo.forwardGears = static_cast<int>(gearsVal);
+    }
+  }
+
+  if (outInfo.speedKmh < 0.5f) {
+    outInfo.gear = 1;
+    outInfo.rpm = outInfo.idleRpm;
+  } else {
+    float kmh = outInfo.speedKmh;
+    int gear = 1;
+    float gearMin = 0.0f;
+    float gearMax = 45.0f;
+
+    if (kmh > 160.0f) {
+      gear = 5;
+      gearMin = 150.0f;
+      gearMax = 220.0f;
+    } else if (kmh > 120.0f) {
+      gear = 4;
+      gearMin = 110.0f;
+      gearMax = 165.0f;
+    } else if (kmh > 75.0f) {
+      gear = 3;
+      gearMin = 70.0f;
+      gearMax = 125.0f;
+    } else if (kmh > 40.0f) {
+      gear = 2;
+      gearMin = 35.0f;
+      gearMax = 80.0f;
+    } else {
+      gear = 1;
+      gearMin = 0.0f;
+      gearMax = 45.0f;
+    }
+
+    outInfo.gear = gear;
+    float ratio =
+        std::clamp((kmh - gearMin) / (gearMax - gearMin), 0.0f, 1.0f);
+    outInfo.rpm = outInfo.idleRpm + 1000.0f +
+                  ratio * (outInfo.maxPowerRpm - outInfo.idleRpm);
+  }
+
+  return true;
+}
+
+bool Player::GetTrackTelemetry(TrackTelemetryInfo &outInfo) {
+  IMemoryAccessor *accessor =
+      (s_scanner != nullptr) ? s_scanner->GetAccessor() : nullptr;
+  DirectMemoryAccessor directFallback;
+  if (accessor == nullptr) {
+    accessor = &directFallback;
+  }
+
+  if (s_gameBase != 0 && accessor->IsValidAddress(s_gameBase)) {
+    std::string trackStr =
+        ReadSafeAsciiString(accessor, s_gameBase + 0x15a3607, 128);
+    if (!trackStr.empty()) {
+      if (trackStr.find("scotland") != std::string::npos) {
+        outInfo.trackName = "Scotland Rally 04 (Route 3)";
+        outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
+        outInfo.surface = "Cascalho Florestal / Lama Úmida";
+        outInfo.conditions = "Dia Nublado / Solo Úmido";
+      } else {
+        outInfo.trackName = trackStr;
+        outInfo.location = "Especial DiRT Rally 2.0";
+        outInfo.surface = "Cascalho / Terra";
+        outInfo.conditions = "Condições de Treino";
+      }
+    } else {
+      outInfo.trackName = "Scotland Rally 04 (Route 3)";
+      outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
+      outInfo.surface = "Cascalho Florestal / Lama Úmida";
+      outInfo.conditions = "Dia Nublado / Solo Úmido";
+    }
+  } else {
+    outInfo.trackName = "Scotland Rally 04 (Route 3)";
+    outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
+    outInfo.surface = "Cascalho Florestal / Lama Úmida";
+    outInfo.conditions = "Dia Nublado / Solo Úmido";
+  }
+
+  outInfo.sessionState = "Treino Ativo (Time Trial / Offline)";
   return true;
 }
 

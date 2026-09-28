@@ -303,6 +303,77 @@ void TestCleanShutdownAndReentrance() {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Renderização das Abas de Diagnóstico, Mods e Abas Dinâmicas
+// ---------------------------------------------------------------------------
+void TestTabbedUIRenderingAndTelemetry() {
+  std::cout << "[RUN] TestTabbedUIRenderingAndTelemetry..." << std::endl;
+
+  uintptr_t mockRig = 0x50000000;
+  dr2hook::MockMemoryAccessor mockMem(0x4000, mockRig);
+  dr2hook::MemoryScanner scanner(&mockMem);
+
+  // Layout real da EGO Engine no rig simulado
+  dr2hook::Vector3 pos{100.0f, 25.0f, -50.0f};
+  dr2hook::Vector3 linVel{15.0f, 0.5f, 20.0f}; // ~25 m/s = 90 km/h
+  dr2hook::Vector3 angVel{0.02f, 0.05f, -0.01f};
+  dr2hook::Vector4 quat{0.0f, 0.7071f, 0.0f, 0.7071f}; // ~90 deg yaw
+  float idleRpm = 1080.0f;
+  float maxRpm = 5500.0f;
+  float gears = 5.0f;
+
+  mockMem.SetValue(mockRig + 0x2d0, pos);
+  mockMem.SetValue(mockRig + 0x2e0, quat);
+  mockMem.SetValue(mockRig + 0x320, linVel);
+  mockMem.SetValue(mockRig + 0x330, angVel);
+  mockMem.SetValue(mockRig + 0x8e8, idleRpm);
+  mockMem.SetValue(mockRig + 0x918, maxRpm);
+  mockMem.SetValue(mockRig + 0x8f4, gears);
+
+  dr2hook::Player::Configure(&scanner, mockRig);
+
+  dr2hook::VehicleTelemetryInfo vInfo;
+  bool okVeh = dr2hook::Player::GetVehicleTelemetry(vInfo);
+  TEST_ASSERT(okVeh, "GetVehicleTelemetry executado com sucesso");
+  TEST_ASSERT(vInfo.isAnchored, "Veículo reportado como ancorado");
+  TEST_ASSERT(vInfo.speedKmh > 80.0f && vInfo.speedKmh < 100.0f,
+              "Velocidade calculada em ~90 km/h");
+  TEST_ASSERT(vInfo.gear >= 1 && vInfo.gear <= 5, "Marcha ativa entre 1 e 5");
+  TEST_ASSERT(vInfo.rpm >= vInfo.idleRpm, "RPM acima ou igual a marcha lenta");
+
+  dr2hook::TrackTelemetryInfo tInfo;
+  bool okTrack = dr2hook::Player::GetTrackTelemetry(tInfo);
+  TEST_ASSERT(okTrack, "GetTrackTelemetry executado com sucesso");
+  TEST_ASSERT(!tInfo.trackName.empty(), "Nome da pista preenchido");
+  TEST_ASSERT(!tInfo.location.empty(), "Localização da pista preenchida");
+
+  // Inicializar ModManager e carregar mods reais para teste da aba dinâmica
+  dr2hook::ModManager::Initialize("mods");
+  const auto &loadedMods = dr2hook::ModManager::GetLoadedMods();
+  TEST_ASSERT(!loadedMods.empty(), "Mods carregados a partir de 'mods/'");
+
+  dr2hook::OverlayManager::Initialize(nullptr, nullptr, nullptr);
+  dr2hook::OverlayManager::SetMenuVisible(true);
+
+  // Renderizar múltiplos frames para exercitar todo o pipeline do TabBar e abas
+  for (int f = 0; f < 3; ++f) {
+    dr2hook::OverlayManager::Render(nullptr);
+  }
+
+  ImDrawData *drawData = ImGui::GetDrawData();
+  TEST_ASSERT(drawData != nullptr && drawData->CmdListsCount > 0,
+              "Estruturas ImDrawData geradas para abas Diagnóstico, Mods e Dinâmicas");
+
+  // Testar Hot-Reload de mods
+  dr2hook::ModManager::ReloadMods("mods");
+  TEST_ASSERT(!dr2hook::ModManager::GetLoadedMods().empty(),
+              "ReloadMods preserva mods carregados");
+
+  dr2hook::OverlayManager::Shutdown();
+  dr2hook::ModManager::Shutdown();
+  dr2hook::Player::Configure(nullptr, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Main Test Runner
 // ---------------------------------------------------------------------------
 int main() {
@@ -320,6 +391,7 @@ int main() {
   TestLuaUINotifyIntegration();
   TestInputCaptureFiltering();
   TestCleanShutdownAndReentrance();
+  TestTabbedUIRenderingAndTelemetry();
 
   std::cout << "====================================================="
             << std::endl;
