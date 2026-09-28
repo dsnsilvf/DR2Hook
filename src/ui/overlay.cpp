@@ -309,15 +309,6 @@ void OverlayManager::RenderUI() {
             } else {
               ImGui::TextDisabled("Rig: Disconnected");
             }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Rescan")) {
-#if defined(_WIN32)
-              Player::ResolveVehicleAddress(
-                  reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
-#else
-              Player::ResolveVehicleAddress(0x140000000);
-#endif
-            }
 
             ImGui::Spacing();
 

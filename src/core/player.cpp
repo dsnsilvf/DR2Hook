@@ -354,7 +354,7 @@ bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
       outInfo.forwardGears = static_cast<int>(gearsVal);
     }
     float liveRpm = 0.f;
-    if (accessor->Read(s_vehicleAddress + 0x8f0, &liveRpm, sizeof(float)) &&
+    if (accessor->Read(s_vehicleAddress + 0x370, &liveRpm, sizeof(float)) &&
         liveRpm >= 50.f && liveRpm <= 15000.f) {
       outInfo.rpm = liveRpm;
     } else {
@@ -362,7 +362,7 @@ bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
     }
 
     float liveGear = 0.f;
-    if (accessor->Read(s_vehicleAddress + 0x8f8, &liveGear, sizeof(float)) &&
+    if (accessor->Read(s_vehicleAddress + 0x390, &liveGear, sizeof(float)) &&
         liveGear >= -1.f && liveGear <= 8.f) {
       outInfo.gear = static_cast<int>(liveGear);
     } else {
