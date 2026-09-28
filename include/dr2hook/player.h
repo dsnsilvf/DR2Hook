@@ -36,6 +36,8 @@ public:
   static void Configure(MemoryScanner *scanner, uintptr_t vehicleAddress);
   static bool CaptureState(CarState &outState);
   static bool ApplyState(const CarState &state);
+  static bool ResolveVehicleAddress(uintptr_t gameBase);
+  static uintptr_t GetVehicleAddress();
 
 private:
   static MemoryScanner *s_scanner;

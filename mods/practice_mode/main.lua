@@ -23,9 +23,14 @@ function onKeyDown(keyCode)
         end
 
         savedState = Player.getState()
-        UI.notify("Checkpoint salvo!", 2.0)
-        print(string.format("[Practice Mode] Checkpoint gravado em: (%.2f, %.2f, %.2f)", 
-            savedState.position.x, savedState.position.y, savedState.position.z))
+        if savedState ~= nil then
+            UI.notify("Checkpoint salvo!", 2.0)
+            print(string.format("[Practice Mode] Checkpoint gravado em: (%.2f, %.2f, %.2f)", 
+                savedState.position.x, savedState.position.y, savedState.position.z))
+        else
+            UI.notify("Falha ao salvar: veiculo indisponivel!", 2.5)
+            print("[Practice Mode] Falha ao capturar estado do veiculo.")
+        end
 
     -- F6 (0x75): Restaurar posição e velocidade
     elseif keyCode == 0x75 then
@@ -35,10 +40,17 @@ function onKeyDown(keyCode)
         end
 
         if savedState ~= nil then
-            Player.setState(savedState)
-            UI.notify("Retornando ao checkpoint...", 1.5)
+            local ok = Player.setState(savedState)
+            if ok then
+                UI.notify("Retornando ao checkpoint...", 1.5)
+                print("[Practice Mode] Checkpoint restaurado com sucesso.")
+            else
+                UI.notify("Falha ao restaurar checkpoint na memoria!", 2.5)
+                print("[Practice Mode] Falha ao aplicar estado do veiculo.")
+            end
         else
             UI.notify("Nenhum checkpoint salvo ainda! Pressione F5 primeiro.", 2.5)
+            print("[Practice Mode] Nenhum checkpoint salvo disponivel.")
         end
     end
 end

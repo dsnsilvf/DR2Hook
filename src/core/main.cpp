@@ -1,8 +1,17 @@
 #include "dr2hook/common.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/memory.h"
+#include "dr2hook/player.h"
 #include "dr2hook/proxy.h"
+#include "dr2hook/safety.h"
+#include "dr2hook/savestate.h"
 #include "dr2hook/script/mod_manager.h"
+
+namespace {
+dr2hook::DirectMemoryAccessor g_directAccessor;
+dr2hook::MemoryScanner g_memoryScanner(&g_directAccessor);
+} // namespace
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   Logger::Init("dr2hook.log");
@@ -14,10 +23,21 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
     if (dr2hook::InitializeHooks()) {
       Logger::Info("Hooks principais inicializados com sucesso.");
 
-      dr2hook::RegisterTickCallback(
-          [](double dt) { dr2hook::ModManager::DispatchTick(dt); });
+      dr2hook::SavestateManager::Initialize();
+      dr2hook::SafetyGuard::Configure(&g_memoryScanner, 0);
+      dr2hook::SafetyGuard::SetPermissiveMode(true);
+      dr2hook::Player::Configure(&g_memoryScanner, 0);
+
+      dr2hook::RegisterTickCallback([](double dt) {
+        if (dr2hook::Player::GetVehicleAddress() == 0) {
+          dr2hook::Player::ResolveVehicleAddress(
+              reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+        }
+        dr2hook::ModManager::DispatchTick(dt);
+      });
 
       dr2hook::RegisterKeyCallback([](UINT vkCode, bool isDown) {
+        dr2hook::SavestateManager::OnKeyAction(vkCode, isDown);
         if (isDown) {
           dr2hook::ModManager::DispatchKeyDown(vkCode);
         }
@@ -52,6 +72,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   }
 
   case DLL_PROCESS_DETACH:
+    dr2hook::SavestateManager::Shutdown();
     dr2hook::ModManager::Shutdown();
     dr2hook::ShutdownHooks();
     ShutdownProxy();

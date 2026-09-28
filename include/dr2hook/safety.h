@@ -22,10 +22,13 @@ public:
   static GameSessionMode EvaluateCurrentMode();
   static bool CanWriteState();
   static bool IsModeAllowedForPractice(GameSessionMode mode);
+  static void SetPermissiveMode(bool enabled);
+  static bool IsPermissiveMode();
 
 private:
   static MemoryScanner *s_scanner;
   static uintptr_t s_sessionModeAddress;
+  static bool s_permissiveMode;
 };
 
 } // namespace dr2hook

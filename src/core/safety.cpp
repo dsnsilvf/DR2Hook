@@ -5,12 +5,19 @@ namespace dr2hook {
 
 MemoryScanner *SafetyGuard::s_scanner = nullptr;
 uintptr_t SafetyGuard::s_sessionModeAddress = 0;
+bool SafetyGuard::s_permissiveMode = false;
 
 void SafetyGuard::Configure(MemoryScanner *scanner,
                             uintptr_t sessionModeAddress) {
   s_scanner = scanner;
   s_sessionModeAddress = sessionModeAddress;
 }
+
+void SafetyGuard::SetPermissiveMode(bool enabled) {
+  s_permissiveMode = enabled;
+}
+
+bool SafetyGuard::IsPermissiveMode() { return s_permissiveMode; }
 
 bool SafetyGuard::IsModeAllowedForPractice(GameSessionMode mode) {
   switch (mode) {
@@ -64,6 +71,9 @@ GameSessionMode SafetyGuard::EvaluateCurrentMode() {
 }
 
 bool SafetyGuard::CanWriteState() {
+  if (s_permissiveMode) {
+    return true;
+  }
   const GameSessionMode currentMode = EvaluateCurrentMode();
   return IsModeAllowedForPractice(currentMode);
 }

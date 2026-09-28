@@ -274,6 +274,12 @@ void OverlayManager::RenderUI() {
             ImVec4(1.0f, 0.25f, 0.25f, 1.0f),
             "● Status Fair Play: Sessão Competitiva / Escrita Bloqueada");
       }
+
+      bool permissive = SafetyGuard::IsPermissiveMode();
+      if (ImGui::Checkbox("Modo Treino (Liberar Savestate em Time Trial)",
+                          &permissive)) {
+        SafetyGuard::SetPermissiveMode(permissive);
+      }
       ImGui::Separator();
 
       // Gerenciador de Mods
@@ -325,18 +331,34 @@ void OverlayManager::RenderUI() {
       // Painel de Telemetria e Savestate
       if (ImGui::CollapsingHeader("Telemetria e Savestate",
                                   ImGuiTreeNodeFlags_DefaultOpen)) {
-        CarState state{};
-        if (Player::CaptureState(state)) {
-          float speedMs =
-              std::sqrt(state.linearVelocity.x * state.linearVelocity.x +
-                        state.linearVelocity.y * state.linearVelocity.y +
-                        state.linearVelocity.z * state.linearVelocity.z);
-          float speedKmh = speedMs * 3.6f;
-          ImGui::Text("Velocidade: %.1f km/h", speedKmh);
-          ImGui::Text("Posição: (X: %.2f, Y: %.2f, Z: %.2f)", state.position.x,
-                      state.position.y, state.position.z);
+        uintptr_t vehAddr = Player::GetVehicleAddress();
+        if (vehAddr != 0) {
+          ImGui::Text("Veículo: Ancorado em 0x%llX",
+                      static_cast<unsigned long long>(vehAddr));
+          CarState state{};
+          if (Player::CaptureState(state)) {
+            float speedMs =
+                std::sqrt(state.linearVelocity.x * state.linearVelocity.x +
+                          state.linearVelocity.y * state.linearVelocity.y +
+                          state.linearVelocity.z * state.linearVelocity.z);
+            float speedKmh = speedMs * 3.6f;
+            ImGui::Text("Velocidade: %.1f km/h", speedKmh);
+            ImGui::Text("Posição: (X: %.2f, Y: %.2f, Z: %.2f)",
+                        state.position.x, state.position.y, state.position.z);
+          } else {
+            ImGui::TextDisabled("Telemetria indisponível");
+          }
         } else {
-          ImGui::TextDisabled("Telemetria indisponível (veículo não ativo)");
+          ImGui::TextDisabled("Aguardando spawn do carro na pista...");
+        }
+
+        if (ImGui::Button("Re-escanear Veículo")) {
+#if defined(_WIN32)
+          Player::ResolveVehicleAddress(
+              reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+#else
+          Player::ResolveVehicleAddress(0x140000000);
+#endif
         }
 
         ImGui::Spacing();
