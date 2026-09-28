@@ -1,6 +1,6 @@
 # Engenharia Reversa da EGO Engine: DiRT Rally 2.0 (`dirtrally2.exe`)
 
-Documento técnico de referência do DR2Hook detalhando o mapeamento de subsistemas, estruturas de dados de física em runtime, tabelas de símbolos, telemetria UDP e pontos de ancoragem na memória do executável.
+Documento técnico de referência do **DR2 ModLoader v0.1.0** detalhando o mapeamento de subsistemas, estruturas de dados de física e motor em runtime, tabelas de símbolos, telemetria UDP, pontos de ancoragem e isolamento de rede Winsock.
 
 ---
 
@@ -79,6 +79,13 @@ O Physics Rig é o bloco alocado no heap onde residem as variáveis integradas p
 | `+0x310` | `Vector3` (SIMD 16B) | Linha 2 da matriz de orientação (eixo frontal / forward) |
 | `+0x320` | `Vector3` (SIMD 16B) | Velocidade linear $\vec{v} = (v_x, v_y, v_z, 0)$ em m/s |
 | `+0x330` | `Vector3` (SIMD 16B) | Velocidade angular $\vec{\omega} = (\omega_x, \omega_y, \omega_z, 0)$ em rad/s |
+| `+0x368` | `float` (4B) | Torque instantâneo do motor (Nm) |
+| `+0x370` | `float` (4B) | **RPM Real do Motor** (rotação instantânea do virabrequim/virabrequim do motor a combustão) |
+| `+0x374` | `float` (4B) | Posição do pedal de acelerador (`0.0f` a `1.0f`) |
+| `+0x390` | `float` (4B) | **Marcha Ativa da Transmissão** (`-1.0f` = Ré, `0.0f` = Neutro, `1.0f..n` = 1ª..nª marcha) |
+| `+0x8e8` | `float` (4B) | Especificação estática da marcha lenta do motor (ex.: `1080.0f` RPM) |
+| `+0x8f4` | `float` (4B) | Quantidade total de marchas à frente do veículo (ex.: `5.0f`) |
+| `+0x918` | `float` (4B) | Limite de rotação máxima / potência do motor (Redline, ex.: `5500.0f` RPM) |
 | `+0x1680` | `WheelRig` (`0x420` B) | Roda Dianteira Esquerda (Front-Left) |
 | `+0x1aa0` | `WheelRig` (`0x420` B) | Roda Dianteira Direita (Front-Right) |
 | `+0x1ec0` | `WheelRig` (`0x420` B) | Roda Traseira Esquerda (Rear-Left) |
@@ -130,3 +137,22 @@ No executável foram identificadas strings associadas ao sistema de comandos do 
 1. `"debug.global.teleport.pressed"`: Comando de trigger interno utilizado pelos desenvolvedores para reposicionar veículos durante testes de colisão e malha.
 2. `"reset_vehicle"`: Rotina padrão de recuperação que reposiciona o veículo na pista aplicando penalidade de tempo de jogo.
 3. `"vehicle_manager"`: Nome canônico registrado na tabela central de subsistemas em `.data`.
+
+---
+
+## 8. Interceptação e Isolamento de Rede Winsock (`ws2_32.dll`)
+
+Para garantir que o mod loader opere com segurança total contra trapaças em tabelas competitivas mundiais (RaceNet), o subsistema `NetworkGuard` atua diretamente na camada de transporte do sistema operacional via hooks MinHook na biblioteca `ws2_32.dll`.
+
+### Rotinas Interceptadas
+
+1. **`getaddrinfo`**:
+   - **Assinatura:** `int WSAAPI HookedGetAddrInfo(PCSTR pNodeName, PCSTR pServiceName, const ADDRINFOA *pHints, PADDRINFOA *ppResult)`
+   - **Comportamento:** Inspeciona o nome do host alvo (`pNodeName`). Caso contenha substrings relacionadas aos serviços online do jogo (`codemasters`, `dirtgame`, `racenet`, etc.), a resolução é sumariamente abortada retornando `EAI_NONAME` (`11001` / `WSAHOST_NOT_FOUND`) e `ppResult = nullptr`.
+2. **`connect`**:
+   - **Assinatura:** `int WSAAPI HookedConnect(SOCKET s, const sockaddr *name, int namelen)`
+   - **Comportamento:** Recusa a abertura de sockets TCP externos destinados aos servidores oficiais, definindo o erro do Winsock via `WSASetLastError(WSAECONNREFUSED)` (`10061`) e retornando `SOCKET_ERROR`.
+3. **`sendto`**:
+   - **Assinatura:** `int WSAAPI HookedSendTo(SOCKET s, const char *buf, int len, int flags, const sockaddr *to, int tolen)`
+   - **Comportamento:** Bloqueia envio de datagramas UDP não locais com destino aos serviços de ranking, definindo `WSASetLastError(WSAEACCES)` (`10013`) e retornando `SOCKET_ERROR`.
+

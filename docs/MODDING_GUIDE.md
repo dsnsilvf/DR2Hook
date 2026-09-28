@@ -1,8 +1,8 @@
-# Guia Oficial da API de Mods do DR2Hook
+# Guia Oficial da API de Mods do DR2 ModLoader v0.1.0
 
-Bem-vindo ao Guia Oficial de Desenvolvimento de Mods para o **DR2Hook** no *DiRT Rally 2.0*.
+Bem-vindo ao Guia Oficial de Desenvolvimento de Mods para o **DR2 ModLoader v0.1.0** no *DiRT Rally 2.0*.
 
-O DR2Hook oferece um ambiente de scripting modular e sandbox baseado em **Lua 5.4**, permitindo que a comunidade crie ferramentas de telemetria, modos de treino, interfaces personalizadas e automações em tempo real com overhead imperceptível de processamento (< 0.2ms por frame).
+O DR2 ModLoader oferece um ambiente de scripting modular e sandbox baseado em **Lua 5.4**, permitindo que a comunidade crie ferramentas de telemetria, modos de treino, interfaces personalizadas e automações em tempo real com overhead imperceptível de processamento (< 0.2ms por frame).
 
 ---
 
@@ -104,10 +104,10 @@ O DR2Hook invoca funções globais específicas no seu script `main.lua` caso es
 
 ## 3. Tabela de APIs Nativas Expostas
 
-O DR2Hook expõe namespaces protegidos em C++ para o ambiente Lua:
+O DR2 ModLoader expõe namespaces protegidos em C++ para o ambiente Lua:
 
 ### Módulo `Player`
-Controla leitura e escrita de cinemática e suspensão do veículo do jogador.
+Controla leitura e escrita de cinemática, telemetria do motor e suspensão do veículo do jogador.
 
 | Função | Parâmetros | Retorno | Descrição |
 | :--- | :--- | :--- | :--- |
@@ -115,8 +115,9 @@ Controla leitura e escrita de cinemática e suspensão do veículo do jogador.
 | `Player.setPosition(pos)` | `pos` (table: `{x, y, z}`) | `boolean` | Altera a posição tridimensional do veículo na pista. |
 | `Player.getVelocity()` | Nenhum | `table` ou `nil` | Retorna velocidades nos eixos cartesianos `{ x, y, z, vx, vy, vz }`. |
 | `Player.setVelocity(vel)` | `vel` (table: `{vx, vy, vz}`) | `boolean` | Altera a velocidade linear do veículo. |
-| `Player.getState()` | Nenhum | `table` ou `nil` | Captura o estado completo de física do veículo (ver estrutura abaixo). |
-| `Player.setState(state)` | `state` (table) | `boolean` | Restaura estado completo com sanitização física e suspensão normalizada. |
+| `Player.getState()` | Nenhum | `table` ou `nil` | Captura o estado completo de física do veículo (cinemática, orientação, velocidades e suspensões). |
+| `Player.setState(state, mode)` | `state` (table), `mode` (string opcional: `"normal"` ou `"momentum"`) | `boolean` | Restaura estado do veículo. Em modo `"normal"` (padrão), zera as velocidades e estabiliza o carro. Em modo `"momentum"`, preserva velocidades lineares e angulares gravadas. |
+| `Player.getVehicleTelemetry()` | Nenhum | `table` ou `nil` | Retorna telemetria avançada: `{ rpm, gear, speedKmh, torque, throttle, position, linearVelocity, angularVelocity }`. |
 
 #### Estrutura Completa de `Player.getState()` / `Player.setState()`
 ```lua
@@ -159,19 +160,15 @@ Permite emitir mensagens e avisos visuais na tela através do sistema de notific
 
 ## 4. Regras de Fair Play (Anti-Cheat Integrado)
 
-O princípio nº 1 do DR2Hook é o **Fair Play First**:
+## 4. Regras de Fair Play (Anti-Cheat Integrado)
 
-1. **Bloqueio Hard-Lock em C++:**
-   - As funções `Player.setPosition`, `Player.setVelocity` e `Player.setState` validam a conexão RaceNet e o modo de jogo no núcleo nativo em C++ antes de qualquer escrita na memória.
-   - Caso o jogador esteja em **Carreira Online / My Team**, **Desafios Diários/Semanais/Mensais** ou **Clubes Oficiais Ranqueados**, a chamada **falhará silenciosamente e retornará `false`**, impedindo penalidades de desclassificação ou banimentos da conta do usuário.
-2. **Boas Práticas de Implementação:**
-   - Sempre consulte `Safety.isRestrictedMode()` antes de disparar alterações de física ou savestates:
-   ```lua
-   if Safety.isRestrictedMode() then
-       UI.notify("Ação bloqueada pelo Fair Play em eventos oficiais!", 3.0)
-       return
-   end
-   ```
+O princípio nº 1 do DR2 ModLoader é o **Fair Play First**:
+
+1. **Isolamento Físico de Rede (Winsock Air-Gap):**
+   - O `NetworkGuard` bloqueia conexões TCP e resoluções DNS para domínios da Codemasters/EA/RaceNet, garantindo que o jogo permaneça em modo puramente offline enquanto o mod loader estiver ativo.
+2. **Bloqueio Hard-Lock em C++:**
+   - As funções `Player.setPosition`, `Player.setVelocity` e `Player.setState` validam a conexão e modo de jogo no núcleo nativo em C++ antes de qualquer escrita na memória.
+   - Caso o jogador esteja em qualquer evento online oficial, a chamada **falhará e retornará `false`**, impedindo violações ou banimentos.
 3. **Modos Liberados para Treino:**
    - **DirtFish** (Área Livre / Pista de Testes).
    - **Tomada de Tempo (Time Trial)**.
@@ -184,42 +181,80 @@ O princípio nº 1 do DR2Hook é o **Fair Play First**:
 Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote:
 
 ```lua
+-- ========================================================================
+-- DR2 ModLoader: Practice Mode (Practice / Savestate Mod)
+-- ========================================================================
+
 local savedState = nil
 
 function onInit()
-    print("[Practice Mode] Carregado! Pressione F5 para salvar o checkpoint e F6 para restaurar.")
+    print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")
 end
 
 function onStageStart(stage)
+    -- Clear saved checkpoint when a new stage begins
     savedState = nil
-    print("[Practice Mode] Nova especial iniciada: " .. tostring(stage.name))
+    print("[Practice Mode] New stage started: " .. stage.name)
 end
 
 function onKeyDown(keyCode)
-    -- F5 (0x74): Gravar Checkpoint
+    -- F5 (0x74): Save car position and momentum
     if keyCode == 0x74 then
         if Safety.isRestrictedMode() then
-            UI.notify("Savestate bloqueado em modos competitivos/oficiais!", 3.0)
+            UI.notify("Savestate blocked in competitive/official modes!", 3.0)
             return
         end
 
         savedState = Player.getState()
-        UI.notify("Checkpoint salvo!", 2.0)
-        print(string.format("[Practice Mode] Checkpoint gravado em: (%.2f, %.2f, %.2f)", 
-            savedState.position.x, savedState.position.y, savedState.position.z))
+        if savedState ~= nil then
+            UI.notify("Checkpoint saved!", 2.0)
+            print(string.format("[Practice Mode] Checkpoint saved at: (%.2f, %.2f, %.2f)", 
+                savedState.position.x, savedState.position.y, savedState.position.z))
+        else
+            UI.notify("Save failed: vehicle unavailable!", 2.5)
+            print("[Practice Mode] Failed to capture vehicle state.")
+        end
 
-    -- F6 (0x75): Restaurar Checkpoint
+    -- F6 (0x75): Restore position normally (stationary)
     elseif keyCode == 0x75 then
         if Safety.isRestrictedMode() then
-            UI.notify("Restauração bloqueada em modos competitivos!", 3.0)
+            UI.notify("Restore blocked in competitive modes!", 3.0)
             return
         end
 
         if savedState ~= nil then
-            Player.setState(savedState)
-            UI.notify("Retornando ao checkpoint...", 1.5)
+            local ok = Player.setState(savedState, "normal")
+            if ok then
+                UI.notify("Returning to checkpoint (Normal)...", 1.5)
+                print("[Practice Mode] Checkpoint restored normally.")
+            else
+                UI.notify("Failed to restore checkpoint in memory!", 2.5)
+                print("[Practice Mode] Failed to apply vehicle state.")
+            end
         else
-            UI.notify("Nenhum checkpoint salvo ainda! Pressione F5 primeiro.", 2.5)
+            UI.notify("No checkpoint saved yet! Press F5 first.", 2.5)
+            print("[Practice Mode] No saved checkpoint available.")
+        end
+
+    -- F7 (0x76): Restore with full momentum
+    elseif keyCode == 0x76 then
+        if Safety.isRestrictedMode() then
+            UI.notify("Restore blocked in competitive modes!", 3.0)
+            return
+        end
+
+        if savedState ~= nil then
+            local ok = Player.setState(savedState, "momentum")
+            if ok then
+                UI.notify("Returning to checkpoint (Momentum)...", 1.5)
+                print("[Practice Mode] Checkpoint restored with momentum.")
+            else
+                UI.notify("Failed to restore checkpoint with momentum!", 2.5)
+                print("[Practice Mode] Failed to apply vehicle state.")
+            end
+        else
+            UI.notify("No checkpoint saved yet! Press F5 first.", 2.5)
+            print("[Practice Mode] No saved checkpoint available.")
         end
     end
 end
