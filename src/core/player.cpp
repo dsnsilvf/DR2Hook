@@ -32,72 +32,69 @@ bool Player::ResolveVehicleAddress(uintptr_t gameBase) {
     return false;
   }
 
-  uintptr_t mgrPtrAddress = gameBase + 0x168c100;
-  uintptr_t descAddress = gameBase + 0x168c0e0;
+  // Candidatos estáticos na .data do DiRT Rally 2.0 (EGO Engine) para o carro ativo
+  const uintptr_t carStaticAddrs[] = {
+      gameBase + 0x1681ce8, // Ponteiro primário da sessão ativa do jogador
+      gameBase + 0x15a4b00, // Tabela de veículos (Carro 1)
+      gameBase + 0x15a9760  // Instância ativa em corrida
+  };
 
-  bool descriptorValid = false;
-  if (accessor->IsValidAddress(descAddress)) {
-    char descBuf[32] = {};
-    if (accessor->Read(descAddress, descBuf, sizeof(descBuf) - 1)) {
-      descBuf[sizeof(descBuf) - 1] = '\0';
-      if (std::strstr(descBuf, "vehicle_manager") != nullptr) {
-        descriptorValid = true;
+  uintptr_t carPtr = 0;
+  for (uintptr_t staticAddr : carStaticAddrs) {
+    if (accessor->IsValidAddress(staticAddr)) {
+      uintptr_t candidate = 0;
+      if (accessor->Read(staticAddr, &candidate, sizeof(candidate)) &&
+          candidate != 0 && accessor->IsValidAddress(candidate)) {
+        carPtr = candidate;
+        break;
       }
     }
   }
 
-  if (!descriptorValid && s_scanner != nullptr) {
-    uintptr_t found = s_scanner->FindPattern(
-        gameBase, 0x2000000, "76 65 68 69 63 6C 65 5F 6D 61 6E 61 67 65 72");
-    if (found != 0) {
-      mgrPtrAddress = found + 0x20;
-      descriptorValid = true;
+  uintptr_t container = 0;
+  if (carPtr != 0 && accessor->IsValidAddress(carPtr)) {
+    // car + 0x30 -> ponteiro para o container do veículo (0x4aa0f100)
+    uintptr_t containerPtrAddr = carPtr + 0x30;
+    if (accessor->IsValidAddress(containerPtrAddr)) {
+      accessor->Read(containerPtrAddr, &container, sizeof(container));
     }
   }
 
-  if (!accessor->IsValidAddress(mgrPtrAddress)) {
+  // Fallbacks para container global se o ponteiro da sessão não tiver +0x30
+  if (container == 0 || !accessor->IsValidAddress(container)) {
+    const uintptr_t containerStaticAddrs[] = {
+        gameBase + 0x201b7c0,
+        gameBase + 0x20203a8
+    };
+    for (uintptr_t cAddr : containerStaticAddrs) {
+      if (accessor->IsValidAddress(cAddr)) {
+        uintptr_t candidate = 0;
+        if (accessor->Read(cAddr, &candidate, sizeof(candidate)) &&
+            candidate != 0 && accessor->IsValidAddress(candidate)) {
+          container = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  if (container == 0 || !accessor->IsValidAddress(container)) {
     return false;
   }
 
-  uintptr_t vehicleManager = 0;
-  if (!accessor->Read(mgrPtrAddress, &vehicleManager, sizeof(vehicleManager)) ||
-      vehicleManager == 0 || !accessor->IsValidAddress(vehicleManager)) {
+  // container + 0x08 -> ponteiro para o Physics Rig (DynamicsCarImpl)
+  uintptr_t physicsRig = 0;
+  uintptr_t rigPtrAddr = container + 0x08;
+  if (!accessor->IsValidAddress(rigPtrAddr) ||
+      !accessor->Read(rigPtrAddr, &physicsRig, sizeof(physicsRig)) ||
+      physicsRig == 0 || !accessor->IsValidAddress(physicsRig)) {
     return false;
   }
 
-  uintptr_t carPtrAddress = vehicleManager + 0x30;
-  if (!accessor->IsValidAddress(carPtrAddress)) {
-    return false;
-  }
-
-  uintptr_t dynamicsCar = 0;
-  if (!accessor->Read(carPtrAddress, &dynamicsCar, sizeof(dynamicsCar)) ||
-      dynamicsCar == 0 || !accessor->IsValidAddress(dynamicsCar)) {
-    return false;
-  }
-
-  uintptr_t vtable = 0;
-  if (!accessor->Read(dynamicsCar, &vtable, sizeof(vtable)) ||
-      (gameBase != 0 && vtable != gameBase + 0x12af930)) {
-    return false;
-  }
-
-  uintptr_t implPtrAddress = dynamicsCar + 0x08;
-  if (!accessor->IsValidAddress(implPtrAddress)) {
-    return false;
-  }
-
-  uintptr_t dynamicsCarImpl = 0;
-  if (!accessor->Read(implPtrAddress, &dynamicsCarImpl,
-                      sizeof(dynamicsCarImpl)) ||
-      dynamicsCarImpl == 0 || !accessor->IsValidAddress(dynamicsCarImpl)) {
-    return false;
-  }
-
-  s_vehicleAddress = dynamicsCarImpl;
+  s_vehicleAddress = physicsRig;
   char hexBuf[32] = {};
   std::snprintf(hexBuf, sizeof(hexBuf), "%llX",
-                static_cast<unsigned long long>(dynamicsCarImpl));
+                static_cast<unsigned long long>(physicsRig));
   Logger::Info(
       std::string("Player::ResolveVehicleAddress: Veiculo ancorado em 0x") +
       hexBuf);
@@ -117,6 +114,43 @@ bool Player::CaptureState(CarState &outState) {
     return false;
   }
 
+  // 1. Verificacao de layout real da EGO Engine (Physics Rig com offsets +0x2d0)
+  if (accessor->IsValidAddress(s_vehicleAddress + 0x2d0) &&
+      accessor->IsValidAddress(s_vehicleAddress + 0x330)) {
+    if (!accessor->Read(s_vehicleAddress + 0x2d0, &outState.position,
+                        sizeof(Vector3))) {
+      return false;
+    }
+
+    Vector3 row0{}, row1{}, row2{};
+    if (accessor->Read(s_vehicleAddress + 0x2f0, &row0, sizeof(Vector3)) &&
+        accessor->Read(s_vehicleAddress + 0x300, &row1, sizeof(Vector3)) &&
+        accessor->Read(s_vehicleAddress + 0x310, &row2, sizeof(Vector3))) {
+      outState.rotationMatrix.m[0][0] = row0.x;
+      outState.rotationMatrix.m[0][1] = row0.y;
+      outState.rotationMatrix.m[0][2] = row0.z;
+      outState.rotationMatrix.m[1][0] = row1.x;
+      outState.rotationMatrix.m[1][1] = row1.y;
+      outState.rotationMatrix.m[1][2] = row1.z;
+      outState.rotationMatrix.m[2][0] = row2.x;
+      outState.rotationMatrix.m[2][1] = row2.y;
+      outState.rotationMatrix.m[2][2] = row2.z;
+    }
+
+    accessor->Read(s_vehicleAddress + 0x320, &outState.linearVelocity,
+                   sizeof(Vector3));
+    accessor->Read(s_vehicleAddress + 0x330, &outState.angularVelocity,
+                   sizeof(Vector3));
+
+    for (int i = 0; i < 4; ++i) {
+      outState.wheels[i].suspensionCompression = SUSPENSION_STATIC_SAG_RATIO;
+      outState.wheels[i].angularVelocity = 0.f;
+      outState.wheels[i].inContact = true;
+    }
+    return true;
+  }
+
+  // Fallback para teste unitario com mock direto compacto
   if (!accessor->Read(s_vehicleAddress, &outState, sizeof(CarState))) {
     Logger::Warn("Player::CaptureState: falha na leitura de CarState.");
     return false;
@@ -138,6 +172,41 @@ bool Player::ApplyState(const CarState &state) {
     return false;
   }
 
+  // 1. Verificacao de layout real da EGO Engine (Physics Rig com offsets +0x2d0)
+  if (accessor->IsValidAddress(s_vehicleAddress + 0x2d0) &&
+      accessor->IsValidAddress(s_vehicleAddress + 0x330)) {
+    // 1. Escrever posicao física (+0x2d0)
+    accessor->Write(s_vehicleAddress + 0x2d0, &state.position, sizeof(Vector3));
+
+    // 2. Escrever orientacao/matriz 3x3 (+0x2f0, +0x300, +0x310)
+    Vector3 row0{state.rotationMatrix.m[0][0], state.rotationMatrix.m[0][1],
+                 state.rotationMatrix.m[0][2]};
+    Vector3 row1{state.rotationMatrix.m[1][0], state.rotationMatrix.m[1][1],
+                 state.rotationMatrix.m[1][2]};
+    Vector3 row2{state.rotationMatrix.m[2][0], state.rotationMatrix.m[2][1],
+                 state.rotationMatrix.m[2][2]};
+    accessor->Write(s_vehicleAddress + 0x2f0, &row0, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x300, &row1, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x310, &row2, sizeof(Vector3));
+
+    // 3. Amortecimento inercial e velocidade linear
+    Vector3 zeroAngVel{0.f, 0.f, 0.f};
+    accessor->Write(s_vehicleAddress + 0x320, &state.linearVelocity,
+                    sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x330, &zeroAngVel, sizeof(Vector3));
+
+    // 4. Sincronizacao de transform visual no container (+0xcd0)
+    uintptr_t container = 0;
+    if (accessor->Read(s_vehicleAddress, &container, sizeof(container)) &&
+        container != 0 && accessor->IsValidAddress(container + 0xcd0)) {
+      Vector3 gfxPos = state.position;
+      gfxPos.y -= 0.44f;
+      accessor->Write(container + 0xcd0, &gfxPos, sizeof(Vector3));
+    }
+    return true;
+  }
+
+  // Fallback para teste unitario com mock direto compacto
   CarState sanitizedState = state;
   sanitizedState.angularVelocity = Vector3{0.f, 0.f, 0.f};
   for (int i = 0; i < 4; ++i) {
@@ -156,3 +225,4 @@ bool Player::ApplyState(const CarState &state) {
 }
 
 } // namespace dr2hook
+

@@ -515,6 +515,58 @@ void TestSavestateManagerIntegration() {
 }
 
 // ---------------------------------------------------------------------------
+// 7. Validação da resolução dinâmica do veículo (ResolveVehicleAddress)
+// ---------------------------------------------------------------------------
+void TestResolveVehicleAddress() {
+  std::cout << "[RUN] TestResolveVehicleAddress..." << std::endl;
+
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+
+  constexpr uintptr_t gameBase = 0x140000000;
+  constexpr uintptr_t primaryCarPtrAddr = gameBase + 0x1681ce8;
+  constexpr uintptr_t carAddr = 0x4a9d4b80;
+  constexpr uintptr_t containerAddr = 0x4aa0f100;
+  constexpr uintptr_t physicsRigAddr = 0x4aa1bab0;
+
+  dr2hook::Player::Configure(&scanner, 0);
+
+  // 1. gameBase 0 deve falhar
+  TEST_ASSERT(!dr2hook::Player::ResolveVehicleAddress(0),
+              "gameBase 0 deve retornar false");
+
+  // 2. gameBase sem memória mapeada deve falhar
+  TEST_ASSERT(!dr2hook::Player::ResolveVehicleAddress(gameBase),
+              "gameBase não mapeado deve retornar false");
+
+  // 3. Mapear cadeia completa:
+  // gameBase -> primaryCarPtrAddr -> carAddr -> carAddr + 0x30 -> containerAddr -> containerAddr + 0x08 -> physicsRigAddr
+  mock.SetValue(gameBase, uint16_t(0x5A4D)); // 'MZ'
+  mock.SetValue(primaryCarPtrAddr, carAddr);
+  mock.SetValue(carAddr, uint64_t(0x14127cc00)); // Vtable do carro
+  mock.SetValue(carAddr + 0x30, containerAddr);
+  mock.SetValue(containerAddr, uint64_t(0x141400c30)); // Vtable do container
+  mock.SetValue(containerAddr + 0x08, physicsRigAddr);
+  mock.SetValue(physicsRigAddr, containerAddr);
+
+  TEST_ASSERT(dr2hook::Player::ResolveVehicleAddress(gameBase),
+              "ResolveVehicleAddress deve ter sucesso com cadeia primária");
+  TEST_ASSERT(dr2hook::Player::GetVehicleAddress() == physicsRigAddr,
+              "Endereço do veículo ancorado deve ser o physicsRig");
+
+  // 4. Testar fallback para container estático (0x201b7c0)
+  dr2hook::Player::Configure(&scanner, 0);
+  mock.SetValue(primaryCarPtrAddr, uintptr_t(0)); // Anular primário
+  constexpr uintptr_t staticContainerAddr = gameBase + 0x201b7c0;
+  mock.SetValue(staticContainerAddr, containerAddr);
+
+  TEST_ASSERT(dr2hook::Player::ResolveVehicleAddress(gameBase),
+              "ResolveVehicleAddress deve ter sucesso com fallback de container");
+  TEST_ASSERT(dr2hook::Player::GetVehicleAddress() == physicsRigAddr,
+              "Endereço do veículo ancorado deve ser o physicsRig via fallback");
+}
+
+// ---------------------------------------------------------------------------
 // Main Runner
 // ---------------------------------------------------------------------------
 int main() {
@@ -531,6 +583,7 @@ int main() {
   TestSafetyGuard();
   TestPlayerStateSanitization();
   TestSavestateManagerIntegration();
+  TestResolveVehicleAddress();
 
   std::cout << "====================================================="
             << std::endl;

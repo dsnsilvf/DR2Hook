@@ -25,81 +25,68 @@ Documento técnico de referência do DR2Hook detalhando o mapeamento de subsiste
 
 ## 2. Arquitetura de Subsistemas da EGO Engine e `VehicleManager`
 
-A EGO Engine organiza seus módulos centrais através de um registro de subsistemas em blocos contíguos de `0x80` bytes alocados na seção `.data`. Cada bloco contém o identificador do subsistema em ASCII seguido de ponteiros de ciclo de vida e da instância ativa no heap.
+A EGO Engine organiza seus módulos centrais através de descritores de subsistemas na seção `.data` e instâncias alocadas na memória dinâmica do heap durante o carregamento de fases/estágios.
 
-### Layout do Descritor de Subsistema (`0x80` bytes)
+### Ponteiros Globais da Sessão Ativa (.data)
 
-```text
-[Offset 0x00] Descritor ASCII (até 32 bytes): "vehicle_manager\0"
-[Offset 0x20] uintptr_t pInstance -> Ponteiro global para a instância no heap
-[Offset 0x28] uintptr_t pVtable / LifecycleHandler
-[Offset 0x30 ... 0x7F] Metadados internos de inicialização e dependências
-```
-
-### Endereços Globais Mapeados
-
-- **Descritor `"vehicle_manager"`:** `dirtrally2.exe + 0x168c0e0` (`0x14168c0e0`)
-- **Ponteiro da Instância `VehicleManager*`:** `dirtrally2.exe + 0x168c100` (`0x14168c100`)
-- **Padrão AOB de Assinatura para Pattern Scanning:**
-  `76 65 68 69 63 6C 65 5F 6D 61 6E 61 67 65 72` (ASCII: `"vehicle_manager"`)
+- **Ponteiro Primário do Veículo Ativo (Sessão do Jogador):** `dirtrally2.exe + 0x1681ce8`
+- **Ponteiro da Tabela de Veículos (Carro 1 / Player Rig):** `dirtrally2.exe + 0x15a4b00`
+- **Ponteiro de Corrida Ativa (Race Instance):** `dirtrally2.exe + 0x15a9760`
+- **Fallbacks Estáticos para Container de Veículo:** `dirtrally2.exe + 0x201b7c0` e `dirtrally2.exe + 0x20203a8`
 
 ---
 
 ## 3. Cadeia de Resolução de Ponteiros do Veículo
 
-Para obter o estado cinemático do veículo ativo do jogador sem hooks intrusivos no loop de física, o DR2Hook percorre a cadeia determinística de ponteiros:
+Para obter o estado cinemático do veículo ativo do jogador sem hooks intrusivos no loop de física, o DR2Hook percorre a cadeia determinística confirmada via inspeção em tempo real:
 
 ```
-[dirtrally2.exe + 0x168c100]
+[dirtrally2.exe + 0x1681ce8]  (ou fallback +0x15a4b00 / +0x15a9760)
            │
            ▼
-    VehicleManager*  (Heap)
+        Car*       (Heap: ex: 0x4a9d4b80 - "car 1")
            │
-           │  +0x30 (Veículo ativo do jogador)
+           │  +0x30 (Container de física do veículo)
            ▼
-     DynamicsCar*    (Heap, Interface polimórfica)
-           │  Vtable: 0x1412af930 (dirtrally2.exe + 0x12af930)
+     Container*    (Heap: ex: 0x4aa0f100 - vtable dirtrally2.exe + 0x1400c30)
            │
-           │  +0x08 (Implementação concreta de física)
+           │  +0x08 (Physics Rig / DynamicsCarImpl concreto)
            ▼
-   DynamicsCarImpl*  (Heap, Bloco alinhado de 0x3130 bytes)
+    Physics Rig*   (Heap: ex: 0x4aa1bab0)
 ```
 
 ### Validação da Cadeia
 
-1. **`gameBase`**: Obtido via `GetModuleHandleA(nullptr)`.
-2. **`VehicleManager* mgr`**: Leitura de 8 bytes em `gameBase + 0x168c100`. Se nulo ou não mapeado, indica que a engine ainda está em bootstrapping.
-3. **`DynamicsCar* car`**: Leitura de 8 bytes em `mgr + 0x30`.
-   - Vtable esperada no offset `0x00`: `gameBase + 0x12af930` (`0x1412af930`).
-   - Se nulo, o jogador está nos menus ou tela de carregamento.
-4. **`DynamicsCarImpl* impl`**: Leitura de 8 bytes em `car + 0x08`.
-   - Se válido, representa a simulação física do chassi e suspensões.
+1. **`gameBase`**: Obtido via `GetModuleHandleA(nullptr)` (RVA base `0x140000000`).
+2. **`car`**: Leitura em `gameBase + 0x1681ce8`. Se nulo, recorre aos fallbacks `+0x15a4b00` ou `+0x15a9760`.
+3. **`container`**: Leitura de 8 bytes em `car + 0x30`. Caso nulo, recorre a `gameBase + 0x201b7c0` ou `gameBase + 0x20203a8`.
+4. **`physicsRig`**: Leitura de 8 bytes em `container + 0x08`. Aponta para a estrutura principal de integração cinemática.
 
 ---
 
-## 4. Estrutura Interna do `DynamicsCarImpl` (Física Rígida)
+## 4. Estrutura Interna do `Physics Rig` (`DynamicsCarImpl`)
 
-O `DynamicsCarImpl` é uma estrutura de `0x3130` bytes (alinhada a 16 bytes para compatibilidade com registros XMM/SIMD) responsável pela integração de equações de movimento rígido e dinâmica de suspensão.
+O Physics Rig é o bloco alocado no heap onde residem as variáveis integradas pelo solver de física rígida a cada tick da simulação:
 
-### Layout de Offsets Relevantes
+### Layout de Offsets Reais Mapeados
 
-| Offset Relativo | Tipo | Descrição |
+| Offset Relativo | Tipo | Descrição e Observações |
 | :--- | :--- | :--- |
-| `+0x100` | `WheelState` (`0x90` B) | Subestrutura da Roda 0: Dianteira Esquerda (Front Left - FL) |
-| `+0x190` | `WheelState` (`0x90` B) | Subestrutura da Roda 1: Dianteira Direita (Front Right - FR) |
-| `+0x220` | `WheelState` (`0x90` B) | Subestrutura da Roda 2: Traseira Esquerda (Rear Left - RL) |
-| `+0x2b0` | `WheelState` (`0x90` B) | Subestrutura da Roda 3: Traseira Direita (Rear Right - RR) |
-| `+0x2e0` | `Vector3` (SIMD 16B) | Velocidade Linear $\vec{v} = (v_x, v_y, v_z, 0)$ em m/s |
-| `+0x300` | `Vector3` (SIMD 16B) | Posição Global no Mundo $\vec{p} = (p_x, p_y, p_z, 1)$ em metros |
-| `+0x310` | `Matrix3x3` / Quat | Matriz de Rotação / Orientação angular do chassi |
-| `+0x340` | `Vector3` (SIMD 16B) | Velocidade Angular $\vec{\omega} = (\omega_x, \omega_y, \omega_z, 0)$ em rad/s |
+| `+0x2d0` | `Vector3` (SIMD 16B) | Posição física do centro de massa $\vec{p} = (x, y, z, 0)$ em metros |
+| `+0x2e0` | `Vector4` (SIMD 16B) | Quatérnion de rotação $(q_x, q_y, q_z, q_w)$ |
+| `+0x2f0` | `Vector3` (SIMD 16B) | Linha 0 da matriz de orientação (eixo lateral / right) |
+| `+0x300` | `Vector3` (SIMD 16B) | Linha 1 da matriz de orientação (eixo vertical / up) |
+| `+0x310` | `Vector3` (SIMD 16B) | Linha 2 da matriz de orientação (eixo frontal / forward) |
+| `+0x320` | `Vector3` (SIMD 16B) | Velocidade linear $\vec{v} = (v_x, v_y, v_z, 0)$ em m/s |
+| `+0x330` | `Vector3` (SIMD 16B) | Velocidade angular $\vec{\omega} = (\omega_x, \omega_y, \omega_z, 0)$ em rad/s |
+| `+0x1680` | `WheelRig` (`0x420` B) | Roda Dianteira Esquerda (Front-Left) |
+| `+0x1aa0` | `WheelRig` (`0x420` B) | Roda Dianteira Direita (Front-Right) |
+| `+0x1ec0` | `WheelRig` (`0x420` B) | Roda Traseira Esquerda (Rear-Left) |
+| `+0x22e0` | `WheelRig` (`0x420` B) | Roda Traseira Direita (Rear-Right) |
 
-### Detalhes das Subestruturas de Roda (`WheelState` - `0x90` bytes)
+### Sincronização Visual do Container
 
-Cada subestrutura de roda possui os seguintes campos críticos para estabilização cinemática:
-- `+0x00`: Compressão da mola de suspensão (`float suspensionCompression`, 0.0 = totalmente distendida/airborne, 1.0 = final de curso/batente). No repouso estático sob 1G de gravidade, equilibra-se em $\approx 0.35f$.
-- `+0x04`: Velocidade angular da rotação da roda (`float angularVelocity` em rad/s).
-- `+0x08`: Flag booleana de contato (`uint32_t inContact`, 1 se o pneu estiver em aderência/contato com a malha da pista).
+Além da posição física no `Physics Rig (+0x2d0)`, o container do veículo mantém a ancoragem visual da carroceria em `container + 0xcd0` (`x, y, z, yaw`), onde $y_{visual} \approx y_{fisico} - 0.44m$ em repouso estático sobre a suspensão.
 
 ---
 
