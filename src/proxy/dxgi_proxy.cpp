@@ -1,10 +1,12 @@
 #include "dr2hook/logger.h"
 #include "dr2hook/proxy.h"
 
+#include <mutex>
 #include <string>
 
 namespace {
 HMODULE g_originalDxgiModule = nullptr;
+static std::once_flag g_proxyInitOnce;
 
 PFN_CreateDXGIFactory g_pfnCreateDXGIFactory = nullptr;
 PFN_CreateDXGIFactory1 g_pfnCreateDXGIFactory1 = nullptr;
@@ -23,6 +25,10 @@ FARPROC GetOriginalProc(const char *procName) {
   return GetProcAddress(g_originalDxgiModule, procName);
 }
 
+void EnsureProxyInitialized() {
+  std::call_once(g_proxyInitOnce, []() { InitializeProxy(); });
+}
+
 bool InitializeProxy() {
   char sysDir[MAX_PATH];
   const UINT len = GetSystemDirectoryA(sysDir, MAX_PATH);
@@ -31,11 +37,24 @@ bool InitializeProxy() {
     return false;
   }
 
+  HMODULE ourModule = nullptr;
+  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                     reinterpret_cast<LPCSTR>(&InitializeProxy), &ourModule);
+
   const std::string sysPath = std::string(sysDir) + "\\dxgi.dll";
-  g_originalDxgiModule = LoadLibraryA(sysPath.c_str());
+  g_originalDxgiModule =
+      LoadLibraryExA(sysPath.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 
   if (!g_originalDxgiModule) {
     Logger::Error("Failed to load original dxgi.dll from: " + sysPath);
+    return false;
+  }
+
+  if (g_originalDxgiModule == ourModule) {
+    Logger::Error(
+        "Original dxgi.dll matches our module (self-reference)! Aborting.");
+    g_originalDxgiModule = nullptr;
     return false;
   }
 
@@ -91,6 +110,7 @@ void ShutdownProxy() {
 } // namespace dr2hook
 
 DR2HOOK_API HRESULT WINAPI CreateDXGIFactory(REFIID riid, void **ppFactory) {
+  dr2hook::EnsureProxyInitialized();
   if (!g_pfnCreateDXGIFactory) {
     dr2hook::Logger::Error(
         "CreateDXGIFactory called but original function pointer is null!");
@@ -102,6 +122,7 @@ DR2HOOK_API HRESULT WINAPI CreateDXGIFactory(REFIID riid, void **ppFactory) {
 }
 
 DR2HOOK_API HRESULT WINAPI CreateDXGIFactory1(REFIID riid, void **ppFactory) {
+  dr2hook::EnsureProxyInitialized();
   if (!g_pfnCreateDXGIFactory1) {
     dr2hook::Logger::Error(
         "CreateDXGIFactory1 called but original function pointer is null!");
@@ -114,6 +135,7 @@ DR2HOOK_API HRESULT WINAPI CreateDXGIFactory1(REFIID riid, void **ppFactory) {
 
 DR2HOOK_API HRESULT WINAPI CreateDXGIFactory2(UINT Flags, REFIID riid,
                                               void **ppFactory) {
+  dr2hook::EnsureProxyInitialized();
   if (!g_pfnCreateDXGIFactory2) {
     dr2hook::Logger::Error(
         "CreateDXGIFactory2 called but original function pointer is null!");
@@ -126,6 +148,7 @@ DR2HOOK_API HRESULT WINAPI CreateDXGIFactory2(UINT Flags, REFIID riid,
 
 DR2HOOK_API HRESULT WINAPI DXGIGetDebugInterface1(UINT Flags, REFIID riid,
                                                   void **pDebug) {
+  dr2hook::EnsureProxyInitialized();
   if (!g_pfnDXGIGetDebugInterface1) {
     dr2hook::Logger::Error("DXGIGetDebugInterface1 called but original "
                            "function pointer is null!");
@@ -137,6 +160,7 @@ DR2HOOK_API HRESULT WINAPI DXGIGetDebugInterface1(UINT Flags, REFIID riid,
 }
 
 DR2HOOK_API HRESULT WINAPI DXGIDeclareAdapterRemovalSupport() {
+  dr2hook::EnsureProxyInitialized();
   if (!g_pfnDXGIDeclareAdapterRemovalSupport) {
     dr2hook::Logger::Error("DXGIDeclareAdapterRemovalSupport called but "
                            "original function pointer is null!");

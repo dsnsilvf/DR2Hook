@@ -13,7 +13,7 @@ echo "================================================================="
 # Gate 1: Verificação de Formatação de Código (clang-format)
 # -----------------------------------------------------------------------------
 echo "[Gate 1/5] Verificando formatação de código com clang-format..."
-clang-format --dry-run --Werror tests/test_stability_soak.cpp
+clang-format --dry-run --Werror tests/test_stability_soak.cpp src/proxy/dxgi_proxy.cpp include/dr2hook/proxy.h src/core/main.cpp
 echo "-> Gate 1 APROVADO: Formatação estrita C++20 em conformidade."
 
 # -----------------------------------------------------------------------------
@@ -95,6 +95,22 @@ for REQUIRED_FILE in \
     exit 1
   fi
 done
+
+echo "  Validando ausência de dependências dinâmicas MinGW (libgcc, libwinpthread, libstdc++)..."
+PKG_DLL="dist/DR2Hook-${VERSION}/dxgi.dll"
+if [[ ! -f "${PKG_DLL}" ]]; then
+  echo "[ERRO] Binário ${PKG_DLL} não encontrado para verificação de dependências!" >&2
+  exit 1
+fi
+
+OBJDUMP_OUTPUT=$(x86_64-w64-mingw32-objdump -p "${PKG_DLL}")
+for BANNED_DEP in "libgcc" "libwinpthread" "libstdc++"; do
+  if echo "${OBJDUMP_OUTPUT}" | grep -i "${BANNED_DEP}" >/dev/null; then
+    echo "[ERRO] Dependência dinâmica proibida detectada em ${PKG_DLL}: ${BANNED_DEP}" >&2
+    exit 1
+  fi
+done
+echo "  -> Nenhuma dependência dinâmica proibida encontrada em ${PKG_DLL}."
 
 echo "-> Gate 5 APROVADO: Pacote de distribuição validado com integridade total."
 

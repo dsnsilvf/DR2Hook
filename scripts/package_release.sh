@@ -21,6 +21,7 @@ cmake -B "${BUILD_DIR}" \
   -DCMAKE_SYSTEM_NAME=Windows \
   -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
   -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+  -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
   "${ROOT_DIR}"
 
 cmake --build "${BUILD_DIR}" --target dxgi -j"$(nproc)"
@@ -43,6 +44,11 @@ mkdir -p "${PKG_DIR}/mods/practice_mode"
 
 # Copiar proxy DLL para a raiz do pacote
 cp "${DXGI_BIN}" "${PKG_DIR}/dxgi.dll"
+if command -v x86_64-w64-mingw32-strip >/dev/null 2>&1; then
+  x86_64-w64-mingw32-strip "${PKG_DIR}/dxgi.dll"
+else
+  strip "${PKG_DIR}/dxgi.dll"
+fi
 
 # Copiar mod de treino padrão (Practice Mode)
 cp "${ROOT_DIR}/mods/practice_mode/mod.json" "${PKG_DIR}/mods/practice_mode/"

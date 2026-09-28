@@ -8,7 +8,8 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   Logger::Init("dr2hook.log");
   Logger::Info("DR2Hook Core v0.1.0 inicializando...");
 
-  if (InitializeProxy()) {
+  dr2hook::EnsureProxyInitialized();
+  if (dr2hook::GetOriginalProc("CreateDXGIFactory") != nullptr) {
     Logger::Info("DR2Hook Core inicializado com sucesso.");
     if (dr2hook::InitializeHooks()) {
       Logger::Info("Hooks principais inicializados com sucesso.");

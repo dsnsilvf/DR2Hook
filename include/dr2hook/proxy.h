@@ -21,9 +21,11 @@ namespace dr2hook {
 bool InitializeProxy();
 void ShutdownProxy();
 FARPROC GetOriginalProc(const char *procName);
+void EnsureProxyInitialized();
 
 } // namespace dr2hook
 
+using dr2hook::EnsureProxyInitialized;
 using dr2hook::GetOriginalProc;
 using dr2hook::InitializeProxy;
 using dr2hook::ShutdownProxy;

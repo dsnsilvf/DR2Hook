@@ -104,7 +104,12 @@ if(WIN32 OR MSVC)
     )
     target_compile_options(dxgi PRIVATE "-Dlocaltime_r(t,b)=(localtime_s((b),(t)),(b))")
     if(MINGW)
-        target_link_options(dxgi PRIVATE "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx")
+        target_link_options(dxgi PRIVATE
+            "-static"
+            "-static-libgcc"
+            "-static-libstdc++"
+            "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
+        )
     endif()
     target_link_libraries(dxgi PRIVATE dwmapi d3dcompiler d3d11)
 endif()
