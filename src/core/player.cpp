@@ -353,20 +353,39 @@ bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
         gearsVal >= 1.f && gearsVal <= 8.f) {
       outInfo.forwardGears = static_cast<int>(gearsVal);
     }
-    float liveRpm = 0.f;
-    if (accessor->Read(s_vehicleAddress + 0x370, &liveRpm, sizeof(float)) &&
-        liveRpm >= 50.f && liveRpm <= 15000.f) {
-      outInfo.rpm = liveRpm;
-    } else {
-      outInfo.rpm = outInfo.idleRpm;
+
+    // Velocidade angular do virabrequim que o conta-giros usa, em rad/s.
+    // No corte fica logo abaixo de 785.4 rad/s (7500 RPM); em regime
+    // intermediário acompanha o painel (ex.: ~433 rad/s = ~4130 RPM).
+    constexpr float kRadPerSecToRpm = 60.0f / (2.0f * 3.14159265358979323846f);
+    float engineRadPerSec = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x13d8, &engineRadPerSec,
+                       sizeof(float)) &&
+        std::isfinite(engineRadPerSec)) {
+      float liveRpm = engineRadPerSec * kRadPerSecToRpm;
+      if (liveRpm >= 0.f && liveRpm <= 20000.f) {
+        outInfo.rpm = liveRpm;
+      }
     }
 
-    float liveGear = 0.f;
-    if (accessor->Read(s_vehicleAddress + 0x390, &liveGear, sizeof(float)) &&
-        liveGear >= -1.f && liveGear <= 8.f) {
-      outInfo.gear = static_cast<int>(liveGear);
-    } else {
-      outInfo.gear = 1;
+    float redlineRadPerSec = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x140c, &redlineRadPerSec,
+                       sizeof(float)) &&
+        std::isfinite(redlineRadPerSec)) {
+      float redlineRpm = redlineRadPerSec * kRadPerSecToRpm;
+      if (redlineRpm > 2000.f && redlineRpm < 20000.f) {
+        outInfo.redlineRpm = redlineRpm;
+      }
+    }
+
+    // Marcha engatada. 0 = neutro, 1..n = marchas à frente, 10 = ré.
+    int32_t gearRaw = 0;
+    if (accessor->Read(s_vehicleAddress + 0x1448, &gearRaw, sizeof(gearRaw))) {
+      if (gearRaw == 10) {
+        outInfo.gear = -1;
+      } else if (gearRaw >= -1 && gearRaw <= 8) {
+        outInfo.gear = gearRaw;
+      }
     }
   }
 

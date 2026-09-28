@@ -350,14 +350,15 @@ void OverlayManager::RenderUI() {
               ImGui::TextDisabled("N/A");
             }
             ImGui::SameLine();
+            float redline = vInfo.redlineRpm > 0.0f ? vInfo.redlineRpm
+                                                     : vInfo.maxPowerRpm;
             ImGui::TextDisabled("(Idle: %.0f | Redline: %.0f)", vInfo.idleRpm,
-                                vInfo.maxPowerRpm);
+                                redline);
 
             // Engine RPM graphical bar
             float rpmRatio = 0.0f;
-            if (vInfo.maxPowerRpm > 0.0f && vInfo.rpm > 0.0f) {
-              rpmRatio = std::clamp(vInfo.rpm / (vInfo.maxPowerRpm * 1.05f),
-                                    0.0f, 1.0f);
+            if (redline > 0.0f && vInfo.rpm > 0.0f) {
+              rpmRatio = std::clamp(vInfo.rpm / (redline * 1.05f), 0.0f, 1.0f);
             }
             char rpmBuf[32];
             if (vInfo.rpm > 0.0f) {

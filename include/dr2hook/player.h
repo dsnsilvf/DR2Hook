@@ -54,6 +54,7 @@ struct VehicleTelemetryInfo {
   float rpm = 0.0f;
   float idleRpm = 1080.0f;
   float maxPowerRpm = 5500.0f;
+  float redlineRpm = 0.0f;
   float speedKmh = 0.0f;
   float speedMph = 0.0f;
   float accelerationG = 0.0f;

@@ -10,6 +10,7 @@
 #include "imgui.h"
 
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -328,8 +329,10 @@ void TestTabbedUIRenderingAndTelemetry() {
   mockMem.SetValue(mockRig + 0x8e8, idleRpm);
   mockMem.SetValue(mockRig + 0x918, maxRpm);
   mockMem.SetValue(mockRig + 0x8f4, gears);
-  mockMem.SetValue(mockRig + 0x370, 3200.0f);
-  mockMem.SetValue(mockRig + 0x390, 3.0f);
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  mockMem.SetValue(mockRig + 0x13d8, 3200.0f * kTwoPi / 60.0f);
+  mockMem.SetValue(mockRig + 0x140c, 7500.0f * kTwoPi / 60.0f);
+  mockMem.SetValue(mockRig + 0x1448, int32_t{3});
 
   dr2hook::Player::Configure(&scanner, mockRig);
 
@@ -339,8 +342,11 @@ void TestTabbedUIRenderingAndTelemetry() {
   TEST_ASSERT(vInfo.isAnchored, "Veículo reportado como ancorado");
   TEST_ASSERT(vInfo.speedKmh > 80.0f && vInfo.speedKmh < 100.0f,
               "Velocidade calculada em ~90 km/h");
-  TEST_ASSERT(vInfo.gear >= 1 && vInfo.gear <= 5, "Marcha ativa entre 1 e 5");
-  TEST_ASSERT(vInfo.rpm >= vInfo.idleRpm, "RPM acima ou igual a marcha lenta");
+  TEST_ASSERT(vInfo.gear == 3, "Marcha ativa lida do indice inteiro");
+  TEST_ASSERT(vInfo.rpm > 3100.0f && vInfo.rpm < 3300.0f,
+              "RPM convertido de rad/s do virabrequim");
+  TEST_ASSERT(vInfo.redlineRpm > 7400.0f && vInfo.redlineRpm < 7600.0f,
+              "Corte de giro convertido de rad/s");
 
   dr2hook::TrackTelemetryInfo tInfo;
   bool okTrack = dr2hook::Player::GetTrackTelemetry(tInfo);

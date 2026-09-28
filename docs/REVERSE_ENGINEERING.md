@@ -79,13 +79,13 @@ O Physics Rig é o bloco alocado no heap onde residem as variáveis integradas p
 | `+0x310` | `Vector3` (SIMD 16B) | Linha 2 da matriz de orientação (eixo frontal / forward) |
 | `+0x320` | `Vector3` (SIMD 16B) | Velocidade linear $\vec{v} = (v_x, v_y, v_z, 0)$ em m/s |
 | `+0x330` | `Vector3` (SIMD 16B) | Velocidade angular $\vec{\omega} = (\omega_x, \omega_y, \omega_z, 0)$ em rad/s |
-| `+0x368` | `float` (4B) | Torque instantâneo do motor (Nm) |
-| `+0x370` | `float` (4B) | **RPM Real do Motor** (rotação instantânea do virabrequim/virabrequim do motor a combustão) |
-| `+0x374` | `float` (4B) | Posição do pedal de acelerador (`0.0f` a `1.0f`) |
-| `+0x390` | `float` (4B) | **Marcha Ativa da Transmissão** (`-1.0f` = Ré, `0.0f` = Neutro, `1.0f..n` = 1ª..nª marcha) |
-| `+0x8e8` | `float` (4B) | Especificação estática da marcha lenta do motor (ex.: `1080.0f` RPM) |
+| `+0x13d8` | `float` (4B) | **Velocidade angular do virabrequim** que o conta-giros usa, em rad/s. RPM = valor × 60 / (2π). No corte do Golf GTI 16v fica logo abaixo de `785.4` rad/s (`7500` RPM). |
+| `+0x8e8` | `float` (4B) | Especificação estática da marcha lenta do motor, em RPM (ex.: `1080.0f`) |
 | `+0x8f4` | `float` (4B) | Quantidade total de marchas à frente do veículo (ex.: `5.0f`) |
-| `+0x918` | `float` (4B) | Limite de rotação máxima / potência do motor (Redline, ex.: `5500.0f` RPM) |
+| `+0x918` | `float` (4B) | Rotação de potência máxima, em RPM (ex.: `5500.0f`). Não é o corte de giro. |
+| `+0x1400` | `int32` (4B) | Número de marchas à frente usado pelo câmbio (ex.: `5`) |
+| `+0x140c` | `float` (4B) | **Corte de giro** em rad/s. No GTI 16v é `785.398` rad/s, exatamente `7500` RPM. |
+| `+0x1448` | `int32` (4B) | **Marcha engatada** (`0` = neutro, `1..n` = marchas à frente, `10` = ré) |
 | `+0x1680` | `WheelRig` (`0x420` B) | Roda Dianteira Esquerda (Front-Left) |
 | `+0x1aa0` | `WheelRig` (`0x420` B) | Roda Dianteira Direita (Front-Right) |
 | `+0x1ec0` | `WheelRig` (`0x420` B) | Roda Traseira Esquerda (Rear-Left) |

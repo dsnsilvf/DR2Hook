@@ -45,7 +45,7 @@ graph TD
     
     subgraph Interface & Overlay
         G --> UI[Dear ImGui Overlay v0.1.0]
-        UI --> TAB1[Diagnostics Tab: RPM 0x370, Gear 0x390, Kinematics]
+        UI --> TAB1[Diagnostics Tab: RPM 0x13d8 rad/s, Gear 0x1448, Kinematics]
         UI --> TAB2[Mods Tab: Loaded Scripts & Status]
         UI --> TAB3[Practice Mode Tab: Normal vs Momentum]
     end
@@ -98,13 +98,12 @@ graph TD
 | `+0x2f0 - +0x310` | `Matrix3x3` (48B) | Matriz de orientação ortonormal (Right, Up, Forward) |
 | `+0x320` | `Vector3` (16B) | Velocidade linear $ec{v} = (v_x, v_y, v_z, 0)$ em m/s |
 | `+0x330` | `Vector3` (16B) | Velocidade angular $ec{\omega} = (\omega_x, \omega_y, \omega_z, 0)$ em rad/s |
-| `+0x368` | `float` (4B) | Torque instantâneo do motor (Nm) |
-| `+0x370` | `float` (4B) | **RPM Real do Motor** (rotação instantânea do virabrequim) |
-| `+0x374` | `float` (4B) | Posição do pedal de acelerador (`0.0f` a `1.0f`) |
-| `+0x390` | `float` (4B) | **Marcha Ativa da Transmissão** (`-1.0f` = Ré, `0.0f` = Neutro, `1.0f..n` = 1ª..nª) |
-| `+0x8e8` | `float` (4B) | Especificação estática da marcha lenta do motor (ex.: `1080.0f` RPM) |
+| `+0x13d8` | `float` (4B) | **Velocidade angular do virabrequim** (conta-giros) em rad/s. RPM = valor × 60 / (2π) |
+| `+0x8e8` | `float` (4B) | Especificação estática da marcha lenta do motor, em RPM (ex.: `1080.0f`) |
 | `+0x8f4` | `float` (4B) | Quantidade total de marchas à frente do veículo (ex.: `5.0f`) |
-| `+0x918` | `float` (4B) | Limite de rotação máxima / Redline do motor (ex.: `5500.0f` RPM) |
+| `+0x918` | `float` (4B) | Rotação de potência máxima, em RPM (ex.: `5500.0f`). Não é o corte |
+| `+0x140c` | `float` (4B) | Corte de giro em rad/s (ex.: `785.398` = `7500` RPM) |
+| `+0x1448` | `int32` (4B) | **Marcha engatada** (`0` = neutro, `1..n` = à frente, `10` = ré) |
 | `+0x1680` | `WheelRig` | Roda Dianteira Esquerda (Front-Left) |
 | `+0x1aa0` | `WheelRig` | Roda Dianteira Direita (Front-Right) |
 | `+0x1ec0` | `WheelRig` | Roda Traseira Esquerda (Rear-Left) |
@@ -116,7 +115,7 @@ graph TD
 
 - [x] **Fase 0: Engenharia Reversa da EGO Engine**
   - Identificação da cadeia `dirtrally2.exe + 0x1681ce8` -> `car + 0x30` -> `container + 0x08` -> `PhysicsRig`.
-  - Mapeamento da telemetria de cinemática (`+0x2d0` a `+0x330`), telemetria do motor (`+0x368`, `+0x370`, `+0x374`, `+0x390`) e especificações estáticas (`+0x8e8`, `+0x8f4`, `+0x918`).
+  - Mapeamento da telemetria de cinemática (`+0x2d0` a `+0x330`), rotação do virabrequim (`+0x13d8`, rad/s), marcha engatada (`+0x1448`) e especificações estáticas (`+0x8e8`, `+0x8f4`, `+0x918`, corte em `+0x140c`).
 - [x] **Fase 1: Fundação do Loader & Proxy DLL**
   - Implementação completa em C++ da proxy `dxgi.dll` com stubs manuais e resolução dinâmica via `GetProcAddress`.
   - Inicialização desacoplada via `CreateThread` e sistema de logging unificado `dr2hook.log`.
@@ -157,7 +156,7 @@ graph TD
 | :--- | :--- | :--- |
 | **Boot Limpo** | Jogo abre normalmente até o menu sem falhas | ✅ Aprovado em Windows e Linux Proton |
 | **Desempenho** | Queda de FPS imperceptível ($\le 1\%$) | ✅ Overhead de Present < 0.1ms |
-| **Precisão de RPM** | Leitura fiel da rotação do virabrequim | ✅ Mapeado em `0x370` com oscilação real |
+| **Precisão de RPM** | Leitura fiel da rotação do virabrequim | ✅ `0x13d8` em rad/s, convertido para RPM |
 | **Isolamento de Rede** | Bloqueio de conexões online para RaceNet | ✅ 100% das requisições DNS/TCP abortadas |
 | **Savestate Normal** | Restauração estável sem ejeção da pista | ✅ Aprovado com sag estático e amortecimento |
 | **Savestate Momentum** | Preservação fiel de velocidade e rotação angular | ✅ Dinâmica contínua em curvas e saltos |
