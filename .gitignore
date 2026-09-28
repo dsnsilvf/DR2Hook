@@ -1,5 +1,7 @@
 # Compilação e Build
 build/
+build-release/
+dist/
 bin/
 lib/
 out/
