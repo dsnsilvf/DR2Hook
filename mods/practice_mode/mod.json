@@ -3,6 +3,6 @@
   "id": "dr2.practice_mode",
   "version": "1.0.0",
   "author": "DR2Hook Community",
-  "description": "Permite salvar e restaurar checkpoints em tempo real para treino de curvas e setores difíceis.",
+  "description": "Allows saving and restoring real-time checkpoints to practice tricky corners and sectors.",
   "main": "main.lua"
 }

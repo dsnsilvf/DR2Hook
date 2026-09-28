@@ -284,7 +284,7 @@ static std::string ReadSafeAsciiString(IMemoryAccessor *accessor,
 bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
   if (s_vehicleAddress == 0) {
     outInfo.isAnchored = false;
-    outInfo.state = "Aguardando Spawn na Pista";
+    outInfo.state = "Waiting for Track Spawn";
     return false;
   }
 
@@ -297,7 +297,7 @@ bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
     outInfo.speedKmh = speedMs * 3.6f;
     outInfo.speedMph = speedMs * 2.23694f;
     outInfo.state =
-        (outInfo.speedKmh > 0.5f) ? "Em Movimento (Física OK)" : "Parado / Ponto de Partida";
+        (outInfo.speedKmh > 0.5f) ? "In Motion (Physics OK)" : "Stationary / Starting Point";
     outInfo.accelerationG = std::min(2.5f, speedMs * 0.04f);
   }
 
@@ -387,29 +387,29 @@ bool Player::GetTrackTelemetry(TrackTelemetryInfo &outInfo) {
     if (!trackStr.empty()) {
       if (trackStr.find("scotland") != std::string::npos) {
         outInfo.trackName = "Scotland Rally 04 (Route 3)";
-        outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
-        outInfo.surface = "Cascalho Florestal / Lama Úmida";
-        outInfo.conditions = "Dia Nublado / Solo Úmido";
+        outInfo.location = "Perth and Kinross, Scotland, UK";
+        outInfo.surface = "Forest Gravel / Damp Mud";
+        outInfo.conditions = "Overcast / Damp Ground";
       } else {
         outInfo.trackName = trackStr;
-        outInfo.location = "Especial DiRT Rally 2.0";
-        outInfo.surface = "Cascalho / Terra";
-        outInfo.conditions = "Condições de Treino";
+        outInfo.location = "DiRT Rally 2.0 Stage";
+        outInfo.surface = "Gravel / Dirt";
+        outInfo.conditions = "Practice Conditions";
       }
     } else {
       outInfo.trackName = "Scotland Rally 04 (Route 3)";
-      outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
-      outInfo.surface = "Cascalho Florestal / Lama Úmida";
-      outInfo.conditions = "Dia Nublado / Solo Úmido";
+      outInfo.location = "Perth and Kinross, Scotland, UK";
+      outInfo.surface = "Forest Gravel / Damp Mud";
+      outInfo.conditions = "Overcast / Damp Ground";
     }
   } else {
     outInfo.trackName = "Scotland Rally 04 (Route 3)";
-    outInfo.location = "Perth and Kinross, Escócia, Reino Unido";
-    outInfo.surface = "Cascalho Florestal / Lama Úmida";
-    outInfo.conditions = "Dia Nublado / Solo Úmido";
+    outInfo.location = "Perth and Kinross, Scotland, UK";
+    outInfo.surface = "Forest Gravel / Damp Mud";
+    outInfo.conditions = "Overcast / Damp Ground";
   }
 
-  outInfo.sessionState = "Treino Ativo (Time Trial / Offline)";
+  outInfo.sessionState = "Active Practice (Time Trial / Offline)";
   return true;
 }
 

@@ -257,38 +257,17 @@ void OverlayManager::RenderUI() {
     }
   }
 
-  // 2. Menu Principal In-Game (DR2Hook Overlay)
+  // 2. Main In-Game Menu (DR2 ModLoader)
   if (g_showMenu) {
     ImGui::SetNextWindowSize(ImVec2(660, 540), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("DR2Hook Overlay - DiRT Rally 2.0", &g_showMenu)) {
-      // Cabeçalho superior: Identidade e Controle de Fair Play
-      ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "DR2Hook v%s",
-                         DR2HOOK_VERSION);
-      ImGui::SameLine();
-      ImGui::TextDisabled("| Telemetria, Savestate & Gerenciador de Mods");
-
-      ImGui::TextColored(
-          ImVec4(0.2f, 1.0f, 0.4f, 1.0f),
-          "● Modo Estritamente Offline (Racenet Bloqueada - Fair Play Garantido)");
-      ImGui::SameLine();
-      if (ImGui::SmallButton("Re-escanear Carro")) {
-#if defined(_WIN32)
-        Player::ResolveVehicleAddress(
-            reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
-#else
-        Player::ResolveVehicleAddress(0x140000000);
-#endif
-      }
-
-      ImGui::Separator();
-
-      // Navegação por Abas
-      if (ImGui::BeginTabBar("DR2HookTabBar", ImGuiTabBarFlags_None)) {
+    if (ImGui::Begin("DR2 ModLoader v0.1.0", &g_showMenu)) {
+      // Tab Navigation
+      if (ImGui::BeginTabBar("DR2TabBar", ImGuiTabBarFlags_None)) {
 
         // ===================================================================
-        // ABA 1: DIAGNÓSTICO
+        // TAB 1: DIAGNOSTICS
         // ===================================================================
-        if (ImGui::BeginTabItem("Diagnóstico")) {
+        if (ImGui::BeginTabItem("Diagnostics")) {
           VehicleTelemetryInfo vInfo;
           Player::GetVehicleTelemetry(vInfo);
 
@@ -298,21 +277,21 @@ void OverlayManager::RenderUI() {
           CarState state{};
           bool hasState = Player::CaptureState(state);
 
-          // Card 1: Carro
-          if (ImGui::CollapsingHeader("Carro",
+          // Card 1: Vehicle
+          if (ImGui::CollapsingHeader("Vehicle",
                                       ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Text("Modelo: ");
+            ImGui::Text("Model: ");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.2f, 0.9f, 1.0f, 1.0f), "%s",
                                vInfo.model.c_str());
 
             ImGui::SameLine(360.0f);
-            ImGui::Text("Classe: ");
+            ImGui::Text("Class: ");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "%s",
                                vInfo.category.c_str());
 
-            ImGui::Text("Estado: ");
+            ImGui::Text("Status: ");
             ImGui::SameLine();
             if (vInfo.isAnchored) {
               ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.3f, 1.0f), "%s",
@@ -328,13 +307,22 @@ void OverlayManager::RenderUI() {
               ImGui::TextDisabled("Rig: 0x%llX",
                                   static_cast<unsigned long long>(vehAddr));
             } else {
-              ImGui::TextDisabled("Rig: Desconectado");
+              ImGui::TextDisabled("Rig: Disconnected");
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Rescan")) {
+#if defined(_WIN32)
+              Player::ResolveVehicleAddress(
+                  reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+#else
+              Player::ResolveVehicleAddress(0x140000000);
+#endif
             }
 
             ImGui::Spacing();
 
-            // Velocidade em grande destaque visual
-            ImGui::Text("Velocidade:");
+            // Speed in prominent display
+            ImGui::Text("Speed:");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.95f, 0.1f, 1.0f),
                                "[ %.1f km/h ]", vInfo.speedKmh);
@@ -342,38 +330,50 @@ void OverlayManager::RenderUI() {
             ImGui::TextDisabled("(%.1f mph)", vInfo.speedMph);
 
             ImGui::SameLine(360.0f);
-            ImGui::Text("Aceleração:");
+            ImGui::Text("Acceleration:");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.4f, 0.9f, 1.0f, 1.0f), "%.2f G",
                                vInfo.accelerationG);
 
-            // Marcha e RPM
-            ImGui::Text("Marcha: ");
+            // Gear & RPM
+            ImGui::Text("Gear: ");
             ImGui::SameLine();
             if (vInfo.gear > 0) {
               ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.5f, 1.0f), "%d / %d",
                                  vInfo.gear, vInfo.forwardGears);
-            } else {
+            } else if (vInfo.gear == 0) {
               ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "N");
+            } else if (vInfo.gear == -1) {
+              ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.2f, 1.0f), "R");
+            } else {
+              ImGui::TextDisabled("--");
             }
 
             ImGui::SameLine(200.0f);
             ImGui::Text("RPM: ");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%.0f RPM",
-                               vInfo.rpm);
+            if (vInfo.rpm > 0.0f) {
+              ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%.0f RPM",
+                                 vInfo.rpm);
+            } else {
+              ImGui::TextDisabled("N/A");
+            }
             ImGui::SameLine();
-            ImGui::TextDisabled("(Lenta: %.0f | Corte: %.0f)", vInfo.idleRpm,
+            ImGui::TextDisabled("(Idle: %.0f | Redline: %.0f)", vInfo.idleRpm,
                                 vInfo.maxPowerRpm);
 
-            // Barra gráfica de RPM do motor
+            // Engine RPM graphical bar
             float rpmRatio = 0.0f;
-            if (vInfo.maxPowerRpm > 0.0f) {
-              rpmRatio = std::clamp(vInfo.rpm / (vInfo.maxPowerRpm * 1.25f),
+            if (vInfo.maxPowerRpm > 0.0f && vInfo.rpm > 0.0f) {
+              rpmRatio = std::clamp(vInfo.rpm / (vInfo.maxPowerRpm * 1.05f),
                                     0.0f, 1.0f);
             }
             char rpmBuf[32];
-            std::snprintf(rpmBuf, sizeof(rpmBuf), "%.0f RPM", vInfo.rpm);
+            if (vInfo.rpm > 0.0f) {
+              std::snprintf(rpmBuf, sizeof(rpmBuf), "%.0f RPM", vInfo.rpm);
+            } else {
+              std::snprintf(rpmBuf, sizeof(rpmBuf), "Telemetry N/A");
+            }
 
             if (rpmRatio > 0.85f) {
               ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
@@ -391,29 +391,29 @@ void OverlayManager::RenderUI() {
 
           ImGui::Spacing();
 
-          // Card 2: Track / Sessão
-          if (ImGui::CollapsingHeader("Track / Sessão",
+          // Card 2: Track / Session
+          if (ImGui::CollapsingHeader("Track / Session",
                                       ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Text("Pista: ");
+            ImGui::Text("Stage: ");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.2f, 0.9f, 1.0f, 1.0f), "%s",
                                tInfo.trackName.c_str());
 
-            ImGui::Text("Localização: ");
+            ImGui::Text("Location: ");
             ImGui::SameLine();
             ImGui::TextUnformatted(tInfo.location.c_str());
 
-            ImGui::Text("Superfície: ");
+            ImGui::Text("Surface: ");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.55f, 1.0f), "%s",
                                tInfo.surface.c_str());
 
             ImGui::SameLine(360.0f);
-            ImGui::Text("Condições: ");
+            ImGui::Text("Conditions: ");
             ImGui::SameLine();
             ImGui::TextUnformatted(tInfo.conditions.c_str());
 
-            ImGui::Text("Modo da Sessão: ");
+            ImGui::Text("Session Mode: ");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
                                tInfo.sessionState.c_str());
@@ -421,19 +421,19 @@ void OverlayManager::RenderUI() {
 
           ImGui::Spacing();
 
-          // Card 3: Telemetria Detalhada
-          if (ImGui::CollapsingHeader("Telemetria",
+          // Card 3: Telemetry
+          if (ImGui::CollapsingHeader("Telemetry",
                                       ImGuiTreeNodeFlags_DefaultOpen)) {
             if (hasState) {
-              // Posição mundial
-              ImGui::Text("Posição Mundial (X, Y, Z):");
+              // World position
+              ImGui::Text("World Position (X, Y, Z):");
               ImGui::SameLine();
               ImGui::TextColored(ImVec4(0.3f, 0.9f, 1.0f, 1.0f),
                                  "X: %.2f  |  Y: %.2f  |  Z: %.2f",
                                  state.position.x, state.position.y,
                                  state.position.z);
 
-              // Orientação: Cálculo de Euler (Pitch, Roll, Yaw) a partir do Quaternion
+              // Orientation Euler (Pitch, Roll, Yaw)
               float qNormSq = state.quaternion.x * state.quaternion.x +
                               state.quaternion.y * state.quaternion.y +
                               state.quaternion.z * state.quaternion.z +
@@ -473,15 +473,15 @@ void OverlayManager::RenderUI() {
                                   state.quaternion.x, state.quaternion.y,
                                   state.quaternion.z, state.quaternion.w);
 
-              // Vetor Linear e Angular
-              ImGui::Text("Velocidade Linear (m/s):");
+              // Linear and Angular Velocity
+              ImGui::Text("Linear Velocity (m/s):");
               ImGui::SameLine();
               ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.6f, 1.0f),
                                  "Vx: %+.2f  |  Vy: %+.2f  |  Vz: %+.2f",
                                  state.linearVelocity.x, state.linearVelocity.y,
                                  state.linearVelocity.z);
 
-              ImGui::Text("Velocidade Angular (rad/s):");
+              ImGui::Text("Angular Velocity (rad/s):");
               ImGui::SameLine();
               ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
                                  "Wx: %+.3f  |  Wy: %+.3f  |  Wz: %+.3f",
@@ -489,20 +489,20 @@ void OverlayManager::RenderUI() {
                                  state.angularVelocity.y,
                                  state.angularVelocity.z);
 
-              // Tabela das 4 Rodas e Suspensão
+              // 4 Wheels & Suspension Table
               ImGui::Spacing();
-              ImGui::Text("Suspensão & Contato das Rodas:");
+              ImGui::Text("Suspension & Wheel Contact:");
               if (ImGui::BeginTable("WheelsTelemetryTable", 4,
                                     ImGuiTableFlags_Borders |
                                         ImGuiTableFlags_RowBg |
                                         ImGuiTableFlags_SizingStretchProp)) {
-                ImGui::TableSetupColumn("Diant. Esq. (FL)");
-                ImGui::TableSetupColumn("Diant. Dir. (FR)");
-                ImGui::TableSetupColumn("Tras. Esq. (RL)");
-                ImGui::TableSetupColumn("Tras. Dir. (RR)");
+                ImGui::TableSetupColumn("Front Left (FL)");
+                ImGui::TableSetupColumn("Front Right (FR)");
+                ImGui::TableSetupColumn("Rear Left (RL)");
+                ImGui::TableSetupColumn("Rear Right (RR)");
                 ImGui::TableHeadersRow();
 
-                // Linha de compressão
+                // Compression row
                 ImGui::TableNextRow();
                 for (int i = 0; i < 4; ++i) {
                   ImGui::TableSetColumnIndex(i);
@@ -511,24 +511,24 @@ void OverlayManager::RenderUI() {
                   ImGui::Text("Comp: %.1f%%", compPercent);
                 }
 
-                // Linha de contato com o solo
+                // Ground contact row
                 ImGui::TableNextRow();
                 for (int i = 0; i < 4; ++i) {
                   ImGui::TableSetColumnIndex(i);
                   if (state.wheels[i].inContact) {
                     ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                                       "● No Solo");
+                                       "● Grounded");
                   } else {
                     ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                                       "○ No Ar");
+                                       "○ Airborne");
                   }
                 }
 
                 ImGui::EndTable();
               }
             } else {
-              ImGui::TextDisabled("Aguardando spawn do carro para leitura de "
-                                  "telemetria em tempo real...");
+              ImGui::TextDisabled("Waiting for vehicle to spawn for "
+                                  "real-time telemetry...");
             }
           }
 
@@ -536,13 +536,13 @@ void OverlayManager::RenderUI() {
         }
 
         // ===================================================================
-        // ABA 2: MODS
+        // TAB 2: MODS
         // ===================================================================
         if (ImGui::BeginTabItem("Mods")) {
           ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f),
-                             "Gerenciador de Mods & Extensões Lua");
+                             "Lua Mod Manager & Extensions");
           ImGui::SameLine();
-          if (ImGui::Button("Recarregar Scripts (Hot-Reload)")) {
+          if (ImGui::Button("Reload Scripts (Hot-Reload)")) {
             ModManager::ReloadMods();
           }
 
@@ -553,22 +553,22 @@ void OverlayManager::RenderUI() {
 
           if (mods.empty()) {
             ImGui::TextDisabled(
-                "Nenhum mod carregado no diretório 'mods/'.");
+                "No mods loaded in 'mods/' directory.");
           } else {
             if (ImGui::BeginTable("ModsManagerTable", 5,
                                   ImGuiTableFlags_Borders |
                                       ImGuiTableFlags_RowBg |
                                       ImGuiTableFlags_SizingStretchProp)) {
-              ImGui::TableSetupColumn("Ativo",
-                                      ImGuiTableColumnFlags_WidthFixed, 45.0f);
-              ImGui::TableSetupColumn("Nome",
+              ImGui::TableSetupColumn("Active",
+                                      ImGuiTableColumnFlags_WidthFixed, 55.0f);
+              ImGui::TableSetupColumn("Name",
                                       ImGuiTableColumnFlags_WidthStretch);
               ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed,
-                                      120.0f);
-              ImGui::TableSetupColumn("Versão",
+                                      130.0f);
+              ImGui::TableSetupColumn("Version",
                                       ImGuiTableColumnFlags_WidthFixed, 65.0f);
-              ImGui::TableSetupColumn("Autor",
-                                      ImGuiTableColumnFlags_WidthFixed, 110.0f);
+              ImGui::TableSetupColumn("Author",
+                                      ImGuiTableColumnFlags_WidthFixed, 130.0f);
               ImGui::TableHeadersRow();
 
               for (size_t i = 0; i < mods.size(); ++i) {
@@ -602,60 +602,60 @@ void OverlayManager::RenderUI() {
               ImGui::EndTable();
             }
 
-            // Card de detalhes do mod selecionado
+            // Selected mod details
             if (selectedModIndex >= 0 &&
                 selectedModIndex < static_cast<int>(mods.size())) {
               const auto &selMod = mods[selectedModIndex];
               ImGui::Spacing();
-              if (ImGui::CollapsingHeader("Detalhes do Mod",
+              if (ImGui::CollapsingHeader("Mod Details",
                                           ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "%s",
                                    selMod.name.c_str());
                 ImGui::SameLine();
-                ImGui::TextDisabled("(%s) v%s por %s", selMod.id.c_str(),
+                ImGui::TextDisabled("(%s) v%s by %s", selMod.id.c_str(),
                                     selMod.version.c_str(),
                                     selMod.author.c_str());
 
                 ImGui::TextWrapped("%s", selMod.description.c_str());
                 ImGui::Spacing();
-                ImGui::Text("Script Principal: %s",
+                ImGui::Text("Main Script: %s",
                             selMod.mainScriptPath.c_str());
-                ImGui::Text("Diretório: %s", selMod.directoryPath.c_str());
+                ImGui::Text("Directory: %s", selMod.directoryPath.c_str());
 
-                ImGui::Text("Callbacks Registrados:");
+                ImGui::Text("Registered Callbacks:");
                 ImGui::BulletText("onInit: %s",
-                                  (selMod.refOnInit != LUA_NOREF) ? "Sim" : "Não");
+                                  (selMod.refOnInit != LUA_NOREF) ? "Yes" : "No");
                 ImGui::BulletText("onTick: %s",
-                                  (selMod.refOnTick != LUA_NOREF) ? "Sim" : "Não");
+                                  (selMod.refOnTick != LUA_NOREF) ? "Yes" : "No");
                 ImGui::BulletText("onKeyDown: %s",
-                                  (selMod.refOnKeyDown != LUA_NOREF) ? "Sim"
-                                                                     : "Não");
+                                  (selMod.refOnKeyDown != LUA_NOREF) ? "Yes"
+                                                                     : "No");
                 ImGui::BulletText("onStageStart: %s",
                                   (selMod.refOnStageStart != LUA_NOREF)
-                                      ? "Sim"
-                                      : "Não");
+                                      ? "Yes"
+                                      : "No");
                 ImGui::BulletText("onRenderUI: %s",
-                                  (selMod.refOnRenderUI != LUA_NOREF) ? "Sim"
-                                                                      : "Não");
+                                  (selMod.refOnRenderUI != LUA_NOREF) ? "Yes"
+                                                                      : "No");
               }
             }
           }
 
-          // Estatísticas do Motor Lua
+          // Lua Engine Stats
           ImGui::Spacing();
-          if (ImGui::CollapsingHeader("Estatísticas do Motor Lua",
+          if (ImGui::CollapsingHeader("Lua Engine Statistics",
                                       ImGuiTreeNodeFlags_DefaultOpen)) {
             lua_State *L = LuaEngine::GetState();
             int memKb = (L != nullptr) ? lua_gc(L, LUA_GCCOUNT, 0) : 0;
-            ImGui::Text("Memória Lua Alocada: %d KB", memKb);
-            ImGui::Text("Total de Mods Carregados: %zu", mods.size());
+            ImGui::Text("Allocated Lua Memory: %d KB", memKb);
+            ImGui::Text("Total Loaded Mods: %zu", mods.size());
           }
 
           ImGui::EndTabItem();
         }
 
         // ===================================================================
-        // ABAS DINÂMICAS: CADA MOD ATIVO GANHA SUA PRÓPRIA ABA
+        // DYNAMIC TABS: EACH ACTIVE MOD RECEIVES ITS OWN DEDICATED TAB
         // ===================================================================
         const auto &activeMods = ModManager::GetLoadedMods();
         for (size_t i = 0; i < activeMods.size(); ++i) {
@@ -672,61 +672,61 @@ void OverlayManager::RenderUI() {
                                 mod.author.c_str());
             ImGui::Separator();
 
-            // Disparar hook Lua onRenderUI caso implementado pelo mod
+            // Trigger Lua onRenderUI hook if implemented
             if (mod.refOnRenderUI != LUA_NOREF) {
               ModManager::DispatchRenderUI(const_cast<ModInstance &>(mod));
             }
 
-            // Painel nativo especializado para o mod de Treino (Practice Mode)
+            // Specialized native panel for Practice Mode
             if (mod.id == "dr2.practice_mode" || mod.id == "practice_mode" ||
                 mod.name == "Practice Mode") {
               ImGui::TextColored(
                   ImVec4(1.0f, 0.9f, 0.2f, 1.0f),
-                  "Painel de Treinamento de Curvas & Setores");
+                  "Corner & Sector Practice Panel");
               ImGui::TextWrapped(
-                  "Este mod permite gravar checkpoints instantâneos para treinar "
-                  "curvas difíceis, pontos de frenagem e saltos repetidamente.");
+                  "Save and restore instant checkpoints in real time to practice "
+                  "difficult corners, braking zones, and jumps repeatedly.");
 
               ImGui::Spacing();
-              if (ImGui::CollapsingHeader("Atalhos do Treino",
+              if (ImGui::CollapsingHeader("Practice Shortcuts",
                                           ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::BulletText(
-                    "F5: Gravar Checkpoint instantâneo (Posição e Velocidade).");
+                    "F5: Save instant checkpoint (Position and Velocity).");
                 ImGui::BulletText(
-                    "F6: Restaurar Checkpoint no modo ativo (Normal ou Momentum).");
+                    "F6: Restore checkpoint in active mode (Normal or Momentum).");
                 ImGui::BulletText(
-                    "F7: Restaurar Checkpoint diretamente COM MOMENTUM integral.");
+                    "F7: Restore checkpoint directly WITH FULL MOMENTUM.");
               }
 
               ImGui::Spacing();
-              if (ImGui::CollapsingHeader("Configuração de Restauração",
+              if (ImGui::CollapsingHeader("Restore Configuration",
                                           ImGuiTreeNodeFlags_DefaultOpen)) {
                 int pmMode =
                     static_cast<int>(SavestateManager::GetRestoreMode());
-                ImGui::Text("Comportamento Padrão ao Restaurar:");
-                if (ImGui::RadioButton("Normal (Teleportar Parado)##dyn",
+                ImGui::Text("Default Restore Behavior:");
+                if (ImGui::RadioButton("Normal (Stationary Teleport)##dyn",
                                        pmMode == 0)) {
                   SavestateManager::SetRestoreMode(RestoreMode::Normal);
                 }
                 ImGui::SameLine();
                 if (ImGui::RadioButton(
-                        "Com Momentum (Continuar em Velocidade)##dyn",
+                        "With Momentum (Preserve Velocity)##dyn",
                         pmMode == 1)) {
                   SavestateManager::SetRestoreMode(RestoreMode::WithMomentum);
                 }
 
                 ImGui::Spacing();
-                if (ImGui::Button("Gravar Checkpoint Agora (F5)",
+                if (ImGui::Button("Save Checkpoint (F5)",
                                  ImVec2(210, 32))) {
                   SavestateManager::OnKeyAction(0x74, true);
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Restaurar Normal (F6)",
+                if (ImGui::Button("Restore Normal (F6)",
                                  ImVec2(170, 32))) {
                   SavestateManager::RestoreCheckpoint(RestoreMode::Normal);
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Restaurar com Momentum (F7)",
+                if (ImGui::Button("Restore with Momentum (F7)",
                                  ImVec2(210, 32))) {
                   SavestateManager::RestoreCheckpoint(
                       RestoreMode::WithMomentum);
@@ -734,35 +734,35 @@ void OverlayManager::RenderUI() {
               }
 
               ImGui::Spacing();
-              if (ImGui::CollapsingHeader("Status do Treino em Tempo Real",
+              if (ImGui::CollapsingHeader("Real-Time Practice Status",
                                           ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (SavestateManager::HasSavedState()) {
                   const auto &saved = SavestateManager::GetSavedState();
                   float sSpd =
                       std::sqrt(saved.linearVelocity.x *
                                     saved.linearVelocity.x +
-                                saved.linearVelocity.y *
+                                 saved.linearVelocity.y *
                                     saved.linearVelocity.y +
-                                saved.linearVelocity.z *
+                                 saved.linearVelocity.z *
                                     saved.linearVelocity.z) *
                       3.6f;
                   ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                                     "● Checkpoint Gravado e Pronto");
-                  ImGui::Text("Posição: (X: %.2f, Y: %.2f, Z: %.2f)",
+                                     "● Checkpoint Saved & Ready");
+                  ImGui::Text("Position: (X: %.2f, Y: %.2f, Z: %.2f)",
                               saved.position.x, saved.position.y,
                               saved.position.z);
-                  ImGui::Text("Velocidade Gravada: %.1f km/h", sSpd);
+                  ImGui::Text("Saved Speed: %.1f km/h", sSpd);
                 } else {
-                  ImGui::TextDisabled("Nenhum checkpoint salvo. Pressione F5 "
-                                      "para salvar o primeiro ponto.");
+                  ImGui::TextDisabled("No checkpoint saved yet. Press F5 "
+                                      "to save your first point.");
                 }
               }
             } else if (mod.refOnRenderUI == LUA_NOREF) {
-              // Informações gerais para outros mods que não possuem UI personalizada
+              // General information for mods without custom UI
               ImGui::Spacing();
-              ImGui::Text("Descrição: %s", mod.description.c_str());
-              ImGui::Text("Diretório: %s", mod.directoryPath.c_str());
-              ImGui::Text("Arquivo: %s", mod.mainScriptPath.c_str());
+              ImGui::Text("Description: %s", mod.description.c_str());
+              ImGui::Text("Directory: %s", mod.directoryPath.c_str());
+              ImGui::Text("File: %s", mod.mainScriptPath.c_str());
             }
 
             ImGui::EndTabItem();
