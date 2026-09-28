@@ -111,7 +111,7 @@ if(WIN32 OR MSVC)
             "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
         )
     endif()
-    target_link_libraries(dxgi PRIVATE dwmapi d3dcompiler d3d11)
+    target_link_libraries(dxgi PRIVATE dwmapi d3dcompiler d3d11 ws2_32)
 endif()
 
 if(UNIX AND NOT APPLE)

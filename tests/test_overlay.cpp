@@ -328,6 +328,8 @@ void TestTabbedUIRenderingAndTelemetry() {
   mockMem.SetValue(mockRig + 0x8e8, idleRpm);
   mockMem.SetValue(mockRig + 0x918, maxRpm);
   mockMem.SetValue(mockRig + 0x8f4, gears);
+  mockMem.SetValue(mockRig + 0x8f0, 3200.0f);
+  mockMem.SetValue(mockRig + 0x8f8, 3.0f);
 
   dr2hook::Player::Configure(&scanner, mockRig);
 

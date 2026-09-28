@@ -353,44 +353,21 @@ bool Player::GetVehicleTelemetry(VehicleTelemetryInfo &outInfo) {
         gearsVal >= 1.f && gearsVal <= 8.f) {
       outInfo.forwardGears = static_cast<int>(gearsVal);
     }
-  }
-
-  if (outInfo.speedKmh < 0.5f) {
-    outInfo.gear = 1;
-    outInfo.rpm = outInfo.idleRpm;
-  } else {
-    float kmh = outInfo.speedKmh;
-    int gear = 1;
-    float gearMin = 0.0f;
-    float gearMax = 45.0f;
-
-    if (kmh > 160.0f) {
-      gear = 5;
-      gearMin = 150.0f;
-      gearMax = 220.0f;
-    } else if (kmh > 120.0f) {
-      gear = 4;
-      gearMin = 110.0f;
-      gearMax = 165.0f;
-    } else if (kmh > 75.0f) {
-      gear = 3;
-      gearMin = 70.0f;
-      gearMax = 125.0f;
-    } else if (kmh > 40.0f) {
-      gear = 2;
-      gearMin = 35.0f;
-      gearMax = 80.0f;
+    float liveRpm = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x8f0, &liveRpm, sizeof(float)) &&
+        liveRpm >= 50.f && liveRpm <= 15000.f) {
+      outInfo.rpm = liveRpm;
     } else {
-      gear = 1;
-      gearMin = 0.0f;
-      gearMax = 45.0f;
+      outInfo.rpm = outInfo.idleRpm;
     }
 
-    outInfo.gear = gear;
-    float ratio =
-        std::clamp((kmh - gearMin) / (gearMax - gearMin), 0.0f, 1.0f);
-    outInfo.rpm = outInfo.idleRpm + 1000.0f +
-                  ratio * (outInfo.maxPowerRpm - outInfo.idleRpm);
+    float liveGear = 0.f;
+    if (accessor->Read(s_vehicleAddress + 0x8f8, &liveGear, sizeof(float)) &&
+        liveGear >= -1.f && liveGear <= 8.f) {
+      outInfo.gear = static_cast<int>(liveGear);
+    } else {
+      outInfo.gear = 1;
+    }
   }
 
   return true;

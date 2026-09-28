@@ -267,22 +267,9 @@ void OverlayManager::RenderUI() {
       ImGui::SameLine();
       ImGui::TextDisabled("| Telemetria, Savestate & Gerenciador de Mods");
 
-      bool canWrite = SafetyGuard::CanWriteState();
-      if (canWrite) {
-        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                           "● Fair Play: Treino Permitido (Escrita Liberada)");
-      } else {
-        ImGui::TextColored(
-            ImVec4(1.0f, 0.25f, 0.25f, 1.0f),
-            "● Fair Play: Sessão Competitiva / Escrita Bloqueada");
-      }
-
-      ImGui::SameLine();
-      bool permissive = SafetyGuard::IsPermissiveMode();
-      if (ImGui::Checkbox("Modo Treino (Time Trial)", &permissive)) {
-        SafetyGuard::SetPermissiveMode(permissive);
-      }
-
+      ImGui::TextColored(
+          ImVec4(0.2f, 1.0f, 0.4f, 1.0f),
+          "● Modo Estritamente Offline (Racenet Bloqueada - Fair Play Garantido)");
       ImGui::SameLine();
       if (ImGui::SmallButton("Re-escanear Carro")) {
 #if defined(_WIN32)
@@ -542,63 +529,6 @@ void OverlayManager::RenderUI() {
             } else {
               ImGui::TextDisabled("Aguardando spawn do carro para leitura de "
                                   "telemetria em tempo real...");
-            }
-          }
-
-          ImGui::Spacing();
-
-          // Card 4: Checkpoint
-          if (ImGui::CollapsingHeader("Checkpoint",
-                                      ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (SavestateManager::HasSavedState()) {
-              const auto &saved = SavestateManager::GetSavedState();
-              float savedSpd =
-                  std::sqrt(saved.linearVelocity.x * saved.linearVelocity.x +
-                            saved.linearVelocity.y * saved.linearVelocity.y +
-                            saved.linearVelocity.z * saved.linearVelocity.z) *
-                  3.6f;
-
-              ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                                 "● Checkpoint Gravado na Memória");
-              ImGui::Text("Posição Salva: (X: %.2f, Y: %.2f, Z: %.2f)",
-                          saved.position.x, saved.position.y,
-                          saved.position.z);
-              ImGui::Text("Velocidade Salva: %.1f km/h  (Vx: %+.2f, Vy: %+.2f, "
-                          "Vz: %+.2f)",
-                          savedSpd, saved.linearVelocity.x,
-                          saved.linearVelocity.y, saved.linearVelocity.z);
-              ImGui::TextColored(
-                  ImVec4(0.3f, 0.9f, 1.0f, 1.0f),
-                  "Momentum Disponível: SIM (Vetor integral preservado)");
-            } else {
-              ImGui::TextDisabled("Nenhum checkpoint salvo até o momento.");
-            }
-
-            ImGui::Spacing();
-            ImGui::Text("Modo Ativo de Restauração:");
-            int curMode = static_cast<int>(SavestateManager::GetRestoreMode());
-            if (ImGui::RadioButton("Restaurar Normalmente (Parado)",
-                                   curMode == 0)) {
-              SavestateManager::SetRestoreMode(RestoreMode::Normal);
-            }
-            ImGui::SameLine();
-            if (ImGui::RadioButton(
-                    "Restaurar com Momentum (Preservar Velocidade)",
-                    curMode == 1)) {
-              SavestateManager::SetRestoreMode(RestoreMode::WithMomentum);
-            }
-
-            ImGui::Spacing();
-            if (ImGui::Button("Salvar Checkpoint (F5)")) {
-              SavestateManager::OnKeyAction(0x74, true); // VK_F5
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Restaurar Normal")) {
-              SavestateManager::RestoreCheckpoint(RestoreMode::Normal);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Restaurar com Momentum")) {
-              SavestateManager::RestoreCheckpoint(RestoreMode::WithMomentum);
             }
           }
 

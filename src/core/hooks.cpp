@@ -9,6 +9,88 @@
 #include <mutex>
 #include <vector>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <cstring>
+
+typedef int(WSAAPI *PFN_GetAddrInfoA)(PCSTR, PCSTR, const ADDRINFOA *,
+                                      PADDRINFOA *);
+typedef int(WSAAPI *PFN_GetAddrInfoW)(PCWSTR, PCWSTR, const ADDRINFOW *,
+                                      PADDRINFOW *);
+typedef int(WSAAPI *PFN_Connect)(SOCKET, const struct sockaddr *, int);
+
+static PFN_GetAddrInfoA g_originalGetAddrInfoA = nullptr;
+static PFN_GetAddrInfoW g_originalGetAddrInfoW = nullptr;
+static PFN_Connect g_originalConnect = nullptr;
+
+static bool IsLocalhostA(const char *name) {
+  if (name == nullptr) return false;
+  return (_stricmp(name, "localhost") == 0 ||
+          strcmp(name, "127.0.0.1") == 0 ||
+          strcmp(name, "::1") == 0);
+}
+
+static bool IsLocalhostW(const wchar_t *name) {
+  if (name == nullptr) return false;
+  return (_wcsicmp(name, L"localhost") == 0 ||
+          wcscmp(name, L"127.0.0.1") == 0 ||
+          wcscmp(name, L"::1") == 0);
+}
+
+int WSAAPI DetourGetAddrInfoA(PCSTR pNodeName, PCSTR pServiceName,
+                              const ADDRINFOA *pHints, PADDRINFOA *ppResult) {
+  if (!IsLocalhostA(pNodeName)) {
+    dr2hook::Logger::Info(
+        std::string("NetworkGuard: Resolucao DNS externa bloqueada para '") +
+        (pNodeName ? pNodeName : "") + "' (Air-gap offline ativo).");
+    return EAI_NONAME;
+  }
+  if (g_originalGetAddrInfoA != nullptr) {
+    return g_originalGetAddrInfoA(pNodeName, pServiceName, pHints, ppResult);
+  }
+  return EAI_FAIL;
+}
+
+int WSAAPI DetourGetAddrInfoW(PCWSTR pNodeName, PCWSTR pServiceName,
+                              const ADDRINFOW *pHints, PADDRINFOW *ppResult) {
+  if (!IsLocalhostW(pNodeName)) {
+    dr2hook::Logger::Info(
+        "NetworkGuard: Resolucao DNS externa (Unicode) bloqueada (Air-gap offline ativo).");
+    return EAI_NONAME;
+  }
+  if (g_originalGetAddrInfoW != nullptr) {
+    return g_originalGetAddrInfoW(pNodeName, pServiceName, pHints, ppResult);
+  }
+  return EAI_FAIL;
+}
+
+int WSAAPI DetourConnect(SOCKET s, const struct sockaddr *name, int namelen) {
+  if (name != nullptr) {
+    if (name->sa_family == AF_INET) {
+      const sockaddr_in *sin = reinterpret_cast<const sockaddr_in *>(name);
+      uint32_t ip = ntohl(sin->sin_addr.s_addr);
+      // Permitir 127.0.0.0/8 (SimHub, motion rigs, telemetria UDP local)
+      if ((ip & 0xFF000000) != 0x7F000000) {
+        WSASetLastError(WSAECONNREFUSED);
+        return SOCKET_ERROR;
+      }
+    } else if (name->sa_family == AF_INET6) {
+      const sockaddr_in6 *sin6 = reinterpret_cast<const sockaddr_in6 *>(name);
+      static const uint8_t loopback6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+      if (memcmp(&sin6->sin6_addr, loopback6, 16) != 0) {
+        WSASetLastError(WSAECONNREFUSED);
+        return SOCKET_ERROR;
+      }
+    }
+  }
+  if (g_originalConnect != nullptr) {
+    return g_originalConnect(s, name, namelen);
+  }
+  return SOCKET_ERROR;
+}
+#endif
+
 namespace {
 
 dr2hook::PFN_D3D11Present g_originalPresent = nullptr;
@@ -245,6 +327,47 @@ bool InitializeHooks() {
   }
 
   Logger::Info("Hook de Present instalado e habilitado com sucesso.");
+
+#if defined(_WIN32)
+  HMODULE hWs2 = LoadLibraryA("ws2_32.dll");
+  if (hWs2 != nullptr) {
+    void *pGetAddrInfo =
+        reinterpret_cast<void *>(GetProcAddress(hWs2, "getaddrinfo"));
+    if (pGetAddrInfo != nullptr) {
+      if (MH_CreateHook(pGetAddrInfo,
+                        reinterpret_cast<void *>(&DetourGetAddrInfoA),
+                        reinterpret_cast<void **>(&g_originalGetAddrInfoA)) ==
+          MH_OK) {
+        MH_EnableHook(pGetAddrInfo);
+        Logger::Info("NetworkGuard: Hook getaddrinfo instalado e habilitado.");
+      }
+    }
+
+    void *pGetAddrInfoW =
+        reinterpret_cast<void *>(GetProcAddress(hWs2, "GetAddrInfoW"));
+    if (pGetAddrInfoW != nullptr) {
+      if (MH_CreateHook(pGetAddrInfoW,
+                        reinterpret_cast<void *>(&DetourGetAddrInfoW),
+                        reinterpret_cast<void **>(&g_originalGetAddrInfoW)) ==
+          MH_OK) {
+        MH_EnableHook(pGetAddrInfoW);
+        Logger::Info("NetworkGuard: Hook GetAddrInfoW instalado e habilitado.");
+      }
+    }
+
+    void *pConnect =
+        reinterpret_cast<void *>(GetProcAddress(hWs2, "connect"));
+    if (pConnect != nullptr) {
+      if (MH_CreateHook(pConnect, reinterpret_cast<void *>(&DetourConnect),
+                        reinterpret_cast<void **>(&g_originalConnect)) ==
+          MH_OK) {
+        MH_EnableHook(pConnect);
+        Logger::Info("NetworkGuard: Hook connect instalado e habilitado.");
+      }
+    }
+  }
+#endif
+
   return true;
 }
 
