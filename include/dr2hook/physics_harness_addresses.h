@@ -16,6 +16,7 @@ inline constexpr uintptr_t kRvaFrameLoop = 0xDBCA20;
 inline constexpr uintptr_t kRvaPhysicsStep = 0xDBC500;
 inline constexpr uintptr_t kRvaPreTick = 0x749A30;
 inline constexpr uintptr_t kRvaEndStep = 0x7511E0;
+inline constexpr uintptr_t kRvaIntegratorM2ReturnSite = 0x7395FA;
 inline constexpr uintptr_t kRvaIntegratorReturnSite = 0x73E314;
 inline constexpr uintptr_t kRvaCommitLogAuxA = 0x73A070;
 inline constexpr uintptr_t kRvaCommitLogAuxB = 0x73B620;
@@ -29,6 +30,8 @@ inline constexpr uintptr_t kVaFrameLoop = kImageBase + kRvaFrameLoop;         //
 inline constexpr uintptr_t kVaPhysicsStep = kImageBase + kRvaPhysicsStep;   // 0x140dbc500
 inline constexpr uintptr_t kVaPreTick = kImageBase + kRvaPreTick;             // 0x140749a30
 inline constexpr uintptr_t kVaEndStep = kImageBase + kRvaEndStep;             // 0x1407511e0
+inline constexpr uintptr_t kVaIntegratorM2ReturnSite =
+    kImageBase + kRvaIntegratorM2ReturnSite; // 0x1407395fa
 inline constexpr uintptr_t kVaIntegratorReturnSite =
     kImageBase + kRvaIntegratorReturnSite; // 0x14073e314
 inline constexpr uintptr_t kVaCommitLogAuxA =

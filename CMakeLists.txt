@@ -151,6 +151,13 @@ foreach(dr2_target dxgi dr2hook_core)
     set_target_properties(${dr2_target} PROPERTIES PREFIX "")
 endforeach()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    enable_language(ASM)
+    target_sources(dr2hook_core PRIVATE src/core/physics_harness_detour_x64.S)
+    set_source_files_properties(src/core/physics_harness_detour_x64.S
+        PROPERTIES LANGUAGE ASM)
+endif()
+
 target_compile_definitions(dr2hook_core PRIVATE DR2HOOK_CORE_MODULE)
 
 if((WIN32 OR MSVC) AND MINGW)
@@ -326,6 +333,39 @@ add_executable(test_mod_menu
 )
 
 target_include_directories(test_mod_menu PRIVATE include)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_CROSSCOMPILING)
+    enable_language(ASM)
+    set(PHYSICS_DETOUR_WINE_SOURCES
+        tests/test_physics_harness_detour_wine.cpp
+        tests/physics_detour_wine_ops_stub.cpp
+        tests/physics_detour_wine_target_x64.S
+        tests/physics_detour_wine_caller_x64.S
+        tests/physics_detour_wine_entry_x64.S
+        src/core/physics_harness_detour_x64.S
+        vendor/minhook/src/buffer.c
+        vendor/minhook/src/hook.c
+        vendor/minhook/src/trampoline.c
+        vendor/minhook/src/hde/hde64.c
+    )
+    add_executable(test_physics_harness_detour_wine ${PHYSICS_DETOUR_WINE_SOURCES})
+    target_include_directories(test_physics_harness_detour_wine PRIVATE
+        include
+        vendor/minhook/include
+    )
+    target_compile_definitions(test_physics_harness_detour_wine PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+    )
+    if(MINGW OR CMAKE_CROSSCOMPILING)
+        target_link_options(test_physics_harness_detour_wine PRIVATE
+            "-static"
+            "-static-libgcc"
+            "-static-libstdc++"
+        )
+    endif()
+endif()
 
 add_executable(test_physics_tick_harness
     tests/test_physics_tick_harness.cpp

@@ -8,6 +8,7 @@
 #include "dr2hook/safety.h"
 
 #include <cstring>
+#include <cstdio>
 #include <iostream>
 
 static int g_testsRun = 0;
@@ -29,8 +30,8 @@ static int g_testsFailed = 0;
 
 void TestVerifyPrologue() {
   std::cout << "[RUN] TestVerifyPrologue..." << std::endl;
-  const uint8_t buffer[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
-                            0x24, 0x10, 0x48, 0x89};
+  const uint8_t buffer[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x48, 0x89,
+                            0x70, 0x20, 0x55};
   TEST_ASSERT(
       dr2hook::VerifyHookPrologue(
           buffer, dr2hook::physics_harness_prologues::kTickStart,
@@ -40,6 +41,59 @@ void TestVerifyPrologue() {
                          0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   TEST_ASSERT(!dr2hook::VerifyHookPrologue(buffer, bad, sizeof(bad)),
               "Prologo divergente deve falhar");
+}
+
+namespace {
+
+bool ParseHexPrologue12(const char *hex24, uint8_t *out12) {
+  if (hex24 == nullptr || out12 == nullptr) {
+    return false;
+  }
+  for (size_t i = 0; i < 12; ++i) {
+    unsigned value = 0;
+    if (std::sscanf(hex24 + (i * 2), "%2x", &value) != 1) {
+      return false;
+    }
+    out12[i] = static_cast<uint8_t>(value);
+  }
+  return true;
+}
+
+bool PrologueMatchesHex(const uint8_t *prologue, const char *hex24) {
+  uint8_t expected[12] = {};
+  if (!ParseHexPrologue12(hex24, expected)) {
+    return false;
+  }
+  return std::memcmp(prologue, expected, 12) == 0;
+}
+
+} // namespace
+
+void TestBug1CalibratedPrologueHexPinned() {
+  std::cout << "[RUN] TestBug1CalibratedPrologueHexPinned..." << std::endl;
+  using namespace dr2hook::physics_harness_prologues;
+  TEST_ASSERT(PrologueMatchesHex(kTickStart, "488bc4488958184889702055"),
+              "tick_start hex");
+  TEST_ASSERT(PrologueMatchesHex(kIntegrator, "488bc44889581055488da838"),
+              "integrator hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommit, "488bc4488958184889702055"),
+              "commit hex");
+  TEST_ASSERT(PrologueMatchesHex(kFrameLoop, "488bc4574881ecb000000033"),
+              "frame_loop hex");
+  TEST_ASSERT(PrologueMatchesHex(kPhysicsStep, "488bc44889501041554883ec"),
+              "physics_step hex");
+  TEST_ASSERT(PrologueMatchesHex(kPreTick, "488bc4488958104889781855"),
+              "pretick hex");
+  TEST_ASSERT(PrologueMatchesHex(kEndStep, "40534883ec50488b05b3b2e6"),
+              "end_step hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxA, "4c8bdc55535741554157498d"),
+              "commit_log_73a070 hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxB, "488bc45657415641574881ec"),
+              "commit_log_73b620 hex");
+  TEST_ASSERT(kEndStepMinimumStolenBytes > kEndStepPrologueLength,
+              "end_step MinHook steal must exceed 12 B pinned header");
+  TEST_ASSERT(kEndStep[6] == 0x48 && kEndStep[7] == 0x8B && kEndStep[8] == 0x05,
+              "end_step byte 6 begins mov rax,[rip+disp32]");
 }
 
 void TestScheduleWriteRequiresOptIn() {
@@ -220,6 +274,40 @@ void TestSpecCorrection4SelfTestDisablesWrites() {
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
 }
 
+void TestSelfTestPassAt600Ticks() {
+  std::cout << "[RUN] TestSelfTestPassAt600Ticks..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(true);
+  dr2hook::PhysicsTickHarness::TestingSeedRequiredSelfTestHooks();
+  for (uint64_t i = 0; i < 599; ++i) {
+    dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  }
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::TestingEvaluateSelfTestPass(),
+              "PASS antes de 600 ticks");
+  dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::TestingEvaluateSelfTestPass(),
+              "PASS com 600 ticks e hooks obrigatorios");
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(false);
+}
+
+void TestSelfTestShamWritePath() {
+  std::cout << "[RUN] TestSelfTestShamWritePath..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(true);
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  const uint8_t payload = 0x11;
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  dr2hook::PhysicsTickHarness::GetTickCounter(),
+                  dr2hook::PhysicsHarnessBoundary::B1_TickStart, 0x320,
+                  &payload, sizeof(payload)),
+              "ScheduleWrite enfileira em self-test");
+  dr2hook::PhysicsTickHarness::TestingExecuteScheduledWriteIfDue(
+      dr2hook::PhysicsHarnessBoundary::B1_TickStart);
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::TestingGetShamWriteCount() == 1,
+              "Sham-write incrementa contador");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(false);
+}
+
 void TestSpecCorrection4ExtraCsvOffsets() {
   std::cout << "[RUN] TestSpecCorrection4ExtraCsvOffsets..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kContainerExtraVec4Offset == 0xC930,
@@ -231,6 +319,9 @@ void TestSpecCorrection4ExtraCsvOffsets() {
 void TestSpecCorrection3IntegratorReturnAndH6Write() {
   std::cout << "[RUN] TestSpecCorrection3IntegratorReturnAndH6Write..."
             << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaIntegratorM2ReturnSite ==
+                  0x1407395FAULL,
+              "VA filtro retorno integrator M2");
   TEST_ASSERT(dr2hook::physics_harness::kVaIntegratorReturnSite ==
                   0x14073E314ULL,
               "VA filtro retorno integrator H6");
@@ -302,6 +393,7 @@ void TestRigChainValidationLogic() {
 int main() {
   std::cout << "DR2Hook - Physics Tick Harness (unit)" << std::endl;
   TestVerifyPrologue();
+  TestBug1CalibratedPrologueHexPinned();
   TestScheduleWriteRequiresOptIn();
   TestScheduleWriteSingleQueue();
   TestScheduleExperimentalNativeRequiresOptIn();
@@ -314,6 +406,8 @@ int main() {
   TestSpecCorrection3PracticeKeysSnapshot();
   TestSpecCorrection4ExtraCsvOffsets();
   TestSpecCorrection4SelfTestDisablesWrites();
+  TestSelfTestPassAt600Ticks();
+  TestSelfTestShamWritePath();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun
