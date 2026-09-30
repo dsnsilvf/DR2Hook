@@ -6,8 +6,5 @@
 .extern PhysicsHarness_DetourCommon
 
 PhysicsHarness_DetourWineTest:
-  push r12
-  push r13
-  mov r10, QWORD PTR [rsp + 16]
-  lea rax, [g_wine_detour_ops + rip]
+  lea r11, [g_wine_detour_ops + rip]
   jmp PhysicsHarness_DetourCommon

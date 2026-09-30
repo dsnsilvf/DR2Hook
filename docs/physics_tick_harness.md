@@ -165,7 +165,8 @@ Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`.
 
 Os detours expostos ao MinHook são **thunks em assembly** (`physics_harness_detour_x64.S`): guardam **RCX/RDX/R8/R9** e **XMM0–XMM3** antes do logging C++, chamam o trampoline original com o mesmo estado de argumentos (preservando **`dt` em XMM1** no tick start / integrator), e depois do retorno restauram **RAX** e **XMM0** antes de devolver ao caller do jogo.
 
-- O ponteiro `DetourOps` chega em **rax** no stub (`lea rax, [g_ops_*+rip]`), é guardado em **`[rsp+0xA8]`** (acima do `Frame`, fora de `+0x18/+0x20` que prólogos `mov rax,rsp` do jogo sobrescrevem no trampoline) e **recarregado de lá** antes de cada `before` / `orig` / `after` (sem **r11** após `call`).
+- **Stub:** `lea r11, [g_ops_*+rip]` + `jmp` — **não** altera **r12/r13**; **r11** só até ao prologue comum.
+- **Prologue:** `push rbp` / `push r12` / `push r13` com **`.seh_pushreg`**; **r12** = ops, **r13** = caller return (`[rbp+24]`); cópia em **`[rsp+0xA8]`** (acima do `Frame` @ `+0x20`, fora da shadow que tick_start/commit escrevem via `mov rax,rsp`); sem **r11** após `call`.
 - **`Shutdown`** desactiva/remove hooks MinHook mas **não anula** `g_orig*` — evita corrida com threads ainda dentro do thunk.
 - **`Frame`** começa em **`rsp+0x20`**, acima dos **32 bytes** de shadow/home space Win64 (`rsp+0x00..0x1F`) usados pelos `call` C++; offsets em `physics_harness_detour_abi.h` (`static_assert` alinhados com o `.S`).
 - **`Frame::caller_return`** recebe o endereço de retorno do caller original (`[rsp]` na entrada do thunk), usado pelos filtros **M2/H6** no `after` do integrator (não usar `__builtin_return_address` no handler).

@@ -44,7 +44,7 @@ for name, hexstr in patterns.items():
 PY
 echo
 
-echo "## Thunk stubs (ops @ rsp+0x18 after prologue, r13 caller return)"
+echo "## Thunk stubs (lea r11 ops only; r12/r13 untouched in stub)"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourTickStart>:/,/<PhysicsHarness_DetourIntegrator>:/p'
 echo
 
@@ -92,9 +92,9 @@ for i in range(num):
 PY
 echo
 
-echo "## r11 after first call in DetourCommon (must be empty)"
+echo "## r11 after skip_before in DetourCommon (must be empty)"
 if "${OBJDUMP}" -d -M intel "${DLL}" \
-  | sed -n '/<skip_before>:/,/<PhysicsHarness_DetourIntegrator>:/p' \
+  | sed -n '/<skip_before>:/,/<PhysicsHarness_DetourTickStart>:/p' \
   | grep -i r11; then
   echo "FAIL: r11 still referenced" >&2
   exit 1
