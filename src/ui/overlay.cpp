@@ -537,6 +537,25 @@ void OverlayManager::RenderUI() {
           if (ImGui::Button("Reload Scripts (Hot-Reload)")) {
             ModManager::ReloadMods();
           }
+          ImGui::SameLine();
+          if (ImGui::Button("Reload Native Core (F8)")) {
+#if defined(_WIN32)
+            HMODULE host = GetModuleHandleA("dxgi.dll");
+            auto requestReload =
+                host == nullptr
+                    ? nullptr
+                    : reinterpret_cast<void (*)()>(
+                          GetProcAddress(host, "Dr2Host_RequestReload"));
+            if (requestReload != nullptr) {
+              requestReload();
+            }
+#endif
+          }
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Reloads dr2hook_core.dll from disk without closing the game. "
+                "The in-memory checkpoint is cleared.");
+          }
 
           ImGui::Separator();
 

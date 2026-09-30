@@ -24,7 +24,7 @@ cmake -B "${BUILD_DIR}" \
   -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
   "${ROOT_DIR}"
 
-cmake --build "${BUILD_DIR}" --target dxgi -j"$(nproc)"
+cmake --build "${BUILD_DIR}" --target dxgi --target dr2hook_core -j"$(nproc)"
 
 # Localizar binário da proxy DLL gerada
 DXGI_BIN=""
@@ -42,12 +42,22 @@ echo "[2/5] Montando estrutura de distribuição em ${PKG_DIR}..."
 rm -rf "${PKG_DIR}" "${ZIP_FILE}" "${SHA_FILE}"
 mkdir -p "${PKG_DIR}/mods/practice_mode"
 
-# Copiar proxy DLL para a raiz do pacote
+# Copiar proxy DLL e o core recarregável para a raiz do pacote
 cp "${DXGI_BIN}" "${PKG_DIR}/dxgi.dll"
-if command -v x86_64-w64-mingw32-strip >/dev/null 2>&1; then
-  x86_64-w64-mingw32-strip "${PKG_DIR}/dxgi.dll"
+CORE_BIN=""
+if [[ -f "${BUILD_DIR}/dr2hook_core.dll" ]]; then
+  CORE_BIN="${BUILD_DIR}/dr2hook_core.dll"
+elif [[ -f "${BUILD_DIR}/libdr2hook_core.dll" ]]; then
+  CORE_BIN="${BUILD_DIR}/libdr2hook_core.dll"
 else
-  strip "${PKG_DIR}/dxgi.dll"
+  echo "[ERRO] Binário dr2hook_core.dll não encontrado em ${BUILD_DIR}!" >&2
+  exit 1
+fi
+cp "${CORE_BIN}" "${PKG_DIR}/dr2hook_core.dll"
+if command -v x86_64-w64-mingw32-strip >/dev/null 2>&1; then
+  x86_64-w64-mingw32-strip "${PKG_DIR}/dxgi.dll" "${PKG_DIR}/dr2hook_core.dll"
+else
+  strip "${PKG_DIR}/dxgi.dll" "${PKG_DIR}/dr2hook_core.dll"
 fi
 
 # Copiar mod de treino padrão (Practice Mode)
@@ -74,6 +84,9 @@ PRINCIPAIS RECURSOS:
             para evitar capotamentos ou perda de tração.
 2. In-Game Menu & HUD Overlay (Dear ImGui):
    - [Insert] : Alterna a visibilidade do menu de configurações e status.
+   - [F7] : Restaura o checkpoint com momentum (velocidade linear e angular).
+   - [F8] : Recarrega dr2hook_core.dll sem fechar o jogo. O checkpoint em
+            memoria e o estado Lua sao descartados. A dxgi.dll nao recarrega.
    - Notificações HUD estilo toast no canto da tela informando o status das ações.
 3. Fair Play First (Anti-Cheat Nativo em C++):
    - Escritas de memória e restauração de savestates possuem bloqueio rígido
@@ -105,6 +118,7 @@ DR2Hook - Guia de Instalação, Configuração e Desinstalação
      [Pasta do DiRT Rally 2.0]/
      ├── dirtrally2.exe
      ├── dxgi.dll
+     ├── dr2hook_core.dll
      ├── mods/
      │   └── practice_mode/
      │       ├── mod.json
@@ -116,6 +130,8 @@ DR2Hook - Guia de Instalação, Configuração e Desinstalação
    - Entre no modo DirtFish ou Time Trial.
    - Pressione [Insert] para abrir a interface in-game do DR2Hook.
    - Pressione [F5] para gravar um ponto de retorno e [F6] para retornar a ele.
+   - Pressione [F8] para recarregar dr2hook_core.dll sem fechar o jogo
+     (o checkpoint em memoria e descartado). dxgi.dll em si so troca ao reiniciar.
    - Um arquivo de log "dr2hook.log" será gerado na pasta do jogo informando o status.
 
 2. INSTALAÇÃO NO LINUX / STEAM DECK (STEAM PROTON)
@@ -132,7 +148,7 @@ DR2Hook - Guia de Instalação, Configuração e Desinstalação
 3. DESINSTALAÇÃO
 ----------------
 Para remover o DR2Hook:
-1. Exclua o arquivo "dxgi.dll" da pasta raiz do jogo.
+1. Exclua "dxgi.dll", "dr2hook_core.dll" e qualquer "dr2hook_core.*.dll" da pasta raiz do jogo.
 2. (Opcional) Exclua a pasta "mods/" e o arquivo "dr2hook.log".
 3. Caso utilize Linux/Steam Deck, remova o parâmetro WINEDLLOVERRIDES das Opções de Inicialização.
 

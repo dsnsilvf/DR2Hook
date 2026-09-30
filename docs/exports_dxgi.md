@@ -43,13 +43,17 @@ Invocação de I/O em disco, chamadas a `LoadLibrary` ou sincronização complex
    - Cria imediatamente uma thread trabalhadora dedicada via `CreateThread(nullptr, 0, DR2Hook_InitThread, hModule, 0, nullptr)`.
    - Retorna imediatamente `TRUE`, liberando o Loader Lock sem nenhum bloqueio.
 2. **Execução de `DR2Hook_InitThread`:**
-   - Fora do Loader Lock, inicializa o subsistema de log thread-safe em `dr2hook.log`.
+   - Fora do Loader Lock, abre `dr2hook.log` (o arquivo pertence à `dxgi.dll` e permanece aberto entre reloads).
    - Consulta o caminho oficial do sistema via `GetSystemDirectoryA` (ex: `C:\Windows\System32`).
    - Carrega com segurança `C:\Windows\System32\dxgi.dll` via `LoadLibraryA`.
-   - Resolve os endereços dos 5 exports essenciais com `GetProcAddress`.
+   - Resolve os endereços dos 5 exports DXGI essenciais com `GetProcAddress`.
+   - Copia `dr2hook_core.dll`, da mesma pasta da proxy, para `dr2hook_core.N.dll` e carrega essa cópia com `LoadLibraryW`. O nome numerado existe para o arquivo original poder ser substituído enquanto o jogo está aberto.
+   - Obtém `Dr2Core_GetApi` e chama `Initialize`.
+   - Instala os hooks de `Present`, `WndProc` e Winsock. Esses detours ficam na `dxgi.dll`.
 3. **Finalização (`DLL_PROCESS_DETACH`):**
-   - Invoca `ShutdownProxy()` para liberar a biblioteca do sistema via `FreeLibrary`.
-   - Encerra o sistema de log via `Logger::Shutdown()`.
+   - Encerra o core (`Shutdown`). `FreeLibrary` só ocorre quando o processo não está terminando (`lpReserved == nullptr`).
+   - Remove os hooks (`ShutdownHooks`) e libera a `dxgi.dll` de sistema (`ShutdownProxy`).
+   - Encerra o log via `Logger::Shutdown()`.
 
 ---
 
@@ -62,9 +66,35 @@ Invocação de I/O em disco, chamadas a `LoadLibrary` ou sincronização complex
 | `CreateDXGIFactory2` | `HRESULT WINAPI (UINT Flags, REFIID riid, void** ppFactory)` | DXGI 1.3 | Repassa para ponteiro genuíno de `System32\dxgi.dll` com log DEBUG. | Retorna `DXGI_ERROR_UNSUPPORTED` e loga ERROR se ponteiro nulo. |
 | `DXGIGetDebugInterface1` | `HRESULT WINAPI (UINT Flags, REFIID riid, void** pDebug)` | DXGI 1.3 | Repassa para ponteiro genuíno de `System32\dxgi.dll` com log DEBUG. | Retorna `DXGI_ERROR_UNSUPPORTED` e loga ERROR se ponteiro nulo. |
 | `DXGIDeclareAdapterRemovalSupport` | `HRESULT WINAPI ()` | DXGI 1.6 | Repassa para ponteiro genuíno de `System32\dxgi.dll` com log DEBUG. | Retorna `DXGI_ERROR_UNSUPPORTED` e loga ERROR se ponteiro nulo. |
+| `Dr2Host_RequestReload` | `void ()` | — | Marca o pedido de reload. O `Present` da proxy, no frame seguinte, troca o core. | Não faz nada se o core ainda não foi carregado. O pedido fica pendente. |
+| `Dr2Host_Log` | `void (int level, const char* message)` | — | Log da `dxgi.dll`. Níveis: `0` info, `1` warn, `2` error, `3` debug. O core encaminha `Logger::*` para cá. | Mensagem nula vira string vazia. |
+
+O jogo só importa os cinco exports DXGI. `Dr2Host_RequestReload` e `Dr2Host_Log` existem para o `dr2hook_core.dll` chamar a proxy por `GetProcAddress`, sem link estático entre as duas DLLs.
 
 ---
 
-## 5. Garantias de Compatibilidade de ABI
+## 5. Export do módulo recarregável (`dr2hook_core.dll`)
+
+| Export | Assinatura | Comportamento |
+| :--- | :--- | :--- |
+| `Dr2Core_GetApi` | `Dr2CoreApi* ()` | Devolve a tabela de função da ABI `kCoreAbiVersion` (`1`). |
+
+Campos de `Dr2CoreApi`:
+
+| Campo | Papel |
+| :--- | :--- |
+| `abiVersion` | Tem de ser `1`. A proxy recusa a DLL se divergir. |
+| `Initialize(int truncateLog)` | Sobe savestate, safety, telemetria e mods. `truncateLog != 0` é a primeira carga. `0` é um reload: o log não é truncado e o overlay avisa que o checkpoint em memória foi limpo. |
+| `Shutdown()` | Derruba overlay, savestate e Lua antes do `FreeLibrary`. |
+| `OnFrame(swapChain, hwnd, dt)` | Inicializa o ImGui no primeiro frame, resolve o veículo, dispara `onTick` e desenha o overlay. |
+| `OnWndProc(...)` | `Insert` abre o menu. As outras teclas seguem para o savestate e para `onKeyDown`. Retorna `1` se a mensagem foi consumida. |
+
+`F8` não passa por `OnWndProc`. A `WndProc` da proxy consome a tecla e só então pede o reload.
+
+Não há `std::string` nem objeto C++ na fronteira. Cada DLL tem a própria `libstdc++`.
+
+---
+
+## 6. Garantias de Compatibilidade de ABI
 
 - No Windows x64, a convenção de chamada é unificada (`__fastcall` subjacente). A especificação `WINAPI` (`__stdcall`) é compatível e as funções exportadas com `extern "C" __declspec(dllexport)` não sofrem name mangling (decoração de nomes) em compiladores padrão MSVC e Clang, garantindo compatibilidade binária idêntica à `dxgi.dll` de fábrica da Microsoft.

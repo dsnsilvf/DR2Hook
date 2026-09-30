@@ -54,12 +54,24 @@ set(IMGUI_BACKEND_SOURCES
     vendor/imgui/backends/imgui_impl_dx11.cpp
 )
 
-# Garantir que o projeto seja compilado como biblioteca compartilhada (DLL)
+# Proxy residente. Os hooks ficam aqui; o resto mora em dr2hook_core.dll.
 add_library(dxgi SHARED
     src/proxy/dxgi_proxy.cpp
     src/core/main.cpp
-    src/core/logger.cpp
+    src/core/host.cpp
     src/core/hooks.cpp
+    src/core/logger.cpp
+    vendor/minhook/src/buffer.c
+    vendor/minhook/src/hook.c
+    vendor/minhook/src/trampoline.c
+    vendor/minhook/src/hde/hde32.c
+    vendor/minhook/src/hde/hde64.c
+)
+
+# Módulo recarregável em runtime (F8). A dxgi.dll carrega uma cópia deste arquivo.
+add_library(dr2hook_core SHARED
+    src/core/core_module.cpp
+    src/core/logger.cpp
     src/core/memory.cpp
     src/core/safety.cpp
     src/core/player.cpp
@@ -70,55 +82,58 @@ add_library(dxgi SHARED
     ${IMGUI_CORE_SOURCES}
     ${IMGUI_BACKEND_SOURCES}
     ${LUA_SOURCES}
-    vendor/minhook/src/buffer.c
-    vendor/minhook/src/hook.c
-    vendor/minhook/src/trampoline.c
-    vendor/minhook/src/hde/hde32.c
-    vendor/minhook/src/hde/hde64.c
 )
 
-target_include_directories(dxgi PRIVATE
-    include
-    src
-    vendor/lua
-    vendor/imgui
-    vendor/imgui/backends
-    vendor/minhook/include
-)
-
-if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
-    target_include_directories(dxgi PRIVATE /usr/include/wine/windows)
-    target_compile_definitions(dxgi PRIVATE
-        WINE_UNICODE_NATIVE
-        _DPI_AWARENESS_CONTEXTS_
+foreach(dr2_target dxgi dr2hook_core)
+    target_include_directories(${dr2_target} PRIVATE
+        include
+        src
+        vendor/lua
+        vendor/imgui
+        vendor/imgui/backends
+        vendor/minhook/include
     )
-endif()
 
-# Definições específicas de Windows / MSVC
-if(WIN32 OR MSVC)
-    target_compile_definitions(dxgi PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-        _CRT_SECURE_NO_WARNINGS
-        DR2HOOK_USE_BACKENDS
-    )
-    target_compile_options(dxgi PRIVATE "-Dlocaltime_r(t,b)=(localtime_s((b),(t)),(b))")
-    if(MINGW)
-        target_link_options(dxgi PRIVATE
-            "-static"
-            "-static-libgcc"
-            "-static-libstdc++"
-            "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
+    if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
+        target_include_directories(${dr2_target} PRIVATE /usr/include/wine/windows)
+        target_compile_definitions(${dr2_target} PRIVATE
+            WINE_UNICODE_NATIVE
+            _DPI_AWARENESS_CONTEXTS_
         )
     endif()
-    target_link_libraries(dxgi PRIVATE dwmapi d3dcompiler d3d11 ws2_32)
-endif()
 
-if(UNIX AND NOT APPLE)
-    target_link_libraries(dxgi PRIVATE m)
-endif()
+    if(WIN32 OR MSVC)
+        target_compile_definitions(${dr2_target} PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+            _CRT_SECURE_NO_WARNINGS
+            DR2HOOK_USE_BACKENDS
+        )
+        target_compile_options(${dr2_target} PRIVATE "-Dlocaltime_r(t,b)=(localtime_s((b),(t)),(b))")
+        if(MINGW)
+            target_link_options(${dr2_target} PRIVATE
+                "-static"
+                "-static-libgcc"
+                "-static-libstdc++"
+            )
+        endif()
+        target_link_libraries(${dr2_target} PRIVATE dwmapi d3dcompiler d3d11 ws2_32)
+    endif()
 
-set_target_properties(dxgi PROPERTIES PREFIX "")
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(${dr2_target} PRIVATE m)
+    endif()
+
+    set_target_properties(${dr2_target} PROPERTIES PREFIX "")
+endforeach()
+
+target_compile_definitions(dr2hook_core PRIVATE DR2HOOK_CORE_MODULE)
+
+if((WIN32 OR MSVC) AND MINGW)
+    target_link_options(dr2hook_core PRIVATE
+        "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
+    )
+endif()
 
 # Alvo de teste executável local: Memória e Segurança
 add_executable(test_memory_safety

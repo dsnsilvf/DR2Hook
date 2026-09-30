@@ -5,6 +5,7 @@
 - **ADR-004:** Aceito / Homologado (2026-09-12) — Normalização para Repouso Estático da Suspensão e Atenuação Inercial Deliberada
 - **ADR-005:** Aceito / Homologado (2026-09-28) — Isolamento de Rede Obrigatório via Winsock Hooks (Air-Gap Anti-Cheat)
 - **ADR-006:** Aceito / Homologado (2026-09-28) — Restauração de Checkpoint em Modo Duplo (Normal vs. Com Momentum)
+- **ADR-007:** Aceito (2026-09-28) — Core nativo recarregável (`dr2hook_core.dll`) com a proxy residente
 
 ---
 
@@ -68,18 +69,18 @@ Mesmo com o `SafetyGuard` bloqueando escritas de memória em modos competitivos 
 Para eliminar categoricamente qualquer risco de uso do DR2 ModLoader para trapaças em eventos oficiais, implementou-se uma política de isolamento físico de rede (*air-gap* forçado).
 
 ### Decisão
-1. **Detours no Winsock (`ws2_32.dll`):** O `NetworkGuard` instala hooks determinísticos em funções de transporte e resolução de nomes do Windows Sockets:
-   - `getaddrinfo`: Intercepta consultas DNS e bloqueia resoluções de domínios da Codemasters/EA/RaceNet (ex.: `*.codemasters.com`, `*.dirtgame.com`, `racenet.com`), retornando `WSAHOST_NOT_FOUND` / `EAI_NONAME`.
-   - `connect`: Intercepta tentativas de conexão TCP e recusa imediatamente qualquer conexão destinada a servidores remotos do jogo com `WSAECONNREFUSED` (`10061`).
-   - `sendto`: Intercepta tráfego UDP de telemetria ou rede para servidores remotos, descartando pacotes não autorizados com `WSAEACCES` (`10013`).
-2. **Mandatório e Irreversível em Runtime:** O isolamento de rede é ativado na inicialização do mod loader e não pode ser desativado pelo usuário via interface ou scripts durante a execução do processo. A única forma de jogar online novamente é fechar o jogo e remover a DLL `dxgi.dll`.
+1. **Detours no Winsock (`ws2_32.dll`), instalados na `dxgi.dll`:** O `NetworkGuard` vive em `src/core/hooks.cpp` e não acompanha o reload do core.
+   - `getaddrinfo` e `GetAddrInfoW`: só `localhost`, `127.0.0.1` e `::1` seguem para o sistema. Qualquer outro nome retorna `EAI_NONAME`. O nome recusado vai para o log.
+   - `connect`: só `127.0.0.0/8` e o loopback IPv6 passam. O resto retorna `WSAECONNREFUSED` (`10061`). O destino não é reescrito.
+   - `sendto` não é interceptado. Ferramentas locais (SimHub, motion rig, telemetria em `127.0.0.1`) continuam podendo usar UDP.
+2. **Mandatório e Irreversível em Runtime:** O isolamento sobe com a proxy e não tem opção de menu nem API de script. `F8` não o desliga. Para jogar online de novo é preciso fechar o jogo e remover `dxgi.dll` e `dr2hook_core.dll`.
 
 ### Consequências
 - **Positivas:**
   - Impossibilidade matemática de envio de tempos ilegítimos ou estados adulterados para os servidores de ranking mundial da Codemasters/EA.
   - Segurança irrestrita para o usuário treinar no DirtFish e Time Trial sem risco de banimentos na conta Steam/RaceNet.
 - **Trade-offs:**
-  - Recursos online legítimos do jogo ficam desabilitados enquanto a DLL estiver carregada, o que é o comportamento desejado por especificação.
+  - Recursos online legítimos do jogo ficam desabilitados enquanto `dxgi.dll` e `dr2hook_core.dll` estiverem na pasta do jogo, o que é o comportamento desejado por especificação.
 
 ---
 
@@ -106,4 +107,26 @@ O método `Player::ApplyState` e a API Lua `Player.setState(state, mode)` foram 
 - **Positivas:**
   - Flexibilidade máxima para o piloto: treino de curvas rápidas sem perda de dinâmica e treino de largadas/linhas paradas.
   - Controle integrado via interface gráfica ImGui (aba Practice Mode) e via script Lua.
+
+---
+
+## ADR-007: Core nativo recarregável, com a proxy residente
+
+### Contexto
+Cada ajuste de telemetria ou de overlay exigia recompilar `dxgi.dll` e reiniciar o jogo. A proxy não pode ser descarregada: ela exporta o DXGI, segura os detours do MinHook (`Present`, `WndProc`, Winsock) e o contexto desses hooks. `FreeLibrary` nela derruba o frame do jogo.
+
+### Decisão
+1. **Duas DLLs.** `dxgi.dll` fica mapeada (proxy, MinHook, hooks, log). `dr2hook_core.dll` contém overlay, leitura de memória, savestate e Lua.
+2. **Cópia antes do `LoadLibrary`.** O host copia `dr2hook_core.dll` para `dr2hook_core.N.dll` e carrega a cópia. O arquivo original permanece livre para o próximo build.
+3. **Fronteira C.** `Dr2Core_GetApi` devolve ponteiros de função (`Initialize`, `Shutdown`, `OnFrame`, `OnWndProc`). Não atravessa `std::string` nem objeto C++: cada DLL tem a própria `libstdc++`. O log fica na proxy; o core chama `Dr2Host_Log`.
+4. **Reload no `Present`, não dentro do core.** `F8` só arma um flag. O frame seguinte, ainda na proxy, chama `Shutdown`, `FreeLibrary` e carrega de novo. ImGui, estado estático de `Player` e o estado Lua morrem com o unload.
+5. **O que o reload apaga.** O checkpoint em memória e o estado dos scripts. O isolamento de rede não.
+
+### Consequências
+- **Positivas:**
+  - Iterar offset, overlay ou script nativo sem fechar o DiRT Rally 2.0, depois que a proxy nova já está carregada.
+  - Os hooks de DXGI e de rede não apontam para código que acabou de ser desmapeado.
+- **Trade-offs:**
+  - A primeira troca da `dxgi.dll` ainda pede um reinício.
+  - Um `F8` no meio do treino descarta o checkpoint que não foi persistido.
 

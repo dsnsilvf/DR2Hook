@@ -86,6 +86,7 @@ ZIP_CONTENTS=$(unzip -l "${ZIP_FILE}")
 
 for REQUIRED_FILE in \
   "DR2Hook-${VERSION}/dxgi.dll" \
+  "DR2Hook-${VERSION}/dr2hook_core.dll" \
   "DR2Hook-${VERSION}/mods/practice_mode/mod.json" \
   "DR2Hook-${VERSION}/mods/practice_mode/main.lua" \
   "DR2Hook-${VERSION}/README.txt" \
@@ -97,20 +98,23 @@ for REQUIRED_FILE in \
 done
 
 echo "  Validando ausência de dependências dinâmicas MinGW (libgcc, libwinpthread, libstdc++)..."
-PKG_DLL="dist/DR2Hook-${VERSION}/dxgi.dll"
-if [[ ! -f "${PKG_DLL}" ]]; then
-  echo "[ERRO] Binário ${PKG_DLL} não encontrado para verificação de dependências!" >&2
-  exit 1
-fi
-
-OBJDUMP_OUTPUT=$(x86_64-w64-mingw32-objdump -p "${PKG_DLL}")
-for BANNED_DEP in "libgcc" "libwinpthread" "libstdc++"; do
-  if echo "${OBJDUMP_OUTPUT}" | grep -i "${BANNED_DEP}" >/dev/null; then
-    echo "[ERRO] Dependência dinâmica proibida detectada em ${PKG_DLL}: ${BANNED_DEP}" >&2
+for PKG_DLL in \
+  "dist/DR2Hook-${VERSION}/dxgi.dll" \
+  "dist/DR2Hook-${VERSION}/dr2hook_core.dll"; do
+  if [[ ! -f "${PKG_DLL}" ]]; then
+    echo "[ERRO] Binário ${PKG_DLL} não encontrado para verificação de dependências!" >&2
     exit 1
   fi
+
+  OBJDUMP_OUTPUT=$(x86_64-w64-mingw32-objdump -p "${PKG_DLL}")
+  for BANNED_DEP in "libgcc" "libwinpthread" "libstdc++"; do
+    if echo "${OBJDUMP_OUTPUT}" | grep -i "${BANNED_DEP}" >/dev/null; then
+      echo "[ERRO] Dependência dinâmica proibida detectada em ${PKG_DLL}: ${BANNED_DEP}" >&2
+      exit 1
+    fi
+  done
+  echo "  -> Nenhuma dependência dinâmica proibida encontrada em ${PKG_DLL}."
 done
-echo "  -> Nenhuma dependência dinâmica proibida encontrada em ${PKG_DLL}."
 
 echo "-> Gate 5 APROVADO: Pacote de distribuição validado com integridade total."
 

@@ -10,7 +10,8 @@ namespace dr2hook {
 
 class Logger {
 public:
-  static bool Init(const std::string &logFilePath = "dr2hook.log");
+  static bool Init(const std::string &logFilePath = "dr2hook.log",
+                   bool truncate = true);
   static void Shutdown();
   static void Info(std::string_view message);
   static void Warn(std::string_view message);

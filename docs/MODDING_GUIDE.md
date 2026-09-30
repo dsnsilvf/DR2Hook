@@ -49,7 +49,7 @@ O arquivo `mod.json` descreve as propriedades do mod e define o script a ser exe
 O DR2Hook invoca funções globais específicas no seu script `main.lua` caso estejam declaradas:
 
 ### `onInit()`
-- **Quando é chamado:** Executado uma única vez assim que o mod é carregado pelo `ModManager` durante o boot do jogo ou recarregamento.
+- **Quando é chamado:** Uma vez quando o `ModManager` carrega o mod: na abertura do jogo, no botão **Reload Scripts (Hot-Reload)** e também depois de **F8**, porque o reload nativo sobe o Lua de novo.
 - **Assinatura:** `function onInit()`
 - **Exemplo:**
   ```lua
@@ -75,8 +75,9 @@ O DR2Hook invoca funções globais específicas no seu script `main.lua` caso es
 - **Parâmetros:**
   - `keyCode` (number): Código de tecla virtual do Windows (Virtual Key Code).
 - **Atalhos comuns:**
-  - `0x70` a `0x7B`: Teclas de função `F1` a `F12` (`F5` = `0x74`, `F6` = `0x75`).
-  - `0x2D`: Tecla `Insert` (reservada por padrão para o menu do DR2Hook).
+  - `0x70` a `0x7B`: Teclas de função `F1` a `F12` (`F5` = `0x74`, `F6` = `0x75`, `F7` = `0x76`).
+  - `0x2D`: Tecla `Insert`, consumida pelo menu. Não chega em `onKeyDown`.
+  - `0x77`: Tecla `F8`, consumida pela proxy para recarregar `dr2hook_core.dll`. Não chega em `onKeyDown`.
   - `0x20`: Barra de Espaço.
 - **Assinatura:** `function onKeyDown(keyCode)`
 - **Exemplo:**
@@ -158,14 +159,27 @@ Permite emitir mensagens e avisos visuais na tela através do sistema de notific
 
 ---
 
-## 4. Regras de Fair Play (Anti-Cheat Integrado)
+## 4. Recarregar sem fechar o jogo
 
-## 4. Regras de Fair Play (Anti-Cheat Integrado)
+Há dois reloads, e eles não fazem a mesma coisa.
+
+| Ação | O que reinicia | O que permanece |
+| :--- | :--- | :--- |
+| **Reload Scripts (Hot-Reload)**, aba Mods | O estado Lua. `onInit` roda de novo. | A `dxgi.dll`, o core nativo e o checkpoint gravado em C++. |
+| **F8** ou **Reload Native Core (F8)** | `dr2hook_core.dll` inteira: telemetria, overlay, savestate C++ e Lua. `onInit` roda de novo. | A `dxgi.dll`, os hooks de `Present` / `WndProc` e o `NetworkGuard`. |
+
+Para testar uma DLL nativa nova, substitua `dr2hook_core.dll` na pasta do jogo e pressione **F8**. Não substitua `dr2hook_core.N.dll`: esse é o arquivo que o processo mantém mapeado. O checkpoint que só existia em memória é descartado. Variáveis Lua também. Trocar `dxgi.dll` ainda exige reiniciar o jogo.
+
+---
+
+## 5. Regras de Fair Play (Anti-Cheat Integrado)
 
 O princípio nº 1 do DR2 ModLoader é o **Fair Play First**:
 
-1. **Isolamento Físico de Rede (Winsock Air-Gap):**
-   - O `NetworkGuard` bloqueia conexões TCP e resoluções DNS para domínios da Codemasters/EA/RaceNet, garantindo que o jogo permaneça em modo puramente offline enquanto o mod loader estiver ativo.
+1. **Isolamento de rede (Winsock), preso na `dxgi.dll`:**
+   - `getaddrinfo` / `GetAddrInfoW` só resolvem localhost. Qualquer outro nome retorna “nome não encontrado”.
+   - `connect` só aceita `127.0.0.0/8` e o loopback IPv6. O resto recebe `WSAECONNREFUSED` (`10061`).
+   - Não há API de script para desligar isso, e o **F8** não desliga. O jogo volta a conectar depois que você sai e remove `dxgi.dll` e `dr2hook_core.dll`.
 2. **Bloqueio Hard-Lock em C++:**
    - As funções `Player.setPosition`, `Player.setVelocity` e `Player.setState` validam a conexão e modo de jogo no núcleo nativo em C++ antes de qualquer escrita na memória.
    - Caso o jogador esteja em qualquer evento online oficial, a chamada **falhará e retornará `false`**, impedindo violações ou banimentos.
@@ -176,7 +190,7 @@ O princípio nº 1 do DR2 ModLoader é o **Fair Play First**:
 
 ---
 
-## 5. Exemplo Completo: Mod de Treino (Practice Mode)
+## 6. Exemplo Completo: Mod de Treino (Practice Mode)
 
 Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote:
 
