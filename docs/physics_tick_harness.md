@@ -62,10 +62,8 @@ Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatóri
 
 ## API
 
-- `ScheduleWrite(tick, boundary, rigOffset, bytes, len)` — uma operação por vez, executada na thread de física.
-- `ScheduleExperimentalNative(tick, boundary, kind)` — `SetTransform`, `SetLinVel`, `SetAngVel`, `Commit` (experimental, desligado por padrão).
-
-Logs before/after de writes em `dr2hook.log`.
+- `ScheduleWrite(...)` — spec parte 4 (acima).
+- `ScheduleExperimentalNative(...)` — extensão separada; não partilha a fila de `ScheduleWrite`.
 
 ## Calibrar prólogos
 

@@ -344,6 +344,7 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
 }
 
 void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
+  // Spec parte 4: só corre nos detours de física (OnBoundary), nunca no Present.
   ScheduledWrite pending{};
   {
     std::lock_guard<std::mutex> lock(s_writeQueueMutex);
@@ -397,11 +398,13 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
              << static_cast<int>(b);
   }
 
+  char offsetHex[16] = {};
+  std::snprintf(offsetHex, sizeof(offsetHex), "%X", pending.rigOffset);
+
   Logger::Info("PhysicsTickHarness: write tick=" +
                std::to_string(pending.tick) + " boundary=" +
-               BoundaryName(boundary) + " offset=0x" +
-               std::to_string(pending.rigOffset) + " before=" + beforeHex.str() +
-               " after=" + afterHex.str());
+               BoundaryName(boundary) + " rig_offset=0x" + offsetHex +
+               " before=" + beforeHex.str() + " after=" + afterHex.str());
 }
 
 void ExecuteScheduledNativeIfDue(PhysicsHarnessBoundary boundary) {
@@ -855,10 +858,15 @@ bool PhysicsTickHarness::ScheduleWrite(uint64_t tick,
     Logger::Warn("PhysicsTickHarness: ScheduleWrite recusado (writes off).");
     return false;
   }
+  if (!SafetyGuard::CanWriteState()) {
+    Logger::Warn(
+        "PhysicsTickHarness: ScheduleWrite recusado (SafetyGuard).");
+    return false;
+  }
 
   std::lock_guard<std::mutex> lock(s_writeQueueMutex);
-  if (s_scheduledWrite.active || s_scheduledNative.active) {
-    Logger::Warn("PhysicsTickHarness: ja existe operacao enfileirada.");
+  if (s_scheduledWrite.active) {
+    Logger::Warn("PhysicsTickHarness: ja existe uma escrita enfileirada.");
     return false;
   }
 
@@ -868,9 +876,11 @@ bool PhysicsTickHarness::ScheduleWrite(uint64_t tick,
   s_scheduledWrite.rigOffset = rigOffset;
   s_scheduledWrite.bytes.assign(static_cast<const uint8_t *>(bytes),
                                 static_cast<const uint8_t *>(bytes) + byteCount);
+  char offsetHex[16] = {};
+  std::snprintf(offsetHex, sizeof(offsetHex), "%X", rigOffset);
   Logger::Info("PhysicsTickHarness: write enfileirada tick=" +
                std::to_string(tick) + " boundary=" + BoundaryName(boundary) +
-               " offset=0x" + std::to_string(rigOffset) + " len=" +
+               " rig_offset=0x" + offsetHex + " len=" +
                std::to_string(byteCount));
   return true;
 }
@@ -891,5 +901,20 @@ bool PhysicsTickHarness::ScheduleExperimentalNative(
   s_scheduledNative.kind = kind;
   return true;
 }
+
+#if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
+
+void PhysicsTickHarness::TestingSetInstrumentationAndWrites(bool instrumentation,
+                                                            bool writes) {
+  s_instrumentationEnabled = instrumentation;
+  s_writesEnabled = writes;
+}
+
+void PhysicsTickHarness::TestingClearScheduledWrite() {
+  std::lock_guard<std::mutex> lock(s_writeQueueMutex);
+  s_scheduledWrite = ScheduledWrite{};
+}
+
+#endif
 
 } // namespace dr2hook

@@ -46,6 +46,12 @@ public:
                             uint32_t rigOffset, const void *bytes,
                             size_t byteCount);
 
+#if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
+  static void TestingSetInstrumentationAndWrites(bool instrumentation,
+                                                 bool writes);
+  static void TestingClearScheduledWrite();
+#endif
+
   static bool ScheduleExperimentalNative(uint64_t tick,
                                          PhysicsHarnessBoundary boundary,
                                          PhysicsNativeCallKind kind);

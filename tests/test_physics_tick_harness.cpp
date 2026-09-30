@@ -4,6 +4,7 @@
 #include "dr2hook/physics_harness_addresses.h"
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
+#include "dr2hook/safety.h"
 
 #include <cstring>
 #include <iostream>
@@ -88,6 +89,30 @@ bool ResolveRigWithMock(dr2hook::MockMemoryAccessor &mock, uintptr_t gameBase) {
   return tag == 4 && rig == kRig;
 }
 
+void TestScheduleWriteSingleQueue() {
+  std::cout << "[RUN] TestScheduleWriteSingleQueue..." << std::endl;
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+  dr2hook::SafetyGuard::Configure(&scanner, 0);
+  dr2hook::SafetyGuard::SetPermissiveMode(true);
+
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(true, true);
+
+  const uint8_t payload = 0xAB;
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  1, dr2hook::PhysicsHarnessBoundary::M3_BeforeCommit, 0x320,
+                  &payload, sizeof(payload)),
+              "Primeira ScheduleWrite deve aceitar");
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  1, dr2hook::PhysicsHarnessBoundary::M3_BeforeCommit, 0x320,
+                  &payload, sizeof(payload)),
+              "Segunda ScheduleWrite deve recusar (fila unica)");
+
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
+}
+
 void TestSpecPart3RigPointerConstant() {
   std::cout << "[RUN] TestSpecPart3RigPointerConstant..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kRvaActiveCarPointer == 0x1681CE8,
@@ -123,6 +148,7 @@ int main() {
   std::cout << "DR2Hook - Physics Tick Harness (unit)" << std::endl;
   TestVerifyPrologue();
   TestScheduleWriteRequiresOptIn();
+  TestScheduleWriteSingleQueue();
   TestSpecPart3RigPointerConstant();
   TestRigChainValidationLogic();
 
