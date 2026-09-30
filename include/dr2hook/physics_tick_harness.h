@@ -15,13 +15,19 @@ enum class PhysicsHarnessBoundary : uint8_t {
   B2_AfterCommit = 4,
   H1_FrameLoopReturn = 5,
   H2_FrameLoopEntry = 6,
-  H3_PhysicsStep = 7,
-  H4_PreTick = 8,
-  H5_EndStep = 9,
-  H6_IntegratorReturnFilter = 10,
-  Log_CommitAuxA = 11,
-  Log_CommitAuxB = 12,
+  H3_PhysicsStep_Entry = 7,
+  H3_PhysicsStep_Return = 8,
+  H4_PreTick_Entry = 9,
+  H4_PreTick_Return = 10,
+  H5_EndStep_Entry = 11,
+  H5_EndStep_Return = 12,
+  H6_IntegratorReturnFilter = 13,
+  Log_CommitAuxA = 14,
+  Log_CommitAuxB = 15,
 };
+
+static_assert(static_cast<uint8_t>(PhysicsHarnessBoundary::Log_CommitAuxB) < 16,
+              "s_boundaryFireCounts size in physics_tick_harness.cpp");
 
 enum class PhysicsNativeCallKind : uint8_t {
   SetTransform = 0,
@@ -42,6 +48,7 @@ public:
   static void Shutdown();
 
   static uint64_t GetTickCounter();
+  static uint64_t GetStepCounter();
 
   static bool ScheduleWrite(uint64_t tick, PhysicsHarnessBoundary boundary,
                             uint32_t rigOffset, const void *bytes,

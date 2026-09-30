@@ -35,8 +35,6 @@ namespace {
 
 using namespace physics_harness;
 
-constexpr uintptr_t kRvaPhysicsStep = 0xDBC500;
-constexpr uintptr_t kRvaPreTick = 0x749A30;
 constexpr uintptr_t kRvaCommitAuxA = 0x73A070;
 constexpr uintptr_t kRvaCommitAuxB = 0x73B620;
 constexpr uintptr_t kRvaIntegratorReturnSite = 0x73E314;
@@ -59,6 +57,7 @@ bool s_installed = false;
 uintptr_t s_gameBase = 0;
 
 std::atomic<uint64_t> s_tickCounter{0};
+std::atomic<uint64_t> s_stepCounter{0};
 std::atomic<uint64_t> s_boundaryFireCounts[16] = {};
 
 std::mutex s_csvMutex;
@@ -178,12 +177,18 @@ std::string BoundaryName(PhysicsHarnessBoundary boundary) {
     return "H1";
   case PhysicsHarnessBoundary::H2_FrameLoopEntry:
     return "H2";
-  case PhysicsHarnessBoundary::H3_PhysicsStep:
-    return "H3";
-  case PhysicsHarnessBoundary::H4_PreTick:
-    return "H4";
-  case PhysicsHarnessBoundary::H5_EndStep:
-    return "H5";
+  case PhysicsHarnessBoundary::H3_PhysicsStep_Entry:
+    return "H3_ENTRY";
+  case PhysicsHarnessBoundary::H3_PhysicsStep_Return:
+    return "H3_RETURN";
+  case PhysicsHarnessBoundary::H4_PreTick_Entry:
+    return "H4_ENTRY";
+  case PhysicsHarnessBoundary::H4_PreTick_Return:
+    return "H4_RETURN";
+  case PhysicsHarnessBoundary::H5_EndStep_Entry:
+    return "H5_ENTRY";
+  case PhysicsHarnessBoundary::H5_EndStep_Return:
+    return "H5_RETURN";
   case PhysicsHarnessBoundary::H6_IntegratorReturnFilter:
     return "H6";
   case PhysicsHarnessBoundary::Log_CommitAuxA:
@@ -294,7 +299,7 @@ void WriteCsvHeaderIfNeeded() {
   if (s_csvHeaderWritten || !s_csvStream.is_open()) {
     return;
   }
-  s_csvStream << "tick,boundary,rig";
+  s_csvStream << "tick,step,boundary,thread_id,container,rig";
   for (uint32_t off : kRigVec4OffsetsPart3) {
     char label[32];
     std::snprintf(label, sizeof(label), "0x%X", off);
@@ -311,12 +316,19 @@ void WriteCsvHeaderIfNeeded() {
 }
 
 void LogBoundarySample(PhysicsHarnessBoundary boundary) {
+  uintptr_t container = 0;
   uintptr_t rig = 0;
-  if (!ResolvePlayerChain(s_gameBase, nullptr, &rig)) {
+  if (!ResolvePlayerChain(s_gameBase, &container, &rig)) {
     return;
   }
 
   BumpBoundaryFire(boundary);
+
+#if defined(_WIN32)
+  const unsigned long threadId = GetCurrentThreadId();
+#else
+  const unsigned long threadId = 0;
+#endif
 
   std::lock_guard<std::mutex> lock(s_csvMutex);
   if (!OpenCsvLogIfNeeded()) {
@@ -325,7 +337,9 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
   WriteCsvHeaderIfNeeded();
 
   s_csvStream << s_tickCounter.load(std::memory_order_relaxed) << ','
-              << BoundaryName(boundary) << ",0x" << std::hex << rig << std::dec;
+              << s_stepCounter.load(std::memory_order_relaxed) << ','
+              << BoundaryName(boundary) << ',' << threadId << ",0x" << std::hex
+              << container << ",0x" << rig << std::dec;
 
   for (uint32_t off : kRigVec4OffsetsPart3) {
     float values[4] = {};
@@ -513,24 +527,31 @@ void __fastcall DetourFrameLoop(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourPhysicsStep(void *a1, void *a2, void *a3, void *a4) {
-  OnBoundary(PhysicsHarnessBoundary::H3_PhysicsStep, false);
+  // H3 @ 0x140dbc500 — contador de step (spec correction 2); só log entrada/retorno.
+  s_stepCounter.fetch_add(1, std::memory_order_relaxed);
+  OnBoundary(PhysicsHarnessBoundary::H3_PhysicsStep_Entry, false);
   if (g_origPhysicsStep != nullptr) {
     g_origPhysicsStep(a1, a2, a3, a4);
   }
+  OnBoundary(PhysicsHarnessBoundary::H3_PhysicsStep_Return, false);
 }
 
 void __fastcall DetourPreTick(void *a1, void *a2, void *a3, void *a4) {
-  OnBoundary(PhysicsHarnessBoundary::H4_PreTick, false);
+  // H4 @ 0x140749a30 — PreTick; só log entrada/retorno.
+  OnBoundary(PhysicsHarnessBoundary::H4_PreTick_Entry, false);
   if (g_origPreTick != nullptr) {
     g_origPreTick(a1, a2, a3, a4);
   }
+  OnBoundary(PhysicsHarnessBoundary::H4_PreTick_Return, false);
 }
 
 void __fastcall DetourEndStep(void *a1, void *a2, void *a3, void *a4) {
-  OnBoundary(PhysicsHarnessBoundary::H5_EndStep, true);
+  // H5 @ 0x1407511e0 — EndStep; log entrada/retorno + pontos de write opcionais.
+  OnBoundary(PhysicsHarnessBoundary::H5_EndStep_Entry, true);
   if (g_origEndStep != nullptr) {
     g_origEndStep(a1, a2, a3, a4);
   }
+  OnBoundary(PhysicsHarnessBoundary::H5_EndStep_Return, true);
 }
 
 void __fastcall DetourCommitAuxA(void *a1, void *a2, void *a3, void *a4) {
@@ -597,6 +618,12 @@ void LogReferenceAddresses(uintptr_t gameBase) {
                fmt(gameBase, kRvaSetPose, kVaSetPose));
   Logger::Info("PhysicsTickHarness: frame loop " +
                fmt(gameBase, kRvaFrameLoop, kVaFrameLoop));
+  Logger::Info("PhysicsTickHarness: physics step (H3) " +
+               fmt(gameBase, kRvaPhysicsStep, kVaPhysicsStep));
+  Logger::Info("PhysicsTickHarness: pretick (H4) " +
+               fmt(gameBase, kRvaPreTick, kVaPreTick));
+  Logger::Info("PhysicsTickHarness: end step (H5) " +
+               fmt(gameBase, kRvaEndStep, kVaEndStep));
   Logger::Info(
       "PhysicsTickHarness: hook B1/M1-M3/B2 -> tick_start, integrator, commit");
 }
@@ -726,8 +753,7 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   void *pPhysicsStep =
       reinterpret_cast<void *>(gameModuleBase + kRvaPhysicsStep);
   void *pPreTick = reinterpret_cast<void *>(gameModuleBase + kRvaPreTick);
-  void *pEndStep =
-      reinterpret_cast<void *>(gameModuleBase + kRvaPerTickCaller);
+  void *pEndStep = reinterpret_cast<void *>(gameModuleBase + kRvaEndStep);
 
   if (!InstallHookSite("tick_start", pTickStart,
                        reinterpret_cast<void *>(&DetourTickStart),
@@ -792,7 +818,7 @@ void PhysicsTickHarness::Shutdown() {
         reinterpret_cast<void *>(s_gameBase + kRvaFrameLoop),
         reinterpret_cast<void *>(s_gameBase + kRvaPhysicsStep),
         reinterpret_cast<void *>(s_gameBase + kRvaPreTick),
-        reinterpret_cast<void *>(s_gameBase + kRvaPerTickCaller),
+        reinterpret_cast<void *>(s_gameBase + kRvaEndStep),
         reinterpret_cast<void *>(s_gameBase + kRvaCommitAuxA),
         reinterpret_cast<void *>(s_gameBase + kRvaCommitAuxB),
     };
@@ -833,6 +859,10 @@ void PhysicsTickHarness::Shutdown() {
 
 uint64_t PhysicsTickHarness::GetTickCounter() {
   return s_tickCounter.load(std::memory_order_relaxed);
+}
+
+uint64_t PhysicsTickHarness::GetStepCounter() {
+  return s_stepCounter.load(std::memory_order_relaxed);
 }
 
 bool PhysicsTickHarness::ScheduleWrite(uint64_t tick,

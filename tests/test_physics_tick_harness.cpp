@@ -180,6 +180,19 @@ void TestSpecPart3RigPointerConstant() {
               "Tag do rig == 4");
 }
 
+void TestSpecCorrection2HookAddresses() {
+  std::cout << "[RUN] TestSpecCorrection2HookAddresses..." << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaPhysicsStep == 0x140DBC500ULL,
+              "VA physics step H3");
+  TEST_ASSERT(dr2hook::physics_harness::kVaPreTick == 0x140749A30ULL,
+              "VA PreTick H4");
+  TEST_ASSERT(dr2hook::physics_harness::kVaEndStep == 0x1407511E0ULL,
+              "VA EndStep H5");
+  TEST_ASSERT(dr2hook::physics_harness::kVaEndStep ==
+                  dr2hook::physics_harness::kVaPerTickCaller,
+              "EndStep alias per-tick caller");
+}
+
 void TestRigChainValidationLogic() {
   std::cout << "[RUN] TestRigChainValidationLogic..." << std::endl;
   dr2hook::MockMemoryAccessor mock;
@@ -212,6 +225,7 @@ int main() {
   TestSpecPart5NativeAddresses();
   TestSpecPart5NativeInvokeStub();
   TestSpecPart3RigPointerConstant();
+  TestSpecCorrection2HookAddresses();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun
