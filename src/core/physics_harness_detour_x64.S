@@ -2,7 +2,7 @@
 .text
 .globl PhysicsHarness_DetourCommon
 
-// r12 = DetourOps* (callee-saved; survives C calls that clobber r11)
+// DetourOps* saved at [rsp+0x18] after prologue (not r12/r11 after any call).
 // r13 = caller return address at thunk entry ([rsp] before prologue push)
 // [rsp+0x00..0x1F] shadow/home space for Win64 C calls
 // Frame @ rsp+0x20 — must match dr2hook::physics_harness_abi::Frame
@@ -15,6 +15,8 @@ PhysicsHarness_DetourCommon:
   .seh_stackalloc 0xC0
   .seh_endprologue
 
+  mov QWORD PTR [rsp + 0x18], r12
+
   mov QWORD PTR [rsp + 0x20], rcx
   mov QWORD PTR [rsp + 0x28], rdx
   mov QWORD PTR [rsp + 0x30], r8
@@ -25,7 +27,8 @@ PhysicsHarness_DetourCommon:
   movaps XMMWORD PTR [rsp + 0x70], xmm3
   mov QWORD PTR [rsp + 0x80], r13
 
-  mov rax, QWORD PTR [r12]
+  mov rax, QWORD PTR [rsp + 0x18]
+  mov rax, QWORD PTR [rax]
   test rax, rax
   je skip_before
   lea rcx, [rsp + 0x20]
@@ -41,14 +44,16 @@ skip_before:
   movaps xmm2, XMMWORD PTR [rsp + 0x60]
   movaps xmm3, XMMWORD PTR [rsp + 0x70]
 
-  mov rax, QWORD PTR [r12 + 16]
+  mov rax, QWORD PTR [rsp + 0x18]
+  mov rax, QWORD PTR [rax + 16]
   mov rax, QWORD PTR [rax]
   call rax
 
   mov QWORD PTR [rsp + 0x88], rax
   movaps XMMWORD PTR [rsp + 0x90], xmm0
 
-  mov rax, QWORD PTR [r12 + 8]
+  mov rax, QWORD PTR [rsp + 0x18]
+  mov rax, QWORD PTR [rax + 8]
   test rax, rax
   je skip_after
   lea rcx, [rsp + 0x20]

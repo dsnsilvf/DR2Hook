@@ -149,7 +149,7 @@ Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatóri
 
 Os detours expostos ao MinHook são **thunks em assembly** (`physics_harness_detour_x64.S`): guardam **RCX/RDX/R8/R9** e **XMM0–XMM3** antes do logging C++, chamam o trampoline original com o mesmo estado de argumentos (preservando **`dt` em XMM1** no tick start / integrator), e depois do retorno restauram **RAX** e **XMM0** antes de devolver ao caller do jogo.
 
-- O ponteiro `DetourOps` fica em **r12** (callee-saved), não em r11 (clobbered por syscalls / `GetAsyncKeyState`).
+- O ponteiro `DetourOps` entra em **r12** só no stub (`lea r12, [g_ops_*+rip]`), é copiado para **`[rsp+0x18]`** no prologue comum e **recarregado de lá** antes de cada `before` / `orig` / `after` (nunca **r11**; não confiar em r12 após o trampoline do jogo).
 - **`Frame`** começa em **`rsp+0x20`**, acima dos **32 bytes** de shadow/home space Win64 (`rsp+0x00..0x1F`) usados pelos `call` C++; offsets em `physics_harness_detour_abi.h` (`static_assert` alinhados com o `.S`).
 - **`Frame::caller_return`** recebe o endereço de retorno do caller original (`[rsp]` na entrada do thunk), usado pelos filtros **M2/H6** no `after` do integrator (não usar `__builtin_return_address` no handler).
 - O corpo comum do thunk declara **`.seh_proc` / `.seh_pushreg` / `.seh_stackalloc` / `.seh_endprologue`** para gerar unwind info (`.pdata`).

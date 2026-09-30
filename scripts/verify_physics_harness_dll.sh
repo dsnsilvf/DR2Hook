@@ -43,7 +43,7 @@ for name, hexstr in patterns.items():
 PY
 echo
 
-echo "## Thunk stubs (r12 ops, r13 caller return)"
+echo "## Thunk stubs (ops @ rsp+0x18 after prologue, r13 caller return)"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourTickStart>:/,/<PhysicsHarness_DetourIntegrator>:/p'
 echo
 
