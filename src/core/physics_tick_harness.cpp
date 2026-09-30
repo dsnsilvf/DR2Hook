@@ -13,6 +13,8 @@
 #endif
 #endif
 
+#include "dr2hook/physics_harness_detour_abi.h"
+
 #include <atomic>
 #include <cctype>
 #include <cstdio>
@@ -96,7 +98,7 @@ std::mutex s_writeQueueMutex;
 ScheduledWrite s_scheduledWrite;
 ScheduledNative s_scheduledNative;
 
-using PhysicsCall = void(__fastcall *)(void *, void *, void *, void *);
+using PhysicsCall = void (*)();
 
 PhysicsCall g_origTickStart = nullptr;
 PhysicsCall g_origIntegrator = nullptr;
@@ -549,100 +551,104 @@ void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
   LogBoundarySample(boundary);
 }
 
-void __fastcall DetourTickStart(void *a1, void *a2, void *a3, void *a4) {
-  // Contador monotônico de tick (spec parte 3): incrementa uma vez por tick start.
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__)) &&                           \
+    !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
+
+void HarnessBeforeTickStart(physics_harness_abi::Frame *) {
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
   CapturePracticeModKeysForCurrentTick();
-  // B1 — antes do tick start @ 0x14074b8f0
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
-  if (g_origTickStart != nullptr) {
-    g_origTickStart(a1, a2, a3, a4);
-  }
 }
 
-void __fastcall DetourIntegrator(void *a1, void *a2, void *a3, void *a4) {
-  // M1 — antes do integrator @ 0x140746150
-  OnBoundary(PhysicsHarnessBoundary::M1_BeforeIntegrator, true);
-  if (g_origIntegrator != nullptr) {
-    g_origIntegrator(a1, a2, a3, a4);
-  }
-  // M2 — depois do integrator (amostra CSV; writes enfileirados em H6 filtrado).
+void HarnessAfterIntegrator(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, false);
-
-#if !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
   void *ret = nullptr;
 #if defined(_MSC_VER)
   ret = _ReturnAddress();
 #elif defined(__GNUC__)
   ret = __builtin_return_address(0);
 #endif
-  // Spec correction 3: retorno 0x14073e314 → boundary H6 (write point separado).
   if (ret == reinterpret_cast<void *>(s_gameBase + kRvaIntegratorReturnSite)) {
     OnBoundary(PhysicsHarnessBoundary::H6_IntegratorReturnFilter, true);
   }
-#endif
 }
 
-void __fastcall DetourCommit(void *a1, void *a2, void *a3, void *a4) {
-  // Commit @ 0x14074d190 — log-only opcional + M3/B2 (writes).
+void HarnessBeforeIntegrator(physics_harness_abi::Frame *) {
+  OnBoundary(PhysicsHarnessBoundary::M1_BeforeIntegrator, true);
+}
+
+void HarnessBeforeCommitEntry(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::Log_Commit_74D190, false);
   OnBoundary(PhysicsHarnessBoundary::M3_BeforeCommit, true);
-  if (g_origCommit != nullptr) {
-    g_origCommit(a1, a2, a3, a4);
-  }
+}
+
+void HarnessAfterB2(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::B2_AfterCommit, true);
 }
 
-void __fastcall DetourFrameLoop(void *a1, void *a2, void *a3, void *a4) {
-  // Spec correction 1: H2 @ 0x140dbca20 entrada; H1 retorno (between-tick); writes enfileirados.
+void HarnessBeforeH2(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H2_FrameLoopEntry, true);
-  if (g_origFrameLoop != nullptr) {
-    g_origFrameLoop(a1, a2, a3, a4);
-  }
+}
+
+void HarnessAfterH1(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H1_FrameLoopReturn, true);
 }
 
-void __fastcall DetourPhysicsStep(void *a1, void *a2, void *a3, void *a4) {
-  // H3 @ 0x140dbc500 — contador de step (spec correction 2); só log entrada/retorno.
+void HarnessBeforeH3Entry(physics_harness_abi::Frame *) {
   s_stepCounter.fetch_add(1, std::memory_order_relaxed);
   OnBoundary(PhysicsHarnessBoundary::H3_PhysicsStep_Entry, false);
-  if (g_origPhysicsStep != nullptr) {
-    g_origPhysicsStep(a1, a2, a3, a4);
-  }
+}
+
+void HarnessAfterH3Return(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H3_PhysicsStep_Return, false);
 }
 
-void __fastcall DetourPreTick(void *a1, void *a2, void *a3, void *a4) {
-  // H4 @ 0x140749a30 — PreTick; só log entrada/retorno.
+void HarnessBeforeH4Entry(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H4_PreTick_Entry, false);
-  if (g_origPreTick != nullptr) {
-    g_origPreTick(a1, a2, a3, a4);
-  }
+}
+
+void HarnessAfterH4Return(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H4_PreTick_Return, false);
 }
 
-void __fastcall DetourEndStep(void *a1, void *a2, void *a3, void *a4) {
-  // H5 @ 0x1407511e0 — EndStep; log entrada/retorno + pontos de write opcionais.
+void HarnessBeforeH5Entry(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H5_EndStep_Entry, true);
-  if (g_origEndStep != nullptr) {
-    g_origEndStep(a1, a2, a3, a4);
-  }
+}
+
+void HarnessAfterH5Return(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::H5_EndStep_Return, true);
 }
 
-void __fastcall DetourCommitAuxA(void *a1, void *a2, void *a3, void *a4) {
+void HarnessBeforeLogCommitA(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::Log_Commit_73A070, false);
-  if (g_origCommitAuxA != nullptr) {
-    g_origCommitAuxA(a1, a2, a3, a4);
-  }
 }
 
-void __fastcall DetourCommitAuxB(void *a1, void *a2, void *a3, void *a4) {
+void HarnessBeforeLogCommitB(physics_harness_abi::Frame *) {
   OnBoundary(PhysicsHarnessBoundary::Log_Commit_73B620, false);
-  if (g_origCommitAuxB != nullptr) {
-    g_origCommitAuxB(a1, a2, a3, a4);
-  }
 }
+
+using dr2hook::physics_harness_abi::DetourOps;
+
+extern "C" DetourOps g_ops_tick_start = {HarnessBeforeTickStart, nullptr,
+                                         reinterpret_cast<void **>(&g_origTickStart)};
+extern "C" DetourOps g_ops_integrator = {HarnessBeforeIntegrator, HarnessAfterIntegrator,
+                                         reinterpret_cast<void **>(&g_origIntegrator)};
+extern "C" DetourOps g_ops_commit = {HarnessBeforeCommitEntry, HarnessAfterB2,
+                                     reinterpret_cast<void **>(&g_origCommit)};
+extern "C" DetourOps g_ops_frame_loop = {HarnessBeforeH2, HarnessAfterH1,
+                                         reinterpret_cast<void **>(&g_origFrameLoop)};
+extern "C" DetourOps g_ops_physics_step = {HarnessBeforeH3Entry, HarnessAfterH3Return,
+                                           reinterpret_cast<void **>(&g_origPhysicsStep)};
+extern "C" DetourOps g_ops_pretick = {HarnessBeforeH4Entry, HarnessAfterH4Return,
+                                      reinterpret_cast<void **>(&g_origPreTick)};
+extern "C" DetourOps g_ops_end_step = {HarnessBeforeH5Entry, HarnessAfterH5Return,
+                                       reinterpret_cast<void **>(&g_origEndStep)};
+extern "C" DetourOps g_ops_commit_aux_a = {HarnessBeforeLogCommitA, nullptr,
+                                           reinterpret_cast<void **>(&g_origCommitAuxA)};
+extern "C" DetourOps g_ops_commit_aux_b = {HarnessBeforeLogCommitB, nullptr,
+                                           reinterpret_cast<void **>(&g_origCommitAuxB)};
+
+#endif
 
 #if !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
 
@@ -700,17 +706,15 @@ void LogSelfTestReport(bool afterObservationWindow) {
 }
 
 bool InstallHookSite(const char *name, void *target, void *detour,
-                     PhysicsCall *originalOut,
-                     const uint8_t *expectedPrologue, size_t prologueLength,
-                     bool required) {
+                     void **originalOut, const uint8_t *expectedPrologue,
+                     size_t prologueLength, bool required) {
   if (!VerifyHookPrologue(target, expectedPrologue, prologueLength)) {
     LogPrologueMismatch(name, target, expectedPrologue, prologueLength);
     RecordHookInstallResult(name, false);
     return false;
   }
 
-  if (MH_CreateHook(target, detour, reinterpret_cast<void **>(originalOut)) !=
-      MH_OK) {
+  if (MH_CreateHook(target, detour, originalOut) != MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_CreateHook falhou em ") +
                   name);
     RecordHookInstallResult(name, false);
@@ -898,48 +902,65 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   void *pEndStep = reinterpret_cast<void *>(gameModuleBase + kRvaEndStep);
 
   if (!InstallHookSite("tick_start", pTickStart,
-                       reinterpret_cast<void *>(&DetourTickStart),
-                       &g_origTickStart, kTickStart, kPrologueLength, true)) {
+                       reinterpret_cast<void *>(
+                           dr2hook::physics_harness_abi::PhysicsHarness_DetourTickStart),
+                       reinterpret_cast<void **>(&g_origTickStart), kTickStart,
+                       kPrologueLength, true)) {
     return false;
   }
   if (!InstallHookSite("integrator", pIntegrator,
-                       reinterpret_cast<void *>(&DetourIntegrator),
-                       &g_origIntegrator, kIntegrator, kPrologueLength, true)) {
+                       reinterpret_cast<void *>(
+                           dr2hook::physics_harness_abi::PhysicsHarness_DetourIntegrator),
+                       reinterpret_cast<void **>(&g_origIntegrator), kIntegrator,
+                       kPrologueLength, true)) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
-  if (!InstallHookSite("commit", pCommit, reinterpret_cast<void *>(&DetourCommit),
-                       &g_origCommit, kCommit, kPrologueLength, true)) {
+  if (!InstallHookSite("commit", pCommit,
+                       reinterpret_cast<void *>(
+                           dr2hook::physics_harness_abi::PhysicsHarness_DetourCommit),
+                       reinterpret_cast<void **>(&g_origCommit), kCommit,
+                       kPrologueLength, true)) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
   if (!InstallHookSite("frame_loop", pFrameLoop,
-                       reinterpret_cast<void *>(&DetourFrameLoop),
-                       &g_origFrameLoop, kFrameLoop, kPrologueLength, true)) {
+                       reinterpret_cast<void *>(
+                           dr2hook::physics_harness_abi::PhysicsHarness_DetourFrameLoop),
+                       reinterpret_cast<void **>(&g_origFrameLoop), kFrameLoop,
+                       kPrologueLength, true)) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
 
-  // Opcionais se prólogo falhar: physics_step, pretick, end_step, aux logs.
   (void)InstallHookSite("physics_step", pPhysicsStep,
-                         reinterpret_cast<void *>(&DetourPhysicsStep),
-                         &g_origPhysicsStep, kPhysicsStep, kPrologueLength,
-                         false);
+                         reinterpret_cast<void *>(
+                             dr2hook::physics_harness_abi::PhysicsHarness_DetourPhysicsStep),
+                         reinterpret_cast<void **>(&g_origPhysicsStep),
+                         kPhysicsStep, kPrologueLength, false);
   (void)InstallHookSite("pretick", pPreTick,
-                         reinterpret_cast<void *>(&DetourPreTick), &g_origPreTick,
-                         kPreTick, kPrologueLength, false);
+                         reinterpret_cast<void *>(
+                             dr2hook::physics_harness_abi::PhysicsHarness_DetourPreTick),
+                         reinterpret_cast<void **>(&g_origPreTick), kPreTick,
+                         kPrologueLength, false);
   (void)InstallHookSite("end_step", pEndStep,
-                         reinterpret_cast<void *>(&DetourEndStep), &g_origEndStep,
-                         kEndStep, kPrologueLength, false);
+                         reinterpret_cast<void *>(
+                             dr2hook::physics_harness_abi::PhysicsHarness_DetourEndStep),
+                         reinterpret_cast<void **>(&g_origEndStep), kEndStep,
+                         kPrologueLength, false);
 
   void *pAuxA = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxA);
   void *pAuxB = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxB);
   (void)InstallHookSite("commit_log_73a070", pAuxA,
-                         reinterpret_cast<void *>(&DetourCommitAuxA),
-                         &g_origCommitAuxA, kCommitAuxA, kPrologueLength, false);
+                         reinterpret_cast<void *>(
+                             dr2hook::physics_harness_abi::PhysicsHarness_DetourCommitAuxA),
+                         reinterpret_cast<void **>(&g_origCommitAuxA),
+                         kCommitAuxA, kPrologueLength, false);
   (void)InstallHookSite("commit_log_73b620", pAuxB,
-                         reinterpret_cast<void *>(&DetourCommitAuxB),
-                         &g_origCommitAuxB, kCommitAuxB, kPrologueLength, false);
+                         reinterpret_cast<void *>(
+                             dr2hook::physics_harness_abi::PhysicsHarness_DetourCommitAuxB),
+                         reinterpret_cast<void **>(&g_origCommitAuxB),
+                         kCommitAuxB, kPrologueLength, false);
 
   s_installed = true;
   Logger::Info("PhysicsTickHarness: instrumentation ativa (opt-in).");
