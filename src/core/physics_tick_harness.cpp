@@ -1217,7 +1217,7 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
                          reinterpret_cast<void *>(
                              dr2hook::physics_harness_abi::PhysicsHarness_DetourEndStep),
                          reinterpret_cast<void **>(&g_origEndStep), kEndStep,
-                         kPrologueLength, false);
+                         kEndStepPrologueLength, false);
 
   void *pAuxA = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxA);
   void *pAuxB = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxB);
@@ -1268,15 +1268,7 @@ void PhysicsTickHarness::Shutdown() {
     }
   }
 #endif
-  g_origTickStart = nullptr;
-  g_origIntegrator = nullptr;
-  g_origCommit = nullptr;
-  g_origFrameLoop = nullptr;
-  g_origPhysicsStep = nullptr;
-  g_origPreTick = nullptr;
-  g_origEndStep = nullptr;
-  g_origCommitAuxA = nullptr;
-  g_origCommitAuxB = nullptr;
+  // Não anular g_orig* — threads podem ainda estar no thunk/trampoline.
   s_installed = false;
   s_hookInstallRecordCount = 0;
 

@@ -11,10 +11,10 @@ namespace dr2hook::physics_harness_abi {
 
 // Stack layout in PhysicsHarness_DetourCommon (matches physics_harness_detour_x64.S):
 // [rsp+0x00 .. rsp+0x1F]  Win64 home/shadow for C calls
-// [rsp+0x18]              DetourOps* (survives game trampoline; do not keep in r12/r11)
-// [rsp+0x20]              Frame (16-byte aligned)
+// [rsp+0x20 .. rsp+0x9F]  Frame (16-byte aligned)
+// [rsp+0xA8]              DetourOps* (above Frame; mov rax,rsp prologues clobber +0x18/+0x20)
 inline constexpr size_t kDetourShadowSpaceBytes = 0x20;
-inline constexpr size_t kDetourOpsStackSlotOffset = 0x18;
+inline constexpr size_t kDetourOpsStackSlotOffset = 0xA8;
 inline constexpr size_t kDetourFrameRspOffset = kDetourShadowSpaceBytes;
 inline constexpr size_t kDetourStackAllocBytes = 0xC0;
 
@@ -32,8 +32,8 @@ struct alignas(16) Frame {
   alignas(16) uint8_t xmm0_ret[16];
 };
 
-static_assert(kDetourOpsStackSlotOffset < kDetourShadowSpaceBytes,
-              "DetourOps slot must live in home/shadow area");
+static_assert(kDetourOpsStackSlotOffset >= sizeof(Frame) + kDetourFrameRspOffset,
+              "DetourOps slot must sit above Frame on stack");
 static_assert(alignof(Frame) == 16, "Frame must be 16-byte aligned");
 static_assert(sizeof(Frame) == 0x80, "Frame size must match detour stack frame");
 

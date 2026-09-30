@@ -31,10 +31,11 @@ import sys
 from pathlib import Path
 dll = Path(sys.argv[1]).read_bytes()
 patterns = {
-    "tick_start": "48 89 5c 24 08 48 89 6c 24 10 48 89",
-    "integrator": "48 89 5c 24 08 48 89 74 24 10 57 48",
-    "commit": "40 53 48 83 ec 20 48 8b d9 48 8b 89",
-    "frame_loop": "48 89 5c 24 08 48 89 74 24 10 57 41",
+    "tick_start": "48 8b c4 48 89 58 18 48 89 70 20 55",
+    "integrator": "48 8b c4 48 89 58 10 55 48 8d a8 38",
+    "commit": "48 8b c4 48 89 58 18 48 89 70 20 55",
+    "frame_loop": "48 8b c4 57 48 81 ec b0 00 00 00 33",
+    "mov_r11_rsp_aux": "4c 8b dc 55 53 57 41 55 41 57 49 8d",
 }
 for name, hexstr in patterns.items():
     raw = bytes(int(x, 16) for x in hexstr.split())
@@ -47,7 +48,7 @@ echo "## Thunk stubs (ops @ rsp+0x18 after prologue, r13 caller return)"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourTickStart>:/,/<PhysicsHarness_DetourIntegrator>:/p'
 echo
 
-echo "## PhysicsHarness_DetourCommon (intel) — frame @ rsp+0x20, caller_return @ rsp+0x80"
+echo "## PhysicsHarness_DetourCommon (intel) — frame @ rsp+0x20, ops @ rsp+0xA8"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourTickStart>:/p'
 echo
 
@@ -91,9 +92,9 @@ for i in range(num):
 PY
 echo
 
-echo "## r11 in DetourCommon + entry stubs (must be empty)"
+echo "## r11 after first call in DetourCommon (must be empty)"
 if "${OBJDUMP}" -d -M intel "${DLL}" \
-  | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourCommit>:/p' \
+  | sed -n '/<skip_before>:/,/<PhysicsHarness_DetourIntegrator>:/p' \
   | grep -i r11; then
   echo "FAIL: r11 still referenced" >&2
   exit 1

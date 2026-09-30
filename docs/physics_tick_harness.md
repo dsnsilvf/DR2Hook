@@ -143,13 +143,30 @@ Tipos e convenções inferidas (`__fastcall`, `DynamicsCarImpl*` em RCX): `inclu
 
 ## Prólogo e instalação
 
-Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start **B2**, integrator **M2/H6**, commit, **frame loop H1/H2**) abortam `TryInstall` se o prólogo falhar.
+Os primeiros **12 bytes** em disco (hex verificado) vivem em `include/dr2hook/physics_tick_harness_prologues.h` e são fixados por `TestBug1CalibratedPrologueHexPinned`. Padrão típico: **`mov rax,rsp`** (`48 8b c4 …`) ou **`mov r11,rsp`** (`4c 8b dc …` em `0x73A070`); o MinHook relocates essas instruções no trampoline. **`end_step`:** verificação com 12 B; roubo mínimo **13 B** (não partir `mov rax,[rip+…]`).
+
+| Site | Hex (12 B) |
+| :--- | :--- |
+| tick_start | `488bc4488958184889702055` |
+| integrator | `488bc44889581055488da838` |
+| commit | `488bc4488958184889702055` |
+| frame_loop | `488bc4574881ecb000000033` |
+| physics_step | `488bc44889501041554883ec` |
+| pretick | `488bc4488958104889781855` |
+| end_step | `40534883ec50488b05b3b2e6` |
+| 73A070 | `4c8bdc55535741554157498d` |
+| 73B620 | `488bc45657415641574881ec` |
+
+Teste Wine (thunk + MinHook, dummy `mov rax,rsp`): `bash scripts/run_physics_detour_wine_test.sh` — valida **rbx/rbp/rsi/rdi/r12–r15**, **xmm6–15**, args **rcx–r9/xmm0–3**, retorno **rax/xmm0**.
+
+Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`.
 
 ### Win64 ABI (BUG 2)
 
 Os detours expostos ao MinHook são **thunks em assembly** (`physics_harness_detour_x64.S`): guardam **RCX/RDX/R8/R9** e **XMM0–XMM3** antes do logging C++, chamam o trampoline original com o mesmo estado de argumentos (preservando **`dt` em XMM1** no tick start / integrator), e depois do retorno restauram **RAX** e **XMM0** antes de devolver ao caller do jogo.
 
-- O ponteiro `DetourOps` entra em **r12** só no stub (`lea r12, [g_ops_*+rip]`), é copiado para **`[rsp+0x18]`** no prologue comum e **recarregado de lá** antes de cada `before` / `orig` / `after` (nunca **r11**; não confiar em r12 após o trampoline do jogo).
+- O ponteiro `DetourOps` chega em **rax** no stub (`lea rax, [g_ops_*+rip]`), é guardado em **`[rsp+0xA8]`** (acima do `Frame`, fora de `+0x18/+0x20` que prólogos `mov rax,rsp` do jogo sobrescrevem no trampoline) e **recarregado de lá** antes de cada `before` / `orig` / `after` (sem **r11** após `call`).
+- **`Shutdown`** desactiva/remove hooks MinHook mas **não anula** `g_orig*` — evita corrida com threads ainda dentro do thunk.
 - **`Frame`** começa em **`rsp+0x20`**, acima dos **32 bytes** de shadow/home space Win64 (`rsp+0x00..0x1F`) usados pelos `call` C++; offsets em `physics_harness_detour_abi.h` (`static_assert` alinhados com o `.S`).
 - **`Frame::caller_return`** recebe o endereço de retorno do caller original (`[rsp]` na entrada do thunk), usado pelos filtros **M2/H6** no `after` do integrator (não usar `__builtin_return_address` no handler).
 - O corpo comum do thunk declara **`.seh_proc` / `.seh_pushreg` / `.seh_stackalloc` / `.seh_endprologue`** para gerar unwind info (`.pdata`).

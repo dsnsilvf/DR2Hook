@@ -30,8 +30,8 @@ static int g_testsFailed = 0;
 
 void TestVerifyPrologue() {
   std::cout << "[RUN] TestVerifyPrologue..." << std::endl;
-  const uint8_t buffer[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
-                            0x24, 0x10, 0x48, 0x89};
+  const uint8_t buffer[] = {0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x48, 0x89,
+                            0x70, 0x20, 0x55};
   TEST_ASSERT(
       dr2hook::VerifyHookPrologue(
           buffer, dr2hook::physics_harness_prologues::kTickStart,
@@ -72,24 +72,28 @@ bool PrologueMatchesHex(const uint8_t *prologue, const char *hex24) {
 void TestBug1CalibratedPrologueHexPinned() {
   std::cout << "[RUN] TestBug1CalibratedPrologueHexPinned..." << std::endl;
   using namespace dr2hook::physics_harness_prologues;
-  TEST_ASSERT(PrologueMatchesHex(kTickStart, "48895c240848896c24104889"),
+  TEST_ASSERT(PrologueMatchesHex(kTickStart, "488bc4488958184889702055"),
               "tick_start hex");
-  TEST_ASSERT(PrologueMatchesHex(kIntegrator, "48895c240848897424105748"),
+  TEST_ASSERT(PrologueMatchesHex(kIntegrator, "488bc44889581055488da838"),
               "integrator hex");
-  TEST_ASSERT(PrologueMatchesHex(kCommit, "40534883ec20488bd9488b89"),
+  TEST_ASSERT(PrologueMatchesHex(kCommit, "488bc4488958184889702055"),
               "commit hex");
-  TEST_ASSERT(PrologueMatchesHex(kFrameLoop, "48895c240848897424105741"),
+  TEST_ASSERT(PrologueMatchesHex(kFrameLoop, "488bc4574881ecb000000033"),
               "frame_loop hex");
-  TEST_ASSERT(PrologueMatchesHex(kPhysicsStep, "405553565741544155488dac"),
+  TEST_ASSERT(PrologueMatchesHex(kPhysicsStep, "488bc44889501041554883ec"),
               "physics_step hex");
-  TEST_ASSERT(PrologueMatchesHex(kPreTick, "48895c241048896c24184889"),
+  TEST_ASSERT(PrologueMatchesHex(kPreTick, "488bc4488958104889781855"),
               "pretick hex");
-  TEST_ASSERT(PrologueMatchesHex(kEndStep, "48895c240848897424105748"),
+  TEST_ASSERT(PrologueMatchesHex(kEndStep, "40534883ec50488b05b3b2e6"),
               "end_step hex");
-  TEST_ASSERT(PrologueMatchesHex(kCommitAuxA, "40534883ec30488bd9e80000"),
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxA, "4c8bdc55535741554157498d"),
               "commit_log_73a070 hex");
-  TEST_ASSERT(PrologueMatchesHex(kCommitAuxB, "48895c240848897424105748"),
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxB, "488bc45657415641574881ec"),
               "commit_log_73b620 hex");
+  TEST_ASSERT(kEndStepMinimumStolenBytes > kEndStepPrologueLength,
+              "end_step MinHook steal must exceed 12 B pinned header");
+  TEST_ASSERT(kEndStep[6] == 0x48 && kEndStep[7] == 0x8B && kEndStep[8] == 0x05,
+              "end_step byte 6 begins mov rax,[rip+disp32]");
 }
 
 void TestScheduleWriteRequiresOptIn() {
