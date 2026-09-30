@@ -6,14 +6,16 @@ O harness vive em **`dr2hook_core.dll`** (inicializado em `Core_Initialize`); a 
 
 Sem `DR2HOOK_PHYSICS_HARNESS=1` (ou `instrumentation=1` no INI), **nenhum** hook de física é instalado e o jogo comporta-se como antes.
 
+Chaves no INI (`dr2hook_physics_harness.ini`) têm espaços e CRLF aparados em chave e valor.
+
 | Mecanismo | Chave / variável |
 | :--- | :--- |
 | Instrumentação | `DR2HOOK_PHYSICS_HARNESS=1` ou `dr2hook_physics_harness.ini` → `instrumentation=1` |
 | Escritas na memória do rig | `DR2HOOK_PHYSICS_HARNESS_WRITES=1` ou `writes=1` (exige instrumentação) |
-| Self-test | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` ou `self_test=1` — liga instrumentação, **sem writes**; tenta todos os hooks; CSV ~5 s; relatório em log + `dr2hook_physics_harness_self_test.log` |
+| Self-test | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` ou `self_test=1` — liga instrumentação, **sem writes reais** (caminho **sham-write**); tenta todos os hooks; CSV até critério de ticks; relatório em log + `dr2hook_physics_harness_self_test.log` |
 | Chamadas nativas experimentais | `DR2HOOK_PHYSICS_HARNESS_EXPERIMENTAL_NATIVE=1` ou `experimental_native=1` |
 
-Toda escrita ou chamada nativa também passa por `SafetyGuard::CanWriteState()`. O padrão permissivo do `SafetyGuard` **não é alterado** neste módulo.
+Toda escrita real ou chamada nativa também passa por `SafetyGuard::CanWriteState()`. O padrão permissivo do `SafetyGuard` **não é alterado** neste módulo.
 
 ## Endereços (spec parte 2, image base `0x140000000`)
 
@@ -21,14 +23,21 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 
 | Símbolo | VA spec | RVA | Hook spec parte 2 |
 | :--- | :--- | :--- | :--- |
-| Integrator | `0x140746150` | `0x746150` | M1 entrada, M2 retorno |
-| Tick start | `0x14074b8f0` | `0x74B8F0` | B1 entrada |
-| Commit | `0x14074d190` | `0x74D190` | M3 entrada, B2 retorno |
+| Integrator | `0x140746150` | `0x746150` | M1 entrada; M2/H6 no retorno (filtros) |
+| Tick start | `0x14074b8f0` | `0x74B8F0` | **B2** entrada |
+| Commit | `0x14074d190` | `0x74D190` | M3 entrada, B3 retorno |
 | Per-tick caller / EndStep (H5) | `0x1407511e0` | `0x7511E0` | H5 entrada/retorno; writes opcionais |
 | Physics step (H3) | `0x140dbc500` | `0xDBC500` | H3 entrada/retorno; contador `step` |
 | PreTick (H4) | `0x140749a30` | `0x749A30` | H4 entrada/retorno; só log |
 | SetPose | `0x140746770` | `0x746770` | Referência |
 | Frame loop | `0x140dbca20` | `0xDBCA20` | **H2** entrada, **H1** retorno (between-tick); obrigatórios; writes enfileirados |
+
+### Nomes de hooks obrigatórios (plano)
+
+| Nome no log / self-test | Função | Endereço de referência |
+| :--- | :--- | :--- |
+| **B2 (tick_start)** | Entrada tick start | `0x14074b8f0` |
+| **M2 (0x1407395fa) / H6 (0x14073e314)** | Detour do integrator `@ 0x140746150` | M2 quando `return == 0x1407395fa`; H6 quando `return == 0x14073e314` |
 
 ### Spec correction 1 — H1 / H2 (frame loop `@ 0x140dbca20`)
 
@@ -39,35 +48,37 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 
 Instalação **obrigatória** com tick start, integrator e commit: falha de prólogo em `frame_loop` aborta `TryInstall`.
 
-### Pontos B1 / M1–M3 / B2
+### Pontos B2 / M1–M3 / B3
 
-| ID | Momento | Endereço | Writes |
+| ID (CSV) | Momento | Endereço | Writes |
 | :--- | :--- | :--- | :--- |
-| **B1** | Antes do corpo de tick start | `0x14074b8f0` | Sim |
+| **B2** | Antes do corpo de tick start | `0x14074b8f0` | Sim (sham no self-test) |
 | **M1** | Antes do integrator | `0x140746150` | Sim |
-| **M2** | Depois do integrator (pós-trampoline) | `0x140746150` | Não (só CSV) |
-| **H6** | Retorno integrator filtrado (`return == 0x14073e314`) | `0x140746150` | Sim |
+| **M2** | Retorno integrator filtrado (`return == 0x1407395fa`) | `0x140746150` | Não (só CSV) |
+| **H6** | Retorno integrator filtrado (`return == 0x14073e314`) | `0x140746150` | Sim (sham no self-test) |
 | **M3** | Antes do Commit | `0x14074d190` | Sim |
-| **B2** | Depois do Commit (pós-trampoline) | `0x14074d190` | Sim |
+| **B3** | Depois do Commit (pós-trampoline) | `0x14074d190` | Sim |
 
 ## Spec parte 3 — logging CSV
 
-- **Contador `tick`:** `s_tickCounter` (`uint64_t`, monotônico), incrementado em **B1** (tick start).
+- **Ficheiro:** `dr2hook_physics_tick_harness_YYYYMMDD_HHMMSS.csv` (novo ficheiro por sessão, **sem append**).
+- **Contador `tick`:** `s_tickCounter` (`uint64_t`, monotônico), incrementado em **B2** (tick start).
 - **Contador `step`:** `s_stepCounter`, incrementado na **entrada de H3** (`0x140dbc500`, physics step). Linhas de H3/H4/H5 e dos boundaries B/M partilham o `tick` do ciclo actual; o `step` reflecte o último physics step visto na thread.
-- **Cada boundary** chama `LogBoundarySample` → uma linha em `dr2hook_physics_tick_harness.csv` (após validação da cadeia do jogador).
+- **Cada boundary** chama `LogBoundarySample` → uma linha no CSV (após validação da cadeia do jogador).
 - **Filtro:** só regista se a cadeia `car → container → rig` do jogador for válida (`+0x12c0 == rig`, `+0x12d0 == 4`).
 - **Cadeia:** `[exe + 0x1681ce8]` → `car`; `car + 0x30` → `container`; `container + 0x08` → `rig`.
 
 Cabeçalho: `tick,step,boundary,thread_id,container,rig,key_f5,key_f6,key_f7`, depois colunas `vec4` / `scalar` da tabela abaixo.
 
-- **Teclas F5/F6/F7 (spec correction 3):** amostradas uma vez por tick em **B1** (`GetAsyncKeyState`); colunas `key_f5`, `key_f6`, `key_f7` são `0`/`1` (mods de prática que gravam estado do carro).
+- **Teclas F5/F6/F7 (spec correction 3):** amostradas uma vez por tick em **B2** (`GetAsyncKeyState`); colunas `key_f5`, `key_f6`, `key_f7` são `0`/`1` (mods de prática que gravam estado do carro).
 
 ### Spec correction 3 — H6, commit log hooks, teclas
 
 | Item | Detalhe |
 | :--- | :--- |
-| **H6** | No detour do integrator `@ 0x140746150`, se o endereço de retorno for **`0x14073e314`**, dispara boundary **H6** com fila de writes/native (ponto separado de M2, que só regista CSV). |
-| **LOG_COMMIT_74D190** | Entrada do hook obrigatório em `@ 0x14074d190` — só log (M3/B2 mantêm writes). |
+| **M2** | No detour do integrator, se o endereço de retorno for **`0x1407395fa`**, dispara boundary **M2** (só CSV). |
+| **H6** | No mesmo detour, se o retorno for **`0x14073e314`**, dispara boundary **H6** com fila de writes/native (ponto separado de M2). |
+| **LOG_COMMIT_74D190** | Entrada do hook obrigatório em `@ 0x14074d190` — só log (M3/B3 mantêm writes). |
 | **LOG_COMMIT_73A070 / LOG_COMMIT_73B620** | Hooks **opcionais** só log em `@ 0x14073a070` e `@ 0x14073b620`. |
 
 ### Hooks H3–H5 (spec correction 2)
@@ -91,16 +102,25 @@ Todas as lin CSV incluem `thread_id` (`GetCurrentThreadId`) e ponteiros `contain
 
 ### Spec correction 4 — self-test e colunas extra
 
-**Self-test:** com `self_test=1`, `LoadConfiguration` força instrumentação ligada e desliga `writes` / `experimental_native`. `TryInstall` regista cada site (obrigatório + opcional); após instalar imprime hooks `installed=0/1`; uma thread espera **5 s** de jogo (CSV normal) e imprime contagem de **fires** por boundary. Nenhuma escrita ou native experimental é executada.
+**Self-test:** com `self_test=1`, `LoadConfiguration` força instrumentação ligada e desliga `writes` / `experimental_native`. `TryInstall` regista cada site (obrigatório + opcional); após instalar imprime hooks `installed=0/1`. O relatório final dispara quando **`s_tickCounter` ≥ 600** ticks in-stage (incrementos em **B2**), não após tempo fixo.
+
+**Critério PASS (self-test):**
+
+1. Hooks obrigatórios instalados: **B2 (tick_start)**, **M2/H6 (integrator)**, **commit**, **frame_loop**.
+2. **`in_stage_ticks` ≥ 600** (contador monotónico em tick start).
+
+O log e `dr2hook_physics_harness_self_test.log` incluem `result=PASS` ou `result=FAIL`, contagem de **re-entrancy** (nested `OnBoundary`) e **sham_writes** (escritas enfileiradas executadas sem alterar memória).
+
+**Sham-write:** com self-test activo, `ExecuteScheduledWriteIfDue` consome a fila, regista `sham-write` no log e **nunca** chama `memcpy` para o rig. `ScheduleWrite` continua a aceitar enfileiramento para validar o caminho.
 
 **CSV extra:** após os escalares do rig, `container_vec4_0xC930_{x,y,z,w}` e `rig_vec4_0x290_{x,y,z,w}`.
 
 ## Spec parte 4 — escritas enfileiradas
 
 - **API:** `ScheduleWrite(tick, boundary, rigOffset, bytes, len)` — uma escrita na fila.
-- **Gating:** flag `writes` **e** `SafetyGuard::CanWriteState()` (agendamento e execução). `SetPermissiveMode(true)` em `main.cpp` inalterado.
-- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`. Boundaries com fila: B1, M1, M3, B2, **H6**, **H1**, **H2**, H5_ENTRY, H5_RETURN, …
-- **Log:** `before=` / `after=` em hex no `dr2hook.log`.
+- **Gating:** flag `writes` **e** `SafetyGuard::CanWriteState()` (agendamento e execução), excepto enfileiramento em self-test (execução sham). `SetPermissiveMode(true)` em `main.cpp` inalterado.
+- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`. Boundaries com fila: B2, M1, M3, B3, **H6**, **H1**, **H2**, H5_ENTRY, H5_RETURN, …
+- **Log:** `before=` / `after=` em hex no `dr2hook.log` (ou `sham-write` no self-test).
 
 ## Spec parte 5 — API nativa experimental
 
@@ -122,7 +142,7 @@ Tipos e convenções inferidas (`__fastcall`, `DynamicsCarImpl*` em RCX): `inclu
 
 ## Prólogo e instalação
 
-Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start, integrator, commit, **frame loop H1/H2**) abortam `TryInstall` se o prólogo falhar.
+Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start **B2**, integrator **M2/H6**, commit, **frame loop H1/H2**) abortam `TryInstall` se o prólogo falhar.
 
 ### Win64 ABI (BUG 2)
 

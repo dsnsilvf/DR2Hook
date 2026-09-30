@@ -220,6 +220,40 @@ void TestSpecCorrection4SelfTestDisablesWrites() {
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
 }
 
+void TestSelfTestPassAt600Ticks() {
+  std::cout << "[RUN] TestSelfTestPassAt600Ticks..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(true);
+  dr2hook::PhysicsTickHarness::TestingSeedRequiredSelfTestHooks();
+  for (uint64_t i = 0; i < 599; ++i) {
+    dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  }
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::TestingEvaluateSelfTestPass(),
+              "PASS antes de 600 ticks");
+  dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::TestingEvaluateSelfTestPass(),
+              "PASS com 600 ticks e hooks obrigatorios");
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(false);
+}
+
+void TestSelfTestShamWritePath() {
+  std::cout << "[RUN] TestSelfTestShamWritePath..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(true);
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSimulateInStageTick();
+  const uint8_t payload = 0x11;
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  dr2hook::PhysicsTickHarness::GetTickCounter(),
+                  dr2hook::PhysicsHarnessBoundary::B1_TickStart, 0x320,
+                  &payload, sizeof(payload)),
+              "ScheduleWrite enfileira em self-test");
+  dr2hook::PhysicsTickHarness::TestingExecuteScheduledWriteIfDue(
+      dr2hook::PhysicsHarnessBoundary::B1_TickStart);
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::TestingGetShamWriteCount() == 1,
+              "Sham-write incrementa contador");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(false);
+}
+
 void TestSpecCorrection4ExtraCsvOffsets() {
   std::cout << "[RUN] TestSpecCorrection4ExtraCsvOffsets..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kContainerExtraVec4Offset == 0xC930,
@@ -231,6 +265,9 @@ void TestSpecCorrection4ExtraCsvOffsets() {
 void TestSpecCorrection3IntegratorReturnAndH6Write() {
   std::cout << "[RUN] TestSpecCorrection3IntegratorReturnAndH6Write..."
             << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaIntegratorM2ReturnSite ==
+                  0x1407395FAULL,
+              "VA filtro retorno integrator M2");
   TEST_ASSERT(dr2hook::physics_harness::kVaIntegratorReturnSite ==
                   0x14073E314ULL,
               "VA filtro retorno integrator H6");
@@ -314,6 +351,8 @@ int main() {
   TestSpecCorrection3PracticeKeysSnapshot();
   TestSpecCorrection4ExtraCsvOffsets();
   TestSpecCorrection4SelfTestDisablesWrites();
+  TestSelfTestPassAt600Ticks();
+  TestSelfTestShamWritePath();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun

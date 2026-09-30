@@ -71,6 +71,12 @@ public:
   static void TestingSetPracticeKeysForTick(uint64_t tick, bool f5, bool f6,
                                             bool f7);
   static void TestingSetSelfTestMode(bool enabled);
+  static void TestingSimulateInStageTick();
+  static uint64_t TestingGetReentrancyCount();
+  static uint64_t TestingGetShamWriteCount();
+  static bool TestingEvaluateSelfTestPass();
+  static void TestingSeedRequiredSelfTestHooks();
+  static void TestingExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary);
 #endif
 };
 

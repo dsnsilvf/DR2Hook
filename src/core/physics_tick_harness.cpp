@@ -16,6 +16,7 @@
 #include "dr2hook/physics_harness_detour_abi.h"
 
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -54,7 +55,7 @@ bool s_experimentalNativeEnabled = false;
 bool s_installed = false;
 uintptr_t s_gameBase = 0;
 
-constexpr DWORD kSelfTestLogDurationMs = 5000;
+constexpr uint64_t kSelfTestPassInStageTicks = 600;
 
 struct HookInstallRecord {
   const char *name = nullptr;
@@ -68,6 +69,12 @@ size_t s_hookInstallRecordCount = 0;
 std::atomic<uint64_t> s_tickCounter{0};
 std::atomic<uint64_t> s_stepCounter{0};
 std::atomic<uint64_t> s_boundaryFireCounts[20] = {};
+
+std::atomic<uint64_t> s_reentrancyCounter{0};
+std::atomic<uint64_t> s_shamWriteCounter{0};
+std::atomic<bool> s_selfTestFinalReportEmitted{false};
+
+thread_local int s_onBoundaryDepth = 0;
 
 std::atomic<uint64_t> s_practiceKeysTick{0};
 std::atomic<bool> s_practiceKeyF5{false};
@@ -155,6 +162,32 @@ bool ParseTruthy(const char *value) {
          EqualsIgnoreCase(value, "yes") || EqualsIgnoreCase(value, "on");
 }
 
+void TrimIniToken(std::string *token) {
+  if (token == nullptr) {
+    return;
+  }
+  while (!token->empty()) {
+    const char c = token->back();
+    if (c == '\r' || c == '\n' || c == ' ' || c == '\t') {
+      token->pop_back();
+    } else {
+      break;
+    }
+  }
+  size_t start = 0;
+  while (start < token->size()) {
+    const char c = (*token)[start];
+    if (c == ' ' || c == '\t') {
+      ++start;
+    } else {
+      break;
+    }
+  }
+  if (start > 0) {
+    token->erase(0, start);
+  }
+}
+
 bool ReadIniBool(const std::filesystem::path &iniPath, const char *key) {
   std::ifstream in(iniPath);
   if (!in.is_open()) {
@@ -168,6 +201,8 @@ bool ReadIniBool(const std::filesystem::path &iniPath, const char *key) {
     }
     std::string k = line.substr(0, eq);
     std::string v = line.substr(eq + 1);
+    TrimIniToken(&k);
+    TrimIniToken(&v);
     if (k == key) {
       return ParseTruthy(v.c_str());
     }
@@ -178,7 +213,7 @@ bool ReadIniBool(const std::filesystem::path &iniPath, const char *key) {
 std::string BoundaryName(PhysicsHarnessBoundary boundary) {
   switch (boundary) {
   case PhysicsHarnessBoundary::B1_TickStart:
-    return "B1";
+    return "B2";
   case PhysicsHarnessBoundary::M1_BeforeIntegrator:
     return "M1";
   case PhysicsHarnessBoundary::M2_AfterIntegrator:
@@ -186,7 +221,7 @@ std::string BoundaryName(PhysicsHarnessBoundary boundary) {
   case PhysicsHarnessBoundary::M3_BeforeCommit:
     return "M3";
   case PhysicsHarnessBoundary::B2_AfterCommit:
-    return "B2";
+    return "B3";
   case PhysicsHarnessBoundary::H1_FrameLoopReturn:
     return "H1";
   case PhysicsHarnessBoundary::H2_FrameLoopEntry:
@@ -255,6 +290,8 @@ void BumpBoundaryFire(PhysicsHarnessBoundary boundary) {
     s_boundaryFireCounts[idx].fetch_add(1, std::memory_order_relaxed);
   }
 }
+
+void LogSelfTestReport(bool afterObservationWindow);
 
 bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
                         uintptr_t *outRig) {
@@ -330,18 +367,36 @@ void LogPrologueMismatch(const char *siteName, const void *target,
   Logger::Error(oss.str());
 }
 
+std::string FormatCsvLogTimestamp() {
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t t = std::chrono::system_clock::to_time_t(now);
+  std::tm tm{};
+#if defined(_WIN32)
+  localtime_s(&tm, &t);
+#else
+  localtime_r(&t, &tm);
+#endif
+  char buf[32] = {};
+  std::snprintf(buf, sizeof(buf), "%04d%02d%02d_%02d%02d%02d",
+                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+                tm.tm_min, tm.tm_sec);
+  return std::string(buf);
+}
+
 bool OpenCsvLogIfNeeded() {
   if (s_csvStream.is_open()) {
     return true;
   }
-  const auto csvPath = std::filesystem::path(GetExecutableDirectory()) /
-                       "dr2hook_physics_tick_harness.csv";
-  s_csvStream.open(csvPath, std::ios::out | std::ios::app);
+  const auto csvPath =
+      std::filesystem::path(GetExecutableDirectory()) /
+      ("dr2hook_physics_tick_harness_" + FormatCsvLogTimestamp() + ".csv");
+  s_csvStream.open(csvPath, std::ios::out | std::ios::trunc);
   if (!s_csvStream.is_open()) {
     Logger::Error("PhysicsTickHarness: falha ao abrir CSV " +
                   csvPath.string());
     return false;
   }
+  Logger::Info("PhysicsTickHarness: CSV " + csvPath.string());
   return true;
 }
 
@@ -426,10 +481,6 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
 }
 
 void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
-  if (s_selfTestMode) {
-    return;
-  }
-  // Spec parte 4: só corre nos detours de física (OnBoundary), nunca no Present.
   ScheduledWrite pending{};
   {
     std::lock_guard<std::mutex> lock(s_writeQueueMutex);
@@ -444,6 +495,18 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
     }
     pending = s_scheduledWrite;
     s_scheduledWrite.active = false;
+  }
+
+  if (s_selfTestMode) {
+    char offsetHex[16] = {};
+    std::snprintf(offsetHex, sizeof(offsetHex), "%X", pending.rigOffset);
+    Logger::Info("PhysicsTickHarness: sham-write tick=" +
+                 std::to_string(pending.tick) + " boundary=" +
+                 BoundaryName(boundary) + " rig_offset=0x" + offsetHex +
+                 " bytes=" + std::to_string(pending.bytes.size()) +
+                 " (memoria nao alterada)");
+    s_shamWriteCounter.fetch_add(1, std::memory_order_relaxed);
+    return;
   }
 
   if (!PhysicsTickHarness::AreWritesEnabled()) {
@@ -544,11 +607,129 @@ void ExecuteScheduledNativeIfDue(PhysicsHarnessBoundary boundary) {
 }
 
 void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
+  if (s_onBoundaryDepth > 0) {
+    s_reentrancyCounter.fetch_add(1, std::memory_order_relaxed);
+  }
+  ++s_onBoundaryDepth;
   if (allowWritePoints) {
     ExecuteScheduledWriteIfDue(boundary);
     ExecuteScheduledNativeIfDue(boundary);
   }
   LogBoundarySample(boundary);
+  --s_onBoundaryDepth;
+}
+
+void MaybeCompleteSelfTestObservation() {
+  if (!s_selfTestMode) {
+    return;
+  }
+  if (s_tickCounter.load(std::memory_order_relaxed) < kSelfTestPassInStageTicks) {
+    return;
+  }
+  bool expected = false;
+  if (!s_selfTestFinalReportEmitted.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    return;
+  }
+  LogSelfTestReport(true);
+}
+
+bool EvaluateSelfTestPassCriteria() {
+  if (s_tickCounter.load(std::memory_order_relaxed) < kSelfTestPassInStageTicks) {
+    return false;
+  }
+  bool tickStartHook = false;
+  bool integratorHook = false;
+  bool commitHook = false;
+  bool frameLoopHook = false;
+  for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
+    const auto &rec = s_hookInstallRecords[i];
+    if (!rec.installed || rec.name == nullptr) {
+      continue;
+    }
+    if (std::strcmp(rec.name, "B2 (tick_start)") == 0) {
+      tickStartHook = true;
+    } else if (std::strcmp(rec.name, "M2 (0x1407395fa) / H6 (0x14073e314)") ==
+               0) {
+      integratorHook = true;
+    } else if (std::strcmp(rec.name, "commit") == 0) {
+      commitHook = true;
+    } else if (std::strcmp(rec.name, "frame_loop") == 0) {
+      frameLoopHook = true;
+    }
+  }
+  return tickStartHook && integratorHook && commitHook && frameLoopHook;
+}
+
+void LogSelfTestReport(bool afterObservationWindow) {
+  const char *phase =
+      afterObservationWindow ? "relatorio final" : "hooks apos instalacao";
+  const uint64_t inStageTicks =
+      s_tickCounter.load(std::memory_order_relaxed);
+  const uint64_t reentrancy =
+      s_reentrancyCounter.load(std::memory_order_relaxed);
+  const uint64_t shamWrites =
+      s_shamWriteCounter.load(std::memory_order_relaxed);
+  const bool pass = afterObservationWindow && EvaluateSelfTestPassCriteria();
+
+  Logger::Info(std::string("PhysicsTickHarness: self-test (") + phase + ").");
+  Logger::Info("PhysicsTickHarness: self-test writes=0 (forcado); sham-write "
+               "activo nos boundaries com fila.");
+  Logger::Info("PhysicsTickHarness: self-test in_stage_ticks=" +
+               std::to_string(inStageTicks) + " (PASS requer >= " +
+               std::to_string(kSelfTestPassInStageTicks) + ").");
+  Logger::Info("PhysicsTickHarness: self-test reentrancy=" +
+               std::to_string(reentrancy));
+  Logger::Info("PhysicsTickHarness: self-test sham_writes=" +
+               std::to_string(shamWrites));
+  if (afterObservationWindow) {
+    Logger::Info(std::string("PhysicsTickHarness: self-test result=") +
+                 (pass ? "PASS" : "FAIL"));
+  }
+
+  Logger::Info("PhysicsTickHarness: self-test hook sites:");
+  for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
+    const auto &rec = s_hookInstallRecords[i];
+    Logger::Info(std::string("PhysicsTickHarness: self-test hook ") +
+                 (rec.name != nullptr ? rec.name : "?") + " installed=" +
+                 (rec.installed ? "1" : "0"));
+  }
+
+  Logger::Info("PhysicsTickHarness: self-test boundary fires:");
+  for (size_t i = 0;
+       i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
+       ++i) {
+    const auto boundary = static_cast<PhysicsHarnessBoundary>(i);
+    const uint64_t count =
+        s_boundaryFireCounts[i].load(std::memory_order_relaxed);
+    Logger::Info("PhysicsTickHarness: self-test boundary " +
+                 BoundaryName(boundary) + " fires=" + std::to_string(count));
+  }
+
+  const auto reportPath = std::filesystem::path(GetExecutableDirectory()) /
+                          "dr2hook_physics_harness_self_test.log";
+  std::ofstream report(reportPath, std::ios::out | std::ios::trunc);
+  if (report.is_open()) {
+    report << "phase=" << phase << "\nwrites=0\nsham_write=1\n";
+    report << "in_stage_ticks=" << inStageTicks << "\n";
+    report << "pass_tick_threshold=" << kSelfTestPassInStageTicks << "\n";
+    report << "reentrancy=" << reentrancy << "\n";
+    report << "sham_writes=" << shamWrites << "\n";
+    if (afterObservationWindow) {
+      report << "result=" << (pass ? "PASS" : "FAIL") << "\n";
+    }
+    for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
+      report << "hook," << s_hookInstallRecords[i].name << ","
+             << (s_hookInstallRecords[i].installed ? 1 : 0) << "\n";
+    }
+    for (size_t i = 0;
+         i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
+         ++i) {
+      report << "boundary," << BoundaryName(static_cast<PhysicsHarnessBoundary>(i))
+             << "," << s_boundaryFireCounts[i].load(std::memory_order_relaxed)
+             << "\n";
+    }
+  }
 }
 
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__)) &&                           \
@@ -558,17 +739,21 @@ void HarnessBeforeTickStart(physics_harness_abi::Frame *) {
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
   CapturePracticeModKeysForCurrentTick();
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
+  MaybeCompleteSelfTestObservation();
 }
 
 void HarnessAfterIntegrator(physics_harness_abi::Frame *) {
-  OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, false);
   void *ret = nullptr;
 #if defined(_MSC_VER)
   ret = _ReturnAddress();
 #elif defined(__GNUC__)
   ret = __builtin_return_address(0);
 #endif
-  if (ret == reinterpret_cast<void *>(s_gameBase + kRvaIntegratorReturnSite)) {
+  const uintptr_t retAddr = reinterpret_cast<uintptr_t>(ret);
+  if (retAddr == s_gameBase + kRvaIntegratorM2ReturnSite) {
+    OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, false);
+  }
+  if (retAddr == s_gameBase + kRvaIntegratorReturnSite) {
     OnBoundary(PhysicsHarnessBoundary::H6_IntegratorReturnFilter, true);
   }
 }
@@ -661,50 +846,6 @@ void RecordHookInstallResult(const char *name, bool installed) {
   ++s_hookInstallRecordCount;
 }
 
-void LogSelfTestReport(bool afterObservationWindow) {
-  const char *phase =
-      afterObservationWindow ? "relatorio final" : "hooks apos instalacao";
-  Logger::Info(std::string("PhysicsTickHarness: self-test (") + phase + ").");
-  Logger::Info("PhysicsTickHarness: self-test writes=0 (forcado).");
-
-  Logger::Info("PhysicsTickHarness: self-test hook sites:");
-  for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
-    const auto &rec = s_hookInstallRecords[i];
-    Logger::Info(std::string("PhysicsTickHarness: self-test hook ") +
-                 (rec.name != nullptr ? rec.name : "?") + " installed=" +
-                 (rec.installed ? "1" : "0"));
-  }
-
-  Logger::Info("PhysicsTickHarness: self-test boundary fires:");
-  for (size_t i = 0;
-       i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
-       ++i) {
-    const auto boundary = static_cast<PhysicsHarnessBoundary>(i);
-    const uint64_t count =
-        s_boundaryFireCounts[i].load(std::memory_order_relaxed);
-    Logger::Info("PhysicsTickHarness: self-test boundary " +
-                 BoundaryName(boundary) + " fires=" + std::to_string(count));
-  }
-
-  const auto reportPath = std::filesystem::path(GetExecutableDirectory()) /
-                          "dr2hook_physics_harness_self_test.log";
-  std::ofstream report(reportPath, std::ios::out | std::ios::trunc);
-  if (report.is_open()) {
-    report << "phase=" << phase << "\nwrites=0\n";
-    for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
-      report << "hook," << s_hookInstallRecords[i].name << ","
-             << (s_hookInstallRecords[i].installed ? 1 : 0) << "\n";
-    }
-    for (size_t i = 0;
-         i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
-         ++i) {
-      report << "boundary," << BoundaryName(static_cast<PhysicsHarnessBoundary>(i))
-             << "," << s_boundaryFireCounts[i].load(std::memory_order_relaxed)
-             << "\n";
-    }
-  }
-}
-
 bool InstallHookSite(const char *name, void *target, void *detour,
                      void **originalOut, const uint8_t *expectedPrologue,
                      size_t prologueLength, bool required) {
@@ -761,17 +902,13 @@ void LogReferenceAddresses(uintptr_t gameBase) {
                fmt(gameBase, kRvaPreTick, kVaPreTick));
   Logger::Info("PhysicsTickHarness: end step (H5) " +
                fmt(gameBase, kRvaEndStep, kVaEndStep));
+  Logger::Info("PhysicsTickHarness: M2 return filter " +
+               fmt(gameBase, kRvaIntegratorM2ReturnSite, kVaIntegratorM2ReturnSite));
+  Logger::Info("PhysicsTickHarness: H6 return filter " +
+               fmt(gameBase, kRvaIntegratorReturnSite, kVaIntegratorReturnSite));
   Logger::Info(
-      "PhysicsTickHarness: hooks obrigatorios B1/M/B2 + H1/H2 frame_loop @ 0x"
+      "PhysicsTickHarness: hooks obrigatorios B2/M/H6 + H1/H2 frame_loop @ 0x"
       "140dbca20");
-}
-
-DWORD WINAPI SelfTestThread(LPVOID) {
-  Logger::Info("PhysicsTickHarness: self-test a observar CSV/logs por " +
-               std::to_string(kSelfTestLogDurationMs) + " ms.");
-  Sleep(kSelfTestLogDurationMs);
-  LogSelfTestReport(true);
-  return 0;
 }
 
 #endif // !DR2HOOK_PHYSICS_HARNESS_NO_HOOKS
@@ -901,14 +1038,14 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   void *pPreTick = reinterpret_cast<void *>(gameModuleBase + kRvaPreTick);
   void *pEndStep = reinterpret_cast<void *>(gameModuleBase + kRvaEndStep);
 
-  if (!InstallHookSite("tick_start", pTickStart,
+  if (!InstallHookSite("B2 (tick_start)", pTickStart,
                        reinterpret_cast<void *>(
                            dr2hook::physics_harness_abi::PhysicsHarness_DetourTickStart),
                        reinterpret_cast<void **>(&g_origTickStart), kTickStart,
                        kPrologueLength, true)) {
     return false;
   }
-  if (!InstallHookSite("integrator", pIntegrator,
+  if (!InstallHookSite("M2 (0x1407395fa) / H6 (0x14073e314)", pIntegrator,
                        reinterpret_cast<void *>(
                            dr2hook::physics_harness_abi::PhysicsHarness_DetourIntegrator),
                        reinterpret_cast<void **>(&g_origIntegrator), kIntegrator,
@@ -967,7 +1104,10 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
 
   if (s_selfTestMode) {
     LogSelfTestReport(false);
-    CreateThread(nullptr, 0, SelfTestThread, nullptr, 0, nullptr);
+    Logger::Info(
+        "PhysicsTickHarness: self-test aguarda >= " +
+        std::to_string(kSelfTestPassInStageTicks) +
+        " ticks in-stage (B2) para relatorio final PASS/FAIL.");
   }
   return true;
 #endif
@@ -1038,14 +1178,20 @@ bool PhysicsTickHarness::ScheduleWrite(uint64_t tick,
   if (bytes == nullptr || byteCount == 0 || byteCount > 64) {
     return false;
   }
-  if (!AreWritesEnabled()) {
-    Logger::Warn("PhysicsTickHarness: ScheduleWrite recusado (writes off).");
+  if (!s_instrumentationEnabled) {
+    Logger::Warn("PhysicsTickHarness: ScheduleWrite recusado (instrumentacao off).");
     return false;
   }
-  if (!SafetyGuard::CanWriteState()) {
-    Logger::Warn(
-        "PhysicsTickHarness: ScheduleWrite recusado (SafetyGuard).");
-    return false;
+  if (!s_selfTestMode) {
+    if (!AreWritesEnabled()) {
+      Logger::Warn("PhysicsTickHarness: ScheduleWrite recusado (writes off).");
+      return false;
+    }
+    if (!SafetyGuard::CanWriteState()) {
+      Logger::Warn(
+          "PhysicsTickHarness: ScheduleWrite recusado (SafetyGuard).");
+      return false;
+    }
   }
 
   std::lock_guard<std::mutex> lock(s_writeQueueMutex);
@@ -1147,7 +1293,38 @@ void PhysicsTickHarness::TestingSetSelfTestMode(bool enabled) {
     s_instrumentationEnabled = true;
     s_writesEnabled = false;
     s_experimentalNativeEnabled = false;
+    s_selfTestFinalReportEmitted.store(false, std::memory_order_relaxed);
   }
+}
+
+void PhysicsTickHarness::TestingSimulateInStageTick() {
+  s_tickCounter.fetch_add(1, std::memory_order_relaxed);
+  MaybeCompleteSelfTestObservation();
+}
+
+uint64_t PhysicsTickHarness::TestingGetReentrancyCount() {
+  return s_reentrancyCounter.load(std::memory_order_relaxed);
+}
+
+uint64_t PhysicsTickHarness::TestingGetShamWriteCount() {
+  return s_shamWriteCounter.load(std::memory_order_relaxed);
+}
+
+bool PhysicsTickHarness::TestingEvaluateSelfTestPass() {
+  return EvaluateSelfTestPassCriteria();
+}
+
+void PhysicsTickHarness::TestingSeedRequiredSelfTestHooks() {
+  s_hookInstallRecordCount = 4;
+  s_hookInstallRecords[0] = {"B2 (tick_start)", true};
+  s_hookInstallRecords[1] = {"M2 (0x1407395fa) / H6 (0x14073e314)", true};
+  s_hookInstallRecords[2] = {"commit", true};
+  s_hookInstallRecords[3] = {"frame_loop", true};
+}
+
+void PhysicsTickHarness::TestingExecuteScheduledWriteIfDue(
+    PhysicsHarnessBoundary boundary) {
+  ExecuteScheduledWriteIfDue(boundary);
 }
 
 #endif
