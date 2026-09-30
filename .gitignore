@@ -30,8 +30,12 @@ out/
 *.log
 *.tmp
 crashdump.dmp
+<<<<<<< HEAD
 captures/
 
 # Python
 __pycache__/
 *.py[cod]
+=======
+build-mingw/
+>>>>>>> 15f0b18 (chore: remover artefactos build-mingw do repositório)

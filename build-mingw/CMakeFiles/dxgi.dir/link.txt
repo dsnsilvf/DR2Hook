@@ -1,3 +1,0 @@
-/usr/bin/cmake -E rm -f CMakeFiles/dxgi.dir/objects.a
-/usr/bin/x86_64-w64-mingw32-ar qc CMakeFiles/dxgi.dir/objects.a @CMakeFiles/dxgi.dir/objects1.rsp
-/usr/bin/x86_64-w64-mingw32-g++ -static -static-libgcc -static-libstdc++ -Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx -shared -o dxgi.dll -Wl,--out-implib,libdxgi.dll.a -Wl,--major-image-version,0,--minor-image-version,0 -Wl,--whole-archive CMakeFiles/dxgi.dir/objects.a -Wl,--no-whole-archive @CMakeFiles/dxgi.dir/linkLibs.rsp
