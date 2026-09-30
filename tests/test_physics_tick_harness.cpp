@@ -8,6 +8,7 @@
 #include "dr2hook/safety.h"
 
 #include <cstring>
+#include <cstdio>
 #include <iostream>
 
 static int g_testsRun = 0;
@@ -40,6 +41,55 @@ void TestVerifyPrologue() {
                          0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   TEST_ASSERT(!dr2hook::VerifyHookPrologue(buffer, bad, sizeof(bad)),
               "Prologo divergente deve falhar");
+}
+
+namespace {
+
+bool ParseHexPrologue12(const char *hex24, uint8_t *out12) {
+  if (hex24 == nullptr || out12 == nullptr) {
+    return false;
+  }
+  for (size_t i = 0; i < 12; ++i) {
+    unsigned value = 0;
+    if (std::sscanf(hex24 + (i * 2), "%2x", &value) != 1) {
+      return false;
+    }
+    out12[i] = static_cast<uint8_t>(value);
+  }
+  return true;
+}
+
+bool PrologueMatchesHex(const uint8_t *prologue, const char *hex24) {
+  uint8_t expected[12] = {};
+  if (!ParseHexPrologue12(hex24, expected)) {
+    return false;
+  }
+  return std::memcmp(prologue, expected, 12) == 0;
+}
+
+} // namespace
+
+void TestBug1CalibratedPrologueHexPinned() {
+  std::cout << "[RUN] TestBug1CalibratedPrologueHexPinned..." << std::endl;
+  using namespace dr2hook::physics_harness_prologues;
+  TEST_ASSERT(PrologueMatchesHex(kTickStart, "48895c240848896c24104889"),
+              "tick_start hex");
+  TEST_ASSERT(PrologueMatchesHex(kIntegrator, "48895c240848897424105748"),
+              "integrator hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommit, "40534883ec20488bd9488b89"),
+              "commit hex");
+  TEST_ASSERT(PrologueMatchesHex(kFrameLoop, "48895c240848897424105741"),
+              "frame_loop hex");
+  TEST_ASSERT(PrologueMatchesHex(kPhysicsStep, "405553565741544155488dac"),
+              "physics_step hex");
+  TEST_ASSERT(PrologueMatchesHex(kPreTick, "48895c241048896c24184889"),
+              "pretick hex");
+  TEST_ASSERT(PrologueMatchesHex(kEndStep, "48895c240848897424105748"),
+              "end_step hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxA, "40534883ec30488bd9e80000"),
+              "commit_log_73a070 hex");
+  TEST_ASSERT(PrologueMatchesHex(kCommitAuxB, "48895c240848897424105748"),
+              "commit_log_73b620 hex");
 }
 
 void TestScheduleWriteRequiresOptIn() {
@@ -339,6 +389,7 @@ void TestRigChainValidationLogic() {
 int main() {
   std::cout << "DR2Hook - Physics Tick Harness (unit)" << std::endl;
   TestVerifyPrologue();
+  TestBug1CalibratedPrologueHexPinned();
   TestScheduleWriteRequiresOptIn();
   TestScheduleWriteSingleQueue();
   TestScheduleExperimentalNativeRequiresOptIn();

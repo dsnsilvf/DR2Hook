@@ -3,45 +3,63 @@
 #include <cstddef>
 #include <cstdint>
 
-// Primeiros 12 bytes lidos do dirtrally2.exe em disco (BUG 1 — não usar placeholders).
+// BUG 1 — primeiros 12 bytes do dirtrally2.exe em disco (hex canónico por RVA).
+// Não reutilizar padrões genéricos: cada array abaixo corresponde ao hex indicado.
 namespace dr2hook::physics_harness_prologues {
 
 inline constexpr size_t kPrologueLength = 12;
 
-// tick_start @ RVA 0x74B8F0 — 48895c240848896c24104889
-inline constexpr uint8_t kTickStart[] = {
+// tick_start @ RVA 0x74B8F0
+// hex: 48895c240848896c24104889
+inline constexpr uint8_t kTickStart[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89,
 };
-// integrator @ 0x746150 — 48895c240848897424105748
-inline constexpr uint8_t kIntegrator[] = {
+
+// integrator @ RVA 0x746150
+// hex: 48895c240848897424105748
+inline constexpr uint8_t kIntegrator[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48,
 };
-// commit @ 0x74D190 — 40534883ec20488bd9488b89
-inline constexpr uint8_t kCommit[] = {
+
+// commit @ RVA 0x74D190
+// hex: 40534883ec20488bd9488b89
+inline constexpr uint8_t kCommit[kPrologueLength] = {
     0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0x89,
 };
-// frame_loop @ 0xDBCA20 — 48895c240848897424105741
-inline constexpr uint8_t kFrameLoop[] = {
+
+// frame_loop @ RVA 0xDBCA20
+// hex: 48895c240848897424105741
+inline constexpr uint8_t kFrameLoop[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x41,
 };
-// physics_step @ 0xDBC500 — 405553565741544155488dac
-inline constexpr uint8_t kPhysicsStep[] = {
+
+// physics_step @ RVA 0xDBC500
+// hex: 405553565741544155488dac
+inline constexpr uint8_t kPhysicsStep[kPrologueLength] = {
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8D, 0xAC,
 };
-// pretick @ 0x749A30 — 48895c241048896c24184889
-inline constexpr uint8_t kPreTick[] = {
+
+// pretick @ RVA 0x749A30
+// hex: 48895c241048896c24184889
+inline constexpr uint8_t kPreTick[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89,
 };
-// end_step @ 0x7511E0 — 48895c240848897424105748
-inline constexpr uint8_t kEndStep[] = {
+
+// end_step @ RVA 0x7511E0
+// hex: 48895c240848897424105748
+inline constexpr uint8_t kEndStep[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48,
 };
-// commit log @ 0x73A070 — 40534883ec30488bd9e80000
-inline constexpr uint8_t kCommitAuxA[] = {
+
+// commit_log aux @ RVA 0x73A070
+// hex: 40534883ec30488bd9e80000
+inline constexpr uint8_t kCommitAuxA[kPrologueLength] = {
     0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9, 0xE8, 0x00, 0x00,
 };
-// commit log @ 0x73B620 — 48895c240848897424105748
-inline constexpr uint8_t kCommitAuxB[] = {
+
+// commit_log aux @ RVA 0x73B620
+// hex: 48895c240848897424105748
+inline constexpr uint8_t kCommitAuxB[kPrologueLength] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48,
 };
 
