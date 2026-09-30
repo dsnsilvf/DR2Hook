@@ -1,6 +1,7 @@
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/script/lua_engine.h"
+#include "dr2hook/script/mod_menu.h"
 
 #include "lauxlib.h"
 #include "lua.h"
@@ -125,6 +126,7 @@ void ModManager::Shutdown() {
   }
 
   s_mods.clear();
+  ModMenu::Clear();
   LuaEngine::Shutdown();
   s_initialized = false;
   Logger::Info("ModManager encerrado com sucesso.");
@@ -214,6 +216,8 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
     Logger::Error("ModManager: lua_State nulo ao carregar mod: " + id);
     return false;
   }
+  ModMenu::SetCurrentMod(mod.id);
+  ModMenu::MarkDirty();
 
   // Carregamento protegido do script
   int errHandler = lua_gettop(L) + 1;
@@ -286,9 +290,11 @@ void ModManager::CallModCallback(ModInstance &mod, int funcRef, int nargs,
     return;
   }
 
+  ModMenu::SetCurrentMod(mod.id);
   bool success = LuaEngine::CallFunctionRef(funcRef, nargs, nresults);
   if (!success) {
     mod.enabled = false;
+    ModMenu::MarkDirty();
     Logger::Error("[ModManager] Mod '" + mod.id +
                   "' desativado permanentemente para o resto da sessao devido "
                   "a erro de execucao.");
@@ -367,5 +373,63 @@ void ModManager::DispatchRenderUI(ModInstance &mod) {
 }
 
 const std::vector<ModInstance> &ModManager::GetLoadedMods() { return s_mods; }
+
+void ModManager::DispatchMenuEvent(size_t modIndex, size_t optionIndex, int value) {
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+  lua_State *L = LuaEngine::GetState();
+  if (!s_initialized || L == nullptr || modIndex >= s_mods.size()) {
+    return;
+  }
+  ModInstance &mod = s_mods[modIndex];
+  std::vector<ModOption> *options = ModMenu::OptionsOf(mod.id);
+  if (!mod.enabled || options == nullptr || optionIndex >= options->size()) {
+    return;
+  }
+
+  ModOption &option = (*options)[optionIndex];
+  if (value >= 0) {
+    if (!option.SetValueIndex(static_cast<size_t>(value))) {
+      return;
+    }
+  } else {
+    option.Advance();
+  }
+  ModMenu::MarkDirty();
+  Logger::Info("[Mod: " + mod.id + "] menu: " + option.DisplayLabel());
+
+  // O callback pode declarar opções e realocar o vetor: copiar antes.
+  const ModOption snapshot = option;
+  if (snapshot.callbackRef == LUA_NOREF) {
+    return;
+  }
+  int nargs = 0;
+  if (snapshot.type == ModOption::Type::Toggle) {
+    lua_pushboolean(L, snapshot.enabled ? 1 : 0);
+    nargs = 1;
+  } else if (snapshot.type == ModOption::Type::Choice) {
+    lua_pushinteger(L, static_cast<lua_Integer>(snapshot.index + 1));
+    lua_pushstring(L, snapshot.index < snapshot.values.size()
+                          ? snapshot.values[snapshot.index].c_str()
+                          : "");
+    nargs = 2;
+  }
+  CallModCallback(mod, snapshot.callbackRef, nargs, 0);
+}
+
+std::vector<ModMenuEntry> ModManager::MenuSnapshot() {
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+  std::vector<ModMenuEntry> entries;
+  for (const ModInstance &mod : s_mods) {
+    ModMenuEntry entry;
+    entry.name = mod.enabled ? mod.name : mod.name + " (error)";
+    entry.description = mod.description;
+    if (const std::vector<ModOption> *options = ModMenu::OptionsOf(mod.id);
+        options != nullptr && mod.enabled) {
+      entry.options = *options;
+    }
+    entries.push_back(std::move(entry));
+  }
+  return entries;
+}
 
 } // namespace dr2hook

@@ -1,5 +1,6 @@
 #include "dr2hook/script/lua_engine.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/script/mod_menu.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
 #include "dr2hook/ui/overlay.h"
@@ -477,6 +478,115 @@ static int Lua_UI_notify(lua_State *L) {
 }
 
 // ---------------------------------------------------------------------------
+// Menu: opções do mod em execução na tela nativa (ModMenu::CurrentMod)
+// ---------------------------------------------------------------------------
+static int Lua_Menu_add(lua_State *L, ModOption option, int callbackIndex) {
+  const std::string &modId = ModMenu::CurrentMod();
+  if (modId.empty()) {
+    return luaL_error(L, "Menu: no mod is running");
+  }
+  if (const ModOption *existing = ModMenu::Find(modId, option.id);
+      existing != nullptr && existing->callbackRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, existing->callbackRef);
+  }
+  if (callbackIndex > 0 && lua_isfunction(L, callbackIndex)) {
+    lua_pushvalue(L, callbackIndex);
+    option.callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+  const int callbackRef = option.callbackRef;
+  if (!ModMenu::Add(modId, std::move(option))) {
+    luaL_unref(L, LUA_REGISTRYINDEX, callbackRef);
+    return luaL_error(L, "Menu: at most %d options per mod",
+                      static_cast<int>(ModMenu::kMaxOptions));
+  }
+  return 0;
+}
+
+// Menu.toggle(id, label, [default], [onChange(enabled)])
+static int Lua_Menu_toggle(lua_State *L) {
+  ModOption option;
+  option.type = ModOption::Type::Toggle;
+  option.id = luaL_checkstring(L, 1);
+  option.label = luaL_checkstring(L, 2);
+  option.enabled = lua_toboolean(L, 3) != 0;
+  return Lua_Menu_add(L, std::move(option), 4);
+}
+
+// Menu.choice(id, label, {values}, [defaultIndex], [onChange(index, value)])
+static int Lua_Menu_choice(lua_State *L) {
+  ModOption option;
+  option.type = ModOption::Type::Choice;
+  option.id = luaL_checkstring(L, 1);
+  option.label = luaL_checkstring(L, 2);
+  luaL_checktype(L, 3, LUA_TTABLE);
+  const lua_Integer count = static_cast<lua_Integer>(lua_rawlen(L, 3));
+  for (lua_Integer i = 1; i <= count; ++i) {
+    lua_rawgeti(L, 3, i);
+    const char *value = lua_tostring(L, -1);
+    option.values.emplace_back(value != nullptr ? value : "");
+    lua_pop(L, 1);
+  }
+  if (option.values.empty()) {
+    return luaL_error(L, "Menu.choice: values must not be empty");
+  }
+  const lua_Integer initial = luaL_optinteger(L, 4, 1);
+  option.index = initial >= 1 && initial <= count
+                     ? static_cast<size_t>(initial - 1)
+                     : 0;
+  return Lua_Menu_add(L, std::move(option), 5);
+}
+
+// Menu.button(id, label, onClick())
+static int Lua_Menu_button(lua_State *L) {
+  ModOption option;
+  option.type = ModOption::Type::Button;
+  option.id = luaL_checkstring(L, 1);
+  option.label = luaL_checkstring(L, 2);
+  luaL_checktype(L, 3, LUA_TFUNCTION);
+  return Lua_Menu_add(L, std::move(option), 3);
+}
+
+// Menu.get(id): toggle -> boolean; choice -> index, value; senão nil.
+static int Lua_Menu_get(lua_State *L) {
+  const ModOption *option =
+      ModMenu::Find(ModMenu::CurrentMod(), luaL_checkstring(L, 1));
+  if (option == nullptr || option->type == ModOption::Type::Button) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (option->type == ModOption::Type::Toggle) {
+    lua_pushboolean(L, option->enabled ? 1 : 0);
+    return 1;
+  }
+  lua_pushinteger(L, static_cast<lua_Integer>(option->index + 1));
+  lua_pushstring(L, option->index < option->values.size()
+                        ? option->values[option->index].c_str()
+                        : "");
+  return 2;
+}
+
+// Menu.set(id, value): toggle recebe boolean; choice recebe o índice. Não
+// chama o callback.
+static int Lua_Menu_set(lua_State *L) {
+  ModOption *option =
+      ModMenu::Find(ModMenu::CurrentMod(), luaL_checkstring(L, 1));
+  if (option == nullptr) {
+    return luaL_error(L, "Menu.set: unknown option");
+  }
+  if (option->type == ModOption::Type::Toggle) {
+    option->enabled = lua_toboolean(L, 2) != 0;
+  } else if (option->type == ModOption::Type::Choice) {
+    const lua_Integer index = luaL_checkinteger(L, 2);
+    if (index < 1 || index > static_cast<lua_Integer>(option->values.size())) {
+      return luaL_error(L, "Menu.set: index out of range");
+    }
+    option->index = static_cast<size_t>(index - 1);
+  }
+  ModMenu::MarkDirty();
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // LuaEngine Implementation
 // ---------------------------------------------------------------------------
 bool LuaEngine::Initialize() {
@@ -569,6 +679,20 @@ void LuaEngine::RegisterBindings() {
   lua_pushcfunction(s_L, Lua_UI_notify);
   lua_setfield(s_L, -2, "notify");
   lua_setglobal(s_L, "UI");
+
+  // Tabela Menu
+  lua_createtable(s_L, 0, 5);
+  lua_pushcfunction(s_L, Lua_Menu_toggle);
+  lua_setfield(s_L, -2, "toggle");
+  lua_pushcfunction(s_L, Lua_Menu_choice);
+  lua_setfield(s_L, -2, "choice");
+  lua_pushcfunction(s_L, Lua_Menu_button);
+  lua_setfield(s_L, -2, "button");
+  lua_pushcfunction(s_L, Lua_Menu_get);
+  lua_setfield(s_L, -2, "get");
+  lua_pushcfunction(s_L, Lua_Menu_set);
+  lua_setfield(s_L, -2, "set");
+  lua_setglobal(s_L, "Menu");
 }
 
 int LuaEngine::TracebackHandler(lua_State *L) {

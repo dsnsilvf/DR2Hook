@@ -4,10 +4,15 @@
 
 namespace dr2hook {
 
-// Reaproveita o item oculto reset_view do menu de pausa como "DR2 ModLoader".
+// Reaproveita o item oculto reset_view do menu de pausa como "DR2 Hook".
 // Exige MinHook já inicializado. Não faz nada se o executável não bater.
 bool InstallPauseMenuHooks();
+// O core abre o overlay no próximo frame.
+void RequestPauseMenuActivation();
 bool ConsumePauseMenuActivation();
+// Reenvia o texto dos BTextStatic de um item da UI, que volta a passar pela
+// busca de idioma. Só na thread da UI (a fila de comandos não tem trava).
+void RefreshItemText(uintptr_t item);
 
 } // namespace dr2hook
 

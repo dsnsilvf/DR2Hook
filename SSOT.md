@@ -1,6 +1,6 @@
 # DR2 ModLoader v0.1.0 — Single Source of Truth (SSOT) & Especificação Arquitetural
 
-> **Versão do Documento:** 1.1.0  
+> **Versão do Documento:** 1.2.0  
 > **Status:** Estável / Homologado (v0.1.0)  
 > **Repositório:** `DR2ModLoader`  
 > **Alvo:** DiRT Rally 2.0 (`dirtrally2.exe` - 64-bit / DirectX 11 / EGO Engine)
@@ -31,39 +31,34 @@ O **DR2 ModLoader v0.1.0** é um framework de modding e hook nativo para o *DiRT
 
 ```mermaid
 graph TD
-    A[dirtrally2.exe] -->|Carrega DLL proxy| B[dxgi.dll Proxy]
-    B -->|Thread dedicada| C[DR2 ModLoader Core]
-    B -->|Encaminha chamadas legítimas| SYS[dxgi.dll Original de System32]
-    
-    subgraph Core Engine
-        C --> D[MinHook Engine]
+    A[dirtrally2.exe] -->|Carrega DLL proxy| B[dxgi.dll residente]
+    B -->|Encaminha chamadas legítimas| SYS[dxgi.dll de System32]
+    B --> HK[Present, WndProc, MinHook, NetworkGuard]
+    B -->|LoadLibrary de uma cópia| C[dr2hook_core.dll]
+    F8[F8 ou Reload Native Core] -->|Shutdown, FreeLibrary, LoadLibrary| C
+
+    subgraph Core recarregável
         C --> E[Safety Gate Fail-Closed]
-        C --> NET[NetworkGuard ws2_32.dll Detours]
-        C --> F[Memory & Pointer Chain Resolver]
-        C --> G[DX11 Present & WndProc Hook]
+        C --> F[Memory e telemetria]
+        C --> UI[Dear ImGui Overlay]
+        C --> H[Lua 5.4]
     end
-    
-    subgraph Interface & Overlay
-        G --> UI[Dear ImGui Overlay v0.1.0]
-        UI --> TAB1[Diagnostics Tab: RPM 0x13d8 rad/s, Gear 0x1448, Kinematics]
-        UI --> TAB2[Mods Tab: Loaded Scripts & Status]
-        UI --> TAB3[Practice Mode Tab: Normal vs Momentum]
-    end
-    
-    subgraph Execution & Scripts
-        G -->|A cada frame / onTick| H[Lua 5.4 Runtime Engine]
-        E -->|Valida se modo é seguro| H
-        H --> I[mods/practice_mode/main.lua]
-        H --> J[mods/outros_mods/...]
-    end
+
+    UI --> TAB1[Diagnostics: RPM 0x13d8 rad/s, marcha 0x1448, corte 0x140c]
+    UI --> TAB2[Mods: scripts e os dois reloads]
+    UI --> TAB3[Practice Mode: Normal e Momentum]
+    E -->|Valida sessão offline| H
+    H --> I[mods/practice_mode/main.lua]
 ```
 
 ### Componentes do Sistema
-- **Proxy Layer (`src/proxy/dxgi_proxy.cpp`):** Proxy DLL `dxgi.dll` que intercepta o carregamento do jogo sem injetores externos, repassando chamadas via `GetProcAddress` para a DLL genuína de `System32`.
+- **Proxy Layer (`src/proxy/dxgi_proxy.cpp`):** Proxy DLL `dxgi.dll` que intercepta o carregamento do jogo sem injetores externos, repassando chamadas via `GetProcAddress` para a DLL genuína de `System32`. Permanece mapeada o tempo todo.
+- **Host (`src/core/host.cpp`):** Carrega `dr2hook_core.dll` por `LoadLibrary` numa cópia (`dr2hook_core.N.dll`) para o arquivo original poder ser substituído. `F8` faz shutdown, `FreeLibrary` e carrega a cópia nova.
 - **Core Hooking (`src/core/hooks.cpp`):**
-  - Hook em `IDXGISwapChain::Present` para sincronização com o ciclo de renderização do jogo.
-  - Hook na `WndProc` da janela do DiRT Rally 2.0 para interceptação de atalhos (`Insert`, `F5`, `F6`, `F7`).
-- **Network Isolation (`src/core/network_guard.cpp`):** Detours em `ws2_32.dll` (`getaddrinfo`, `connect`, `sendto`) garantindo isolamento total contra trapaças online.
+  - Hook em `IDXGISwapChain::Present` para sincronização com o ciclo de renderização do jogo. O detour fica na `dxgi.dll` e chama o core.
+  - Hook na `WndProc` da janela do DiRT Rally 2.0 para interceptação de atalhos (`Insert`, `F5`, `F6`, `F7`, `F8`).
+- **Core recarregável (`src/core/core_module.cpp`):** Overlay, telemetria, savestate e mods. É o que o `F8` troca.
+- **Network Isolation (dentro de `src/core/hooks.cpp`, na `dxgi.dll`):** Detours em `ws2_32.dll` (`getaddrinfo`, `GetAddrInfoW`, `connect`). Nomes que não sejam localhost e conexões fora de `127.0.0.0/8` e do loopback IPv6 são recusados. `sendto` não é interceptado, então telemetria UDP local continua possível. O isolamento não vai para o módulo recarregável: um `F8` não o desliga.
 - **Safety Gate (`src/core/safety.cpp`):** Módulo de controle de segurança que inspeciona ponteiros e estados de sessão sob política *fail-closed*.
 - **Memory Engine (`src/core/memory.cpp` & `player.cpp`):** Resolução da cadeia de ponteiros do veículo e leitura da telemetria em tempo real.
 - **Scripting Engine (`src/script/lua_engine.cpp` & `mod_manager.cpp`):** Runtime Lua 5.4 com sandboxing e gerenciamento automático da pasta `/mods`.
@@ -104,10 +99,13 @@ graph TD
 | `+0x918` | `float` (4B) | Rotação de potência máxima, em RPM (ex.: `5500.0f`). Não é o corte |
 | `+0x140c` | `float` (4B) | Corte de giro em rad/s (ex.: `785.398` = `7500` RPM) |
 | `+0x1448` | `int32` (4B) | **Marcha engatada** (`0` = neutro, `1..n` = à frente, `10` = ré) |
-| `+0x1680` | `WheelRig` | Roda Dianteira Esquerda (Front-Left) |
-| `+0x1aa0` | `WheelRig` | Roda Dianteira Direita (Front-Right) |
-| `+0x1ec0` | `WheelRig` | Roda Traseira Esquerda (Rear-Left) |
-| `+0x22e0` | `WheelRig` | Roda Traseira Direita (Rear-Right) |
+| `+0x1680` | `WheelRig` | Traseira esquerda (RL). `float32` de `[rig + 0x1504] × 1000` é o `suspension_position` UDP. |
+| `+0x1aa0` | `WheelRig` | Traseira direita (RR). Escalar em `rig + 0x1924`. |
+| `+0x1ec0` | `WheelRig` | Dianteira esquerda (FL). Escalar em `rig + 0x1d44`. |
+| `+0x22e0` | `WheelRig` | Dianteira direita (FR). Escalar em `rig + 0x2164`. |
+| `+0x2cf0` | `byte[4]` | Estado do pneu e da roda, um byte por canto, na ordem RL, RR, FL, FR. `0` intacto, `1` furado, `2` só o aro, `3` roda solta. Fora do bloco de `0x420`. |
+
+A ordem dos quatro blocos é RL, RR, FL, FR. A captura documentada em `docs/reverse_engineering/suspension.md` iguala, em `float32`, cada `suspension_position` do UDP a mil vezes o escalar do bloco. O rótulo antigo tinha os eixos trocados. `+0x1660` é o deslocamento desse ponto no referencial do mundo: a rotação, pelo quatérnion do chassi, do vetor em `+0x1480` com o Y reduzido por `+0x14e8`, mais `[+0x1504] * Up`. Não é a posição de mundo. O vetor em `+0x1480` é o ponto do eixo no referencial do chassi: o setup guarda o lado esquerdo em `rig + 0x5a0` (dianteiro) e `rig + 0x5b0` (traseiro), e `0x140750f20` copia esse ponto, com o X negado na roda direita. `+0x14e8` é o escalar vertical do mesmo bloco, um por eixo, subtraído desse Y. O fechamento dessas contas está em `docs/reverse_engineering/suspension.md` e `docs/reverse_engineering/vehicle_setup.md`. O byte em `rig + 0x2cf0 + i` é o estado do pneu e da roda, fechado em `docs/reverse_engineering/tyres.md`: `0` intacto, `1` furado, `2` só o aro (escala `0.5` em `objeto + 0x268` e escalar vertical copiado de `objeto + 0x3c`), `3` roda solta. O escritor `0x1407636b0` sobe esse byte e não o altera quando ele já é `3` ou mais. `+0x00` é o Up compartilhado, `+0x20` é o Right, e `+0x30` é o Forward que fecha essa base (`Right_roda × Up_roda`). `+0x10` é outra direção, por roda, no mundo; o laço em `dirtrally2.exe + 0x140739f44` a usa como normal do plano no quociente `dot(+0x10, q) / dot(+0x10, +0x00)`, gravado em `objeto + 4*(j + 4*i) + 0x13c`. Esse objeto está embutido em `PhysicsRig + 0x11a0`; a tabela fica em `rig + 0x12dc`. A álgebra é a interseção da reta ao longo de `+0x00` com esse plano. O nome físico do plano não está fechado. O escritor do valor inclinado de `+0x10` e o leitor da tabela continuam em aberto.
 
 ---
 
@@ -134,8 +132,12 @@ graph TD
   - Overlay DX11 completo acionado por `Insert`, organizado em abas: Diagnostics, Mods e Practice Mode.
   - Interface padronizada em inglês e adaptada à paleta de cores neutra do DiRT Rally 2.0.
 - [x] **Fase 6: Validação, Testes Automatizados e Lançamento**
-  - Suíte de 1.765 testes cobrindo hooks, memória, Lua, safety e overlay.
-  - Scripts de compilação automatizada `build_release.sh` e verificação `verify_release.sh`.
+  - Suítes de memória, Lua, overlay e soak. O pacote de release inclui `dxgi.dll` e `dr2hook_core.dll`.
+  - Verificação em `scripts/verify_release.sh` e empacotamento em `scripts/package_release.sh`.
+- [x] **Fase 7: Core nativo recarregável**
+  - `dxgi.dll` permanece mapeada (proxy, MinHook, `Present`, `WndProc`, `NetworkGuard`, log).
+  - `dr2hook_core.dll` concentra overlay, telemetria, savestate e Lua.
+  - `F8` copia o arquivo do disco para `dr2hook_core.N.dll`, descarrega o módulo anterior e carrega a cópia. O checkpoint em memória é descartado.
 
 ---
 
@@ -147,6 +149,7 @@ graph TD
 - **ADR-004:** Normalização de suspensão estática (sag 0.35) e atenuação inercial controlada.
 - **ADR-005:** Isolamento de rede mandatório via Winsock hooks (`ws2_32.dll`) para eliminar risco de trapaças online.
 - **ADR-006:** Restauração de checkpoint em modo duplo: Normal (estacionário) vs. Com Momentum (preservação cinética completa).
+- **ADR-007:** Core nativo recarregável. Hooks e proxy ficam na `dxgi.dll`. Overlay, telemetria, savestate e Lua ficam em `dr2hook_core.dll`, trocada em runtime por `F8`.
 
 ---
 
@@ -160,5 +163,7 @@ graph TD
 | **Isolamento de Rede** | Bloqueio de conexões online para RaceNet | ✅ 100% das requisições DNS/TCP abortadas |
 | **Savestate Normal** | Restauração estável sem ejeção da pista | ✅ Aprovado com sag estático e amortecimento |
 | **Savestate Momentum** | Preservação fiel de velocidade e rotação angular | ✅ Dinâmica contínua em curvas e saltos |
-| **Testes Automatizados**| 100% de testes unitários passando | ✅ 1.765 asserções validadas sem falhas |
+| **Testes Automatizados**| 100% de testes unitários passando | ✅ Suítes de memória, Lua, overlay e soak em `scripts/verify_release.sh` |
 | **Encerramento Limpo** | Fechamento do jogo sem travar o processo | ✅ Threads limpas sem vazamento de recursos |
+
+A caixa-preta de sessão (`scripts/dr2rec`, manual em `docs/BLACKBOX.md`) observa uma sessão local e analisa o `.dr2cap` depois. Não escreve memória e não altera o isolamento de rede desta especificação.

@@ -4,6 +4,7 @@
 #include "dr2hook/safety.h"
 #include "dr2hook/script/lua_engine.h"
 #include "dr2hook/script/mod_manager.h"
+#include "dr2hook/script/mod_menu.h"
 
 #include "lauxlib.h"
 #include "lua.h"
@@ -473,6 +474,146 @@ void TestPracticeModeModEndToEnd() {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. API Menu (opções da tela nativa)
+// ---------------------------------------------------------------------------
+void TestMenuBindings() {
+  std::cout << "[RUN] TestMenuBindings..." << std::endl;
+  TEST_ASSERT(dr2hook::LuaEngine::Initialize(), "LuaEngine inicializa");
+  dr2hook::ModMenu::Clear();
+
+  TEST_ASSERT(!dr2hook::LuaEngine::ExecuteString(R"(Menu.toggle("a", "A"))"),
+              "Menu fora de um mod falha");
+
+  dr2hook::ModMenu::SetCurrentMod("test.menu");
+  const bool okDeclare = dr2hook::LuaEngine::ExecuteString(R"(
+    Menu.toggle("tyres", "Indestructible tyres", false)
+    Menu.choice("mode", "Restore mode", {"Normal", "Momentum"}, 2)
+    Menu.button("save", "Save checkpoint", function() end)
+    assert(Menu.get("tyres") == false)
+    local index, value = Menu.get("mode")
+    assert(index == 2 and value == "Momentum")
+    assert(Menu.get("save") == nil)
+    Menu.set("tyres", true)
+    Menu.set("mode", 1)
+    assert(Menu.get("tyres") == true)
+    assert(select(2, Menu.get("mode")) == "Normal")
+  )");
+  TEST_ASSERT(okDeclare, "declara, le e grava opcoes");
+
+  const auto *options = dr2hook::ModMenu::OptionsOf("test.menu");
+  TEST_ASSERT(options != nullptr && options->size() == 3, "tres opcoes registradas");
+  TEST_ASSERT(options != nullptr && (*options)[0].DisplayLabel() == "Indestructible tyres: On",
+              "rotulo do toggle reflete Menu.set");
+
+  TEST_ASSERT(!dr2hook::LuaEngine::ExecuteString(R"(Menu.choice("x", "X", {}))"),
+              "choice sem valores falha");
+  TEST_ASSERT(!dr2hook::LuaEngine::ExecuteString(R"(Menu.button("x", "X"))"),
+              "button sem funcao falha");
+  TEST_ASSERT(!dr2hook::LuaEngine::ExecuteString(R"(Menu.set("missing", true))"),
+              "set de opcao inexistente falha");
+  const bool okFill = dr2hook::LuaEngine::ExecuteString(R"(
+    for i = 4, 24 do Menu.toggle("extra" .. i, "Extra " .. i) end
+  )");
+  TEST_ASSERT(okFill, "ate 24 opcoes");
+  TEST_ASSERT(!dr2hook::LuaEngine::ExecuteString(R"(Menu.toggle("more", "More"))"),
+              "opcao alem do limite falha");
+
+  dr2hook::ModMenu::Clear();
+}
+
+void TestPracticeModeNativeMenu() {
+  std::cout << "[RUN] TestPracticeModeNativeMenu..." << std::endl;
+
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+  constexpr uintptr_t vehicleAddr = 0x140700000;
+  constexpr uintptr_t sessionModeAddr = 0x140800000;
+
+  dr2hook::CarState startState{};
+  startState.position = {12.5f, 34.5f, 56.5f};
+  mock.SetValue(vehicleAddr, startState);
+  mock.SetValue(sessionModeAddr,
+                static_cast<uint32_t>(dr2hook::GameSessionMode::DirtFish));
+  dr2hook::Player::Configure(&scanner, vehicleAddr);
+  dr2hook::SafetyGuard::Configure(&scanner, sessionModeAddr);
+
+  TEST_ASSERT(dr2hook::ModManager::Initialize("mods"), "ModManager inicializa");
+  const auto &mods = dr2hook::ModManager::GetLoadedMods();
+  size_t practice = mods.size();
+  for (size_t i = 0; i < mods.size(); ++i) {
+    if (mods[i].id == "dr2.practice_mode") {
+      practice = i;
+    }
+  }
+  TEST_ASSERT(practice < mods.size(), "mod de pratica carregado");
+  if (practice >= mods.size()) {
+    dr2hook::ModManager::Shutdown();
+    return;
+  }
+
+  const auto labels = [](const dr2hook::ModMenuEntry &entry) {
+    std::vector<std::string> out;
+    for (const dr2hook::ModOption &option : entry.options) {
+      out.push_back(option.DisplayLabel());
+    }
+    return out;
+  };
+  const auto entries = dr2hook::ModManager::MenuSnapshot();
+  const std::vector<std::string> expected = {
+      "Save checkpoint",
+      "Restore checkpoint",
+      "Restore mode: Normal",
+      "Clear checkpoint on new stage: On",
+      "Indestructible tyres: Off",
+      "Indestructible car: Off",
+      "Notifications: On",
+  };
+  TEST_ASSERT(entries.size() == mods.size() && entries[practice].name == "Practice Mode",
+              "nome do mod no menu");
+  TEST_ASSERT(entries.size() == mods.size() && !entries[practice].description.empty(),
+              "descricao do mod no menu");
+  TEST_ASSERT(entries.size() == mods.size() && labels(entries[practice]) == expected,
+              "opcoes do mod de pratica, na ordem declarada");
+
+  // Salvar pelo menu (A no botao), desligar a limpeza ao iniciar especial pelo
+  // combo (indice 0) e restaurar.
+  dr2hook::ModManager::DispatchMenuEvent(practice, 0, -1);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 3, 0);
+  dr2hook::CarState moved = startState;
+  moved.position = {555.0f, 444.0f, 333.0f};
+  mock.SetValue(vehicleAddr, moved);
+  dr2hook::ModManager::DispatchStageStart("Hawkes Bay - New Zealand");
+  dr2hook::ModManager::DispatchMenuEvent(practice, 1, -1);
+
+  dr2hook::CarState memCheck{};
+  mock.Read(vehicleAddr, &memCheck, sizeof(dr2hook::CarState));
+  TEST_ASSERT_FLOAT_NEAR(memCheck.position.x, 12.5f, 0.001f,
+                         "restaura pelo menu com a limpeza desligada");
+
+  dr2hook::ModManager::DispatchMenuEvent(practice, 2, 1);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 4, -1);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 6, 7);
+  const auto after = dr2hook::ModManager::MenuSnapshot();
+  const auto afterLabels = labels(after[practice]);
+  TEST_ASSERT(afterLabels[2] == "Restore mode: Momentum", "combo escolhe o valor do choice");
+  TEST_ASSERT(afterLabels[3] == "Clear checkpoint on new stage: Off", "combo desliga o toggle");
+  TEST_ASSERT(afterLabels[4] == "Indestructible tyres: On", "A avanca o toggle");
+  TEST_ASSERT(afterLabels[6] == "Notifications: On", "indice fora dos valores ignorado");
+  TEST_ASSERT(after[practice].options[2].ValueNames() ==
+                  std::vector<std::string>({"Normal", "Momentum"}),
+              "valores do combo no snapshot");
+  TEST_ASSERT(dr2hook::ModMenu::TakeDirty(), "menu marcado para republicar");
+
+  dr2hook::ModManager::DispatchMenuEvent(practice, 99);
+  dr2hook::ModManager::DispatchMenuEvent(mods.size() + 5, 0);
+  TEST_ASSERT(true, "indices fora do intervalo sao ignorados");
+
+  dr2hook::ModManager::Shutdown();
+  TEST_ASSERT(dr2hook::ModMenu::OptionsOf("dr2.practice_mode") == nullptr,
+              "shutdown limpa as opcoes");
+}
+
+// ---------------------------------------------------------------------------
 // 8. Despacho Concorrente de Eventos (Thread-Safety)
 // ---------------------------------------------------------------------------
 void TestConcurrentEventDispatch() {
@@ -572,6 +713,8 @@ int main() {
   TestRegistryCaching();
   TestModErrorIsolationAndDeactivation();
   TestPracticeModeModEndToEnd();
+  TestMenuBindings();
+  TestPracticeModeNativeMenu();
   TestConcurrentEventDispatch();
 
   std::cout << "====================================================="

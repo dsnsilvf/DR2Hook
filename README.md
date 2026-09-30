@@ -15,6 +15,7 @@ Rally stages are long. A corner you want to drill can sit ten minutes into the s
 | **F5** | Save a checkpoint: position, orientation, linear velocity, and angular velocity. |
 | **F6** | Restore **Normal**. The car returns to the saved pose, speeds are cleared, and the suspension is settled so it starts stable. |
 | **F7** | Restore **With Momentum**. Position and orientation come back, and so do the linear and angular velocity from the moment you saved. |
+| **F8** | Reload `dr2hook_core.dll` from disk. The game stays open. The in-memory checkpoint is cleared. |
 
 The same controls are on the **Practice Mode** tab of the overlay.
 
@@ -24,17 +25,17 @@ Writes only run in offline practice sessions: DirtFish, offline time trial, and 
 
 **Insert** toggles the menu.
 
-- **Diagnostics** — engine and drivetrain (RPM, gear, speed), position, linear and angular velocity, suspension contact on all four wheels, and whether the player, container, and physics rig pointers are live.
-- **Mods** — scripts loaded from `mods/`, with version, running state, and hot reload.
+- **Diagnostics** — engine and drivetrain (live RPM from the crank, gear, redline, speed), position, linear and angular velocity, suspension contact on all four wheels, and whether the player, container, and physics rig pointers are live.
+- **Mods** — scripts loaded from `mods/`. **Reload Scripts** restarts Lua only. **Reload Native Core (F8)** replaces `dr2hook_core.dll`.
 - **Practice Mode** — save, restore, and choose Normal or With Momentum.
 
 ## Install
 
-Build `dxgi.dll` (see below) and copy it, together with the `mods/` folder, into the game directory:
+Build `dxgi.dll` and `dr2hook_core.dll` (see below) and copy both, together with the `mods/` folder, into the game directory:
 
 `[SteamLibrary]/steamapps/common/DiRT Rally 2.0/`
 
-The game loads `dxgi.dll` on startup. Calls are forwarded to the real `dxgi.dll` in `System32`. No external injector is required.
+The game loads `dxgi.dll` on startup. Calls are forwarded to the real `dxgi.dll` in `System32`. That proxy then loads `dr2hook_core.dll` from the same folder. No external injector is required.
 
 Step-by-step notes for Windows and Linux / Steam Deck are in [docs/INSTALL.md](docs/INSTALL.md).
 
@@ -42,18 +43,26 @@ Step-by-step notes for Windows and Linux / Steam Deck are in [docs/INSTALL.md](d
 
 Requirements: CMake 3.20 or newer, and either MinGW-w64 (Linux cross-compile) or Visual Studio 2022 (MSVC, x64, C++20).
 
-Linux (runs the unit tests, then builds the release DLL):
+Linux, full check (unit tests, then the release package):
 
 ```bash
-bash build_release.sh
+bash scripts/verify_release.sh
 ```
+
+Linux, release DLLs only:
+
+```bash
+bash scripts/package_release.sh
+```
+
+The package contains `dxgi.dll`, `dr2hook_core.dll`, and `mods/`. Both binaries are statically linked (no `libstdc++` or `libgcc` next to the game).
 
 Windows:
 
 ```bash
 mkdir build && cd build
 cmake .. -A x64
-cmake --build . --config Release
+cmake --build . --config Release --target dxgi --target dr2hook_core
 ```
 
 ## Writing a mod
@@ -87,32 +96,40 @@ Player.setState(saved, "momentum")   -- keeps linear and angular velocity
 
 `Player.setPosition`, `Player.setVelocity`, and `Player.setState` are checked in native C++ before any write. If the session is not a known offline practice mode, or if the session cannot be read, the write is rejected.
 
-The full API is in [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md). Pointer maps and offsets are in [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md).
+The full API is in [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md). Pointer maps and offsets are in [docs/reverse_engineering/README.md](docs/reverse_engineering/README.md).
+
+## Vehicle black box
+
+`scripts/dr2rec` records a local session and analyzes it afterwards. The capture stores raw bytes. Naming stays on fields that are already confirmed. It does not write game memory and it does not touch RaceNet. The manual is [docs/BLACKBOX.md](docs/BLACKBOX.md).
 
 ## How it is put together
 
 ```
 dirtrally2.exe
-    └── dxgi.dll          proxy; forwards to System32, starts the loader
-            ├── Present + WndProc hooks   overlay and per-frame tick
-            ├── Lua 5.4                   mods/ scripts
-            ├── SafetyGuard               rejects memory writes outside offline practice
-            └── NetworkGuard              refuses remote sockets; see Fair play
+    └── dxgi.dll          stays loaded: DXGI proxy, Present, WndProc, NetworkGuard
+            └── dr2hook_core.dll    overlay, telemetry, Lua, savestate (F8 reloads this file)
 ```
 
 | Path | Role |
 | --- | --- |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
-| `src/core/hooks.cpp` | DirectX 11 `Present`, window procedure, and Winsock hooks |
+| `src/core/hooks.cpp` | DirectX 11 `Present`, window procedure, and Winsock hooks. These stay resident |
+| `src/core/host.cpp` | Loads `dr2hook_core.dll` and reloads it on F8 |
+| `src/core/core_module.cpp` | Reloadable entry: frame, input, init, shutdown |
 | `src/core/safety.cpp` | Fail-closed session check |
 | `src/core/player.cpp` | Vehicle telemetry and checkpoint restore |
 | `src/script/` | Lua runtime and mod loading |
 | `src/ui/overlay.cpp` | ImGui overlay |
 | `docs/` | Install guide, modding guide, reverse-engineering notes, architecture decisions |
 
+`F8` (or **Reload Native Core** on the Mods tab) shuts the core down, unloads it, and loads a fresh copy. Replace `dr2hook_core.dll` next to `dirtrally2.exe` and press `F8`. The host copies that file to `dr2hook_core.N.dll` before loading it, so the build can overwrite `dr2hook_core.dll` while the game is running. The in-memory checkpoint is cleared, and Lua starts over (`onInit` runs again). `F8` is consumed by the proxy and does not reach mods.
+
+Changes to `dxgi.dll` itself still need a restart. The proxy, MinHook, `Present`, `WndProc`, and `NetworkGuard` stay mapped.
+
 ## Status
 
 - Proxy DLL with dynamic forward to `System32` (no `.def` dependency)
+- Reloadable `dr2hook_core.dll` (`F8`) for overlay, telemetry, savestate, and Lua
 - `Present` and `WndProc` hooks, ImGui overlay
 - Fail-closed safety gate and mandatory network refusal
 - Lua 5.4 sandbox with `Player`, `Safety`, and `UI` bindings
@@ -131,7 +148,7 @@ Two checks enforce that, and both are documented here on purpose. Nothing in thi
 - `connect` to any address outside `127.0.0.0/8` and IPv6 loopback returns `WSAECONNREFUSED` (10061). The game sees a refused connection. The call is not dropped silently and the destination is not rewritten.
 - Localhost is left alone, so local tools (SimHub, motion rigs, telemetry on `127.0.0.1`) still work.
 
-There is no menu option and no script API to turn this off. Online play returns only after you exit the game and remove `dxgi.dll`.
+There is no menu option and no script API to turn this off. Online play returns only after you exit the game and remove `dxgi.dll` and `dr2hook_core.dll`.
 
 **Memory writes.** `SafetyGuard` re-checks the session on every write. Position, velocity, and full-state restores are allowed only in DirtFish, offline time trial, and custom offline championships. An unknown mode, a failed read, or a missing pointer is treated as “not allowed”.
 

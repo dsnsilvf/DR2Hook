@@ -183,6 +183,9 @@ A primeira versão fechou o jogo no carregamento da especial, com violação de 
 
 1. Item "DR2 ModLoader" no lugar do item 9. Implementado em `src/core/pause_menu.cpp` e validado no jogo.
 2. Tela totalmente personalizada, aberta por esse item. `options` é um evento que o dispatcher `0x140285640` não trata, então vira uma transição de fluxo e abre `ui.options_ingame`, outra tela `smart_hub`. As telas, os estados e esse link estão nos dados do jogo, descritos em [UI Data](ui_data.md). A cadeia no executável e o ponto de leitura dos dados estão no mesmo documento. A versão atual altera os dados no boot: o item 9 passa a vir dos dados, com rótulo literal e sem condição de visibilidade, e abre a tela `dr2modloader`. CONFIRMADO no jogo: o item abre a tela nativa em vez do overlay. Os hooks desta página continuam instalados como reserva, para o caso de o patch dos dados falhar ou estar desligado.
+3. Botões da tela nativa: Open overlay, Reload Lua mods, Reload native core e Back. Os eventos são tratados pela DLL no slot `+0x88` do `StateScreenFECore`. CONFIRMADO no jogo: cursor, "Open overlay" e o título pela busca de idioma. Detalhes em [UI Data](ui_data.md#eventos-da-tela).
+4. Item e título renomeados para "DR2 Hook", com as opções declaradas pela API `Menu` do Lua ([guia](../MODDING_GUIDE.md)). A primeira versão tinha três telas `smart_hub` de 8 posições.
+5. Abas nativas "DR2 Hook" e "Mods" (LB/RB), como em Opções > Gráficos, listas com rolagem de até 24 linhas e combos `< valor >` na tela de cada mod. A DLL cria os dados das abas e dos combos no Enter do estado. Implementado e testado fora do jogo; falta validar no jogo. Detalhes e pendências em [UI Data](ui_data.md#telas-do-dr2-hook), [UI Tabs](ui_tabs.md) e [UI Limits](ui_limits.md).
 
 ## Gráficos
 

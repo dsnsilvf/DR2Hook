@@ -192,14 +192,16 @@ const std::vector<uint8_t> *PatchLocked(Document document, const uint8_t *bytes,
     auto *patched = new std::vector<uint8_t>(bxml::Encode(root));
     patched->push_back(0);
     if (document == Document::States) {
-      std::snprintf(note, kNoteSize, "alterado: estado %s, %zu bytes",
-                    ui_patch::kStateId, patched->size());
+      std::snprintf(note, kNoteSize, "alterado: estados %s a %s, %zu bytes",
+                    ui_patch::kHub.stateId, ui_patch::kMod.stateId,
+                    patched->size());
     } else if (document == Document::Flow) {
       std::snprintf(note, kNoteSize,
-                    "alterado: link em %zu no(s) com options, %zu bytes",
+                    "alterado: hub e mod em %zu no(s) com options, %zu bytes",
                     linkedNodes, patched->size());
     } else {
-      std::snprintf(note, kNoteSize, "alterado: tela dr2modloader, %zu bytes",
+      std::snprintf(note, kNoteSize, "alterado: host com abas, 2 paginas e tela de mod, "
+                    "%zu bytes",
                     patched->size());
     }
     return patched;
@@ -227,8 +229,8 @@ const std::vector<uint8_t> *Patch(Document document, const void *buffer,
         OutcomeOf(Document::Flow) == Outcome::Patched) {
       const size_t used = std::strlen(note);
       std::snprintf(note + used, kNoteSize - used,
-                    " | INCONSISTENTE: flow.bin ja aponta para o estado %s",
-                    ui_patch::kStateId);
+                    " | INCONSISTENTE: flow.bin ja aponta para os estados %s a %s",
+                    ui_patch::kHub.stateId, ui_patch::kMod.stateId);
     }
   }
   OutcomeOf(document) = patched != nullptr ? Outcome::Patched : Outcome::Kept;

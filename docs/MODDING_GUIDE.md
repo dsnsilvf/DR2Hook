@@ -154,6 +154,30 @@ Permite emitir mensagens e avisos visuais na tela através do sistema de notific
 | :--- | :--- | :--- | :--- |
 | `UI.notify(message, duration)` | `message` (string), `duration` (number opcional, padrão `3.0`) | `nil` | Exibe uma notificação toast semi-transparente no canto superior da tela pelo tempo indicado (em segundos). |
 
+### Módulo `Menu`
+Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB troca de aba) > nome do mod**. As chamadas ficam no corpo do `main.lua`, fora dos callbacks. Cada mod tem até 24 opções, numa lista com rolagem, na ordem em que foram declaradas. Declarar de novo o mesmo `id` substitui a opção. Toggle e choice aparecem como `< valor >` e mudam com esquerda e direita. Botões rodam com A. O callback é chamado no quadro seguinte, na thread do `Present`.
+
+| Função | Parâmetros | Retorno | Descrição |
+| :--- | :--- | :--- | :--- |
+| `Menu.toggle(id, label, [default], [onChange])` | `default` boolean, padrão `false`. `onChange(enabled)` | `nil` | Liga e desliga. Rótulo `label: On` ou `label: Off`. |
+| `Menu.choice(id, label, values, [defaultIndex], [onChange])` | `values` lista de strings não vazia. `defaultIndex` começa em `1`. `onChange(index, value)` | `nil` | Avança para o próximo valor e volta ao primeiro depois do último. Rótulo `label: valor`. |
+| `Menu.button(id, label, onClick)` | `onClick()` obrigatório | `nil` | Só chama a função. Rótulo `label`. |
+| `Menu.get(id)` | `id` | toggle: `boolean`. choice: `index, value`. button ou id inexistente: `nil` | Valor atual. |
+| `Menu.set(id, value)` | toggle: `boolean`. choice: índice a partir de `1` | `nil` | Muda o valor sem chamar o callback. Erro se o id não existir ou o índice estiver fora da lista. Com a tela do mod aberta, o combo só mostra o valor novo quando a tela é reaberta. |
+
+Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` chamado fora de um mod (por exemplo, pelo console) geram erro de Lua. No carregamento, o mod é desativado como em qualquer outro erro de carga. Mod desativado aparece na lista como `nome (error)`, sem opções. Os valores não são salvos: voltam ao padrão quando os mods ou o core são recarregados.
+
+```lua
+Menu.toggle("indestructible_tyres", "Indestructible tyres", false, function(enabled)
+    UI.notify("Tyres: " .. tostring(enabled), 2.0)
+end)
+Menu.choice("restore_mode", "Restore mode", {"Normal", "Momentum"}, 1)
+
+function onKeyDown(keyCode)
+    local index, value = Menu.get("restore_mode")
+end
+```
+
 ### Função Global `print(...)`
 - Todas as chamadas a `print(...)` em scripts Lua são interceptadas e redirecionadas para o sistema de log unificado do DR2Hook (`dr2hook.log`), adicionando prefixo `[Lua]`, nível de severidade e timestamping automático.
 
@@ -192,84 +216,104 @@ O princípio nº 1 do DR2 ModLoader é o **Fair Play First**:
 
 ## 6. Exemplo Completo: Mod de Treino (Practice Mode)
 
-Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote:
+Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote. As opções aparecem em **Pausa > DR2 Hook > aba Mods > Practice Mode**. "Indestructible tyres" e "Indestructible car" ainda só mostram um aviso.
 
 ```lua
 -- ========================================================================
--- DR2 ModLoader: Practice Mode (Practice / Savestate Mod)
+-- DR2 Hook: Practice Mode (Practice / Savestate Mod)
 -- ========================================================================
 
 local savedState = nil
+local restoreModes = { "Normal", "Momentum" }
+
+local function notify(text, duration)
+    if Menu.get("notifications") then
+        UI.notify(text, duration)
+    end
+end
+
+local function saveCheckpoint()
+    if Safety.isRestrictedMode() then
+        notify("Savestate blocked in competitive/official modes!", 3.0)
+        return
+    end
+
+    savedState = Player.getState()
+    if savedState ~= nil then
+        notify("Checkpoint saved!", 2.0)
+        print(string.format("[Practice Mode] Checkpoint saved at: (%.2f, %.2f, %.2f)",
+            savedState.position.x, savedState.position.y, savedState.position.z))
+    else
+        notify("Save failed: vehicle unavailable!", 2.5)
+        print("[Practice Mode] Failed to capture vehicle state.")
+    end
+end
+
+-- mode: "normal" (stationary) or "momentum"
+local function restoreCheckpoint(mode)
+    if Safety.isRestrictedMode() then
+        notify("Restore blocked in competitive modes!", 3.0)
+        return
+    end
+
+    if savedState == nil then
+        notify("No checkpoint saved yet! Press F5 first.", 2.5)
+        print("[Practice Mode] No saved checkpoint available.")
+        return
+    end
+
+    local label = mode == "momentum" and "With Momentum" or "Normal"
+    if Player.setState(savedState, mode) then
+        notify("Returning to checkpoint (" .. label .. ")...", 1.5)
+        print("[Practice Mode] Checkpoint restored (" .. mode .. ").")
+    else
+        notify("Failed to restore checkpoint in memory!", 2.5)
+        print("[Practice Mode] Failed to apply vehicle state (" .. mode .. ").")
+    end
+end
+
+local function selectedRestoreMode()
+    local _, value = Menu.get("restore_mode")
+    return value == "Momentum" and "momentum" or "normal"
+end
+
+local function comingSoon(feature)
+    return function(enabled)
+        notify(feature .. (enabled and " enabled" or " disabled") .. " (coming soon)", 2.5)
+    end
+end
+
+-- Native menu: Pause > DR2 Hook > Mods > Practice Mode
+Menu.button("save_checkpoint", "Save checkpoint", saveCheckpoint)
+Menu.button("restore_checkpoint", "Restore checkpoint", function()
+    restoreCheckpoint(selectedRestoreMode())
+end)
+Menu.choice("restore_mode", "Restore mode", restoreModes, 1)
+Menu.toggle("clear_on_stage_start", "Clear checkpoint on new stage", true)
+Menu.toggle("indestructible_tyres", "Indestructible tyres", false,
+    comingSoon("Indestructible tyres"))
+Menu.toggle("indestructible_car", "Indestructible car", false,
+    comingSoon("Indestructible car"))
+Menu.toggle("notifications", "Notifications", true)
 
 function onInit()
     print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")
 end
 
 function onStageStart(stage)
-    -- Clear saved checkpoint when a new stage begins
-    savedState = nil
+    if Menu.get("clear_on_stage_start") then
+        savedState = nil
+    end
     print("[Practice Mode] New stage started: " .. stage.name)
 end
 
 function onKeyDown(keyCode)
-    -- F5 (0x74): Save car position and momentum
-    if keyCode == 0x74 then
-        if Safety.isRestrictedMode() then
-            UI.notify("Savestate blocked in competitive/official modes!", 3.0)
-            return
-        end
-
-        savedState = Player.getState()
-        if savedState ~= nil then
-            UI.notify("Checkpoint saved!", 2.0)
-            print(string.format("[Practice Mode] Checkpoint saved at: (%.2f, %.2f, %.2f)", 
-                savedState.position.x, savedState.position.y, savedState.position.z))
-        else
-            UI.notify("Save failed: vehicle unavailable!", 2.5)
-            print("[Practice Mode] Failed to capture vehicle state.")
-        end
-
-    -- F6 (0x75): Restore position normally (stationary)
-    elseif keyCode == 0x75 then
-        if Safety.isRestrictedMode() then
-            UI.notify("Restore blocked in competitive modes!", 3.0)
-            return
-        end
-
-        if savedState ~= nil then
-            local ok = Player.setState(savedState, "normal")
-            if ok then
-                UI.notify("Returning to checkpoint (Normal)...", 1.5)
-                print("[Practice Mode] Checkpoint restored normally.")
-            else
-                UI.notify("Failed to restore checkpoint in memory!", 2.5)
-                print("[Practice Mode] Failed to apply vehicle state.")
-            end
-        else
-            UI.notify("No checkpoint saved yet! Press F5 first.", 2.5)
-            print("[Practice Mode] No saved checkpoint available.")
-        end
-
-    -- F7 (0x76): Restore with full momentum
-    elseif keyCode == 0x76 then
-        if Safety.isRestrictedMode() then
-            UI.notify("Restore blocked in competitive modes!", 3.0)
-            return
-        end
-
-        if savedState ~= nil then
-            local ok = Player.setState(savedState, "momentum")
-            if ok then
-                UI.notify("Returning to checkpoint (Momentum)...", 1.5)
-                print("[Practice Mode] Checkpoint restored with momentum.")
-            else
-                UI.notify("Failed to restore checkpoint with momentum!", 2.5)
-                print("[Practice Mode] Failed to apply vehicle state.")
-            end
-        else
-            UI.notify("No checkpoint saved yet! Press F5 first.", 2.5)
-            print("[Practice Mode] No saved checkpoint available.")
-        end
+    if keyCode == 0x74 then     -- F5: save car position and momentum
+        saveCheckpoint()
+    elseif keyCode == 0x75 then -- F6: restore stationary
+        restoreCheckpoint("normal")
+    elseif keyCode == 0x76 then -- F7: restore with full momentum
+        restoreCheckpoint("momentum")
     end
 end
 ```

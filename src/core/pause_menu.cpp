@@ -1,5 +1,6 @@
 #include "dr2hook/pause_menu.h"
 #include "dr2hook/host.h"
+#include "dr2hook/native_screen.h"
 
 #include <MinHook.h>
 #include <atomic>
@@ -30,7 +31,7 @@ constexpr uint8_t kApplyTextBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55,
 constexpr const char kVisibilityPath[] = "ui.pause_menu.reset_view_available";
 constexpr const char kEventName[] = "reset_view";
 constexpr const char kOriginalKey[] = "lng_vr_reset_view";
-constexpr const char kLabel[] = "DR2 ModLoader";
+constexpr const char kLabel[] = "DR2 Hook";
 constexpr size_t kMaxChildren = 16;
 
 using PredicateFn = bool (*)(void *condition);
@@ -150,9 +151,28 @@ void RelabelInPlace(uintptr_t textBinding) {
   *explicitFlag = 1;
 }
 
+// Condições das posições das telas dr2hook: o nó de dados não existe, então
+// quem decide é native_screen.cpp. Só se lê o caminho dentro da imagem.
+bool NativeSlotVisibility(uintptr_t condition, bool &hidden) {
+  if (Field<uintptr_t>(condition, 0) != g_base + kConditionVtableRva) {
+    return false;
+  }
+  const auto path = Field<uintptr_t>(condition, 0xa0);
+  if (path < g_base || path >= g_imageEnd) {
+    return false;
+  }
+  return NativeScreenVisibility(reinterpret_cast<const char *>(path),
+                                g_imageEnd - path,
+                                Field<uintptr_t>(condition, 0x10), hidden);
+}
+
 bool DetourPredicate(void *condition) {
-  const bool hidden = g_originalPredicate(condition);
+  NativeScreenTick();
+  bool hidden = g_originalPredicate(condition);
   const auto self = reinterpret_cast<uintptr_t>(condition);
+  if (NativeSlotVisibility(self, hidden)) {
+    return hidden;
+  }
   if (!IsOwnCondition(self)) {
     return hidden;
   }
@@ -164,7 +184,7 @@ bool DetourPredicate(void *condition) {
 bool DetourDispatch(void *screen, const char *eventName) {
   if (eventName != nullptr && g_hijacked.load(std::memory_order_relaxed) &&
       std::strcmp(eventName, kEventName) == 0) {
-    g_activationPending.store(true);
+    RequestPauseMenuActivation();
     return true;
   }
   return g_originalDispatch(screen, eventName);
@@ -218,7 +238,7 @@ bool InstallPauseMenuHooks() {
       !Matches(kPredicateRva, kPredicateBytes, sizeof(kPredicateBytes)) ||
       !Matches(kDispatchRva, kDispatchBytes, sizeof(kDispatchBytes)) ||
       !Matches(kApplyTextRva, kApplyTextBytes, sizeof(kApplyTextBytes))) {
-    HostLog("PauseMenu: executavel diferente do esperado; item DR2 ModLoader "
+    HostLog("PauseMenu: executavel diferente do esperado; item DR2 Hook "
             "desativado.");
     return false;
   }
@@ -232,8 +252,30 @@ bool InstallPauseMenuHooks() {
     return false;
   }
 
-  HostLog("PauseMenu: item DR2 ModLoader instalado no menu de pausa.");
+  HostLog("PauseMenu: item DR2 Hook instalado no menu de pausa.");
   return true;
+}
+
+void RequestPauseMenuActivation() { g_activationPending.store(true); }
+
+void RefreshItemText(uintptr_t item) {
+  if (g_originalApplyText == nullptr || !IsReadable(item, 0x1d0) ||
+      Field<uintptr_t>(item, 0) != g_base + kItemVtableRva) {
+    return;
+  }
+  const auto begin = Field<uintptr_t>(item, 0x1c0);
+  const auto end = Field<uintptr_t>(item, 0x1c8);
+  if (end <= begin || (end - begin) / 8 > kMaxChildren ||
+      !IsReadable(begin, end - begin)) {
+    return;
+  }
+  for (uintptr_t slot = begin; slot < end; slot += 8) {
+    const auto child = Field<uintptr_t>(slot, 0);
+    if (IsReadable(child, 0x38) &&
+        Field<uintptr_t>(child, 0) == g_base + kStaticTextVtableRva) {
+      g_originalApplyText(reinterpret_cast<void *>(child));
+    }
+  }
 }
 
 bool ConsumePauseMenuActivation() {

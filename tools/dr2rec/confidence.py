@@ -1,0 +1,15 @@
+"""Rótulos de confiança. Hipótese não vira fato."""
+
+CONFIRMED = "CONFIRMED"
+STRONG = "STRONG EVIDENCE"
+PROBABLE = "PROBABLE"
+POSSIBLE = "POSSIBLE"
+UNKNOWN = "UNKNOWN"
+
+RANK = {
+    CONFIRMED: 5,
+    STRONG: 4,
+    PROBABLE: 3,
+    POSSIBLE: 2,
+    UNKNOWN: 1,
+}

@@ -62,6 +62,7 @@ add_library(dxgi SHARED
     src/core/hooks.cpp
     src/core/logger.cpp
     src/core/pause_menu.cpp
+    src/core/native_screen.cpp
     src/core/ui_data.cpp
     src/core/bxml.cpp
     src/core/ui_patch.cpp
@@ -83,6 +84,7 @@ add_library(dr2hook_core SHARED
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
+    src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
     ${IMGUI_BACKEND_SOURCES}
     ${LUA_SOURCES}
@@ -178,6 +180,7 @@ add_executable(test_lua_engine
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
+    src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
     ${LUA_SOURCES}
 )
@@ -218,6 +221,7 @@ add_executable(test_overlay
     src/core/savestate.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
+    src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
     ${LUA_SOURCES}
 )
@@ -258,6 +262,7 @@ add_executable(test_stability_soak
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
+    src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
     ${LUA_SOURCES}
 )
@@ -295,6 +300,14 @@ add_executable(test_ui_patch
 )
 
 target_include_directories(test_ui_patch PRIVATE include)
+
+# Alvo de teste executável local: opções de mod da tela nativa (sem Lua)
+add_executable(test_mod_menu
+    tests/test_mod_menu.cpp
+    src/script/mod_menu.cpp
+)
+
+target_include_directories(test_mod_menu PRIVATE include)
 
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release

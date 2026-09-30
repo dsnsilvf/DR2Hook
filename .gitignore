@@ -30,3 +30,8 @@ out/
 *.log
 *.tmp
 crashdump.dmp
+captures/
+
+# Python
+__pycache__/
+*.py[cod]

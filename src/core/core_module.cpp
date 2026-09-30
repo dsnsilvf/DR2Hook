@@ -5,6 +5,7 @@
 #include "dr2hook/safety.h"
 #include "dr2hook/savestate.h"
 #include "dr2hook/script/mod_manager.h"
+#include "dr2hook/script/mod_menu.h"
 #include "dr2hook/ui/overlay.h"
 
 #include <d3d11.h>
@@ -15,16 +16,78 @@ dr2hook::DirectMemoryAccessor g_directAccessor;
 dr2hook::MemoryScanner g_memoryScanner(&g_directAccessor);
 bool g_notifyReload = false;
 
+using ConsumeFn = int (*)();
+
+template <typename Fn> Fn HostExport(const char *name) {
+  const HMODULE host = GetModuleHandleA("dxgi.dll");
+  return host == nullptr ? nullptr
+                         : reinterpret_cast<Fn>(GetProcAddress(host, name));
+}
+
 bool ConsumePauseMenuRequest() {
-  using ConsumeFn = int (*)();
-  static const auto consume = [] {
-    const HMODULE host = GetModuleHandleA("dxgi.dll");
-    return host == nullptr
-               ? nullptr
-               : reinterpret_cast<ConsumeFn>(
-                     GetProcAddress(host, "Dr2Host_ConsumePauseMenuRequest"));
-  }();
+  static const auto consume =
+      HostExport<ConsumeFn>("Dr2Host_ConsumePauseMenuRequest");
   return consume != nullptr && consume() != 0;
+}
+
+bool ConsumeReloadModsRequest() {
+  static const auto consume =
+      HostExport<ConsumeFn>("Dr2Host_ConsumeReloadModsRequest");
+  return consume != nullptr && consume() != 0;
+}
+
+// Cliques da tela nativa de mod vão para o Lua; o menu só é republicado
+// quando uma opção ou a lista de mods muda.
+void SyncNativeMenu() {
+  static const auto publish =
+      HostExport<Dr2HostMenuPublishFn>("Dr2Host_NativeMenuPublish");
+  static const auto consume =
+      HostExport<Dr2HostMenuConsumeEventFn>("Dr2Host_NativeMenuConsumeEvent");
+  int modIndex = 0;
+  int optionIndex = 0;
+  int value = -1;
+  while (consume != nullptr && consume(&modIndex, &optionIndex, &value) != 0) {
+    if (modIndex >= 0 && optionIndex >= 0) {
+      dr2hook::ModManager::DispatchMenuEvent(static_cast<size_t>(modIndex),
+                                             static_cast<size_t>(optionIndex),
+                                             value);
+    }
+  }
+  if (publish == nullptr || !dr2hook::ModMenu::TakeDirty()) {
+    return;
+  }
+  const std::vector<dr2hook::ModMenuEntry> entries =
+      dr2hook::ModManager::MenuSnapshot();
+  std::vector<std::vector<std::string>> names;
+  std::vector<std::vector<const char *>> values;
+  std::vector<std::vector<dr2hook::Dr2MenuOption>> options(entries.size());
+  std::vector<dr2hook::Dr2MenuMod> mods(entries.size());
+  for (const dr2hook::ModMenuEntry &entry : entries) {
+    for (const dr2hook::ModOption &option : entry.options) {
+      names.push_back(option.ValueNames());
+    }
+  }
+  values.reserve(names.size());
+  size_t next = 0;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    for (const dr2hook::ModOption &option : entries[i].options) {
+      std::vector<const char *> &texts = values.emplace_back();
+      for (const std::string &name : names[next++]) {
+        texts.push_back(name.c_str());
+      }
+      const int kind = option.type == dr2hook::ModOption::Type::Toggle
+                           ? dr2hook::kDr2MenuToggle
+                       : option.type == dr2hook::ModOption::Type::Choice
+                           ? dr2hook::kDr2MenuChoice
+                           : dr2hook::kDr2MenuButton;
+      options[i].push_back({option.label.c_str(), texts.data(),
+                            static_cast<int>(texts.size()),
+                            static_cast<int>(option.ValueIndex()), kind});
+    }
+    mods[i] = {entries[i].name.c_str(), entries[i].description.c_str(),
+               options[i].data(), static_cast<int>(options[i].size())};
+  }
+  publish(mods.data(), static_cast<int>(mods.size()));
 }
 
 int Core_Initialize(int truncateLog) {
@@ -97,6 +160,14 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
     if (ConsumePauseMenuRequest()) {
       dr2hook::OverlayManager::SetMenuVisible(true);
     }
+    if (ConsumeReloadModsRequest()) {
+      dr2hook::ModManager::ReloadMods();
+      if (dr2hook::OverlayManager::IsInitialized()) {
+        dr2hook::OverlayManager::AddNotification("Lua mods reloaded.", 3.0f,
+                                                 dr2hook::ToastType::Info);
+      }
+    }
+    SyncNativeMenu();
 
     if (dr2hook::OverlayManager::IsInitialized()) {
       dr2hook::OverlayManager::Render(swapChain);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dr2hook/common.h"
+#include "dr2hook/script/mod_menu.h"
 #include <string>
 #include <vector>
 
@@ -26,8 +27,21 @@ struct ModInstance {
   int refOnRenderUI = LUA_NOREF;
 };
 
+// Um mod como a tela nativa mostra: nome, descrição e cópia das opções.
+struct ModMenuEntry {
+  std::string name;
+  std::string description;
+  std::vector<ModOption> options;
+};
+
 class ModManager {
 public:
+  // Opção `optionIndex` do mod `modIndex` (ordem de GetLoadedMods) na tela
+  // nativa. `value` < 0 é a linha selecionada: o botão chama o callback, e
+  // toggle e choice avançam. `value` >= 0 é o índice novo do combo. O callback
+  // Lua só é chamado quando algo muda ou num botão.
+  static void DispatchMenuEvent(size_t modIndex, size_t optionIndex, int value = -1);
+  static std::vector<ModMenuEntry> MenuSnapshot();
   static bool Initialize(const std::string &modsDirectory = "mods");
   static void Shutdown();
   static void ReloadMods(const std::string &modsDirectory = "mods");

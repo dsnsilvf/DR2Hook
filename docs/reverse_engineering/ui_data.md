@@ -246,26 +246,27 @@ Os documentos são processados em sequência na mesma thread, e a ordem muda de 
 | Sessão | Ordem |
 | :--- | :--- |
 | 1 | `links`, `states`, `flow`, `screens` |
-| 2 e 3 | `flow`, `links`, `states`, `screens`, que é a ordem do `boot_data.xml` |
+| 2 a 4 | `flow`, `links`, `states`, `screens`, que é a ordem do `boot_data.xml` |
+| 5 | `links`, `flow`, `states`, `screens` |
 
 Duas versões falharam por isso, sem dano. Na primeira, `flow` exigia `states` já alterado, então `flow` e `screens` ficaram originais. Na segunda, `flow` esperava `states` por até 3 s, mas `states` só é interpretado depois de `flow` voltar, e o boot atrasou 3 s. Nas duas, só o estado novo entrou, sem uso, e o item seguiu pelos hooks de reserva.
 
 Agora cada patch depende só do próprio documento:
 
-- O id do estado é fixo, `1146224640` (`0x44520000`), livre em `states.bin` e em `flow.bin`. Cada patch recusa se o id já estiver em uso.
-- `flow` põe o link em todo nó com link `options`: 80 nos dados atuais, dos quais 33 são de pausa. Os demais são área de serviço, resultados e o estado de jogo cujo `options` leva à gestão de dispositivos. Nesses nós o link fica inerte, porque só o item da pausa dispara `dr2modloader`.
+- Os ids dos estados são fixos, `1146224640` e `1146224641` (`0x44520000` e `0x44520001`), livres em `states.bin` e em `flow.bin`. Cada patch recusa se um id ou um nome de tela já estiver em uso.
+- `flow` põe o link em todo nó com link `options`: 80 nos dados atuais, dos quais 33 são de pausa. Os demais são área de serviço, resultados e o estado de jogo cujo `options` leva à gestão de dispositivos. Nesses nós o link fica inerte, porque só o item da pausa dispara `dr2hook`.
 
 O detour só compara decisões já tomadas. `flow` fica original se `states` já foi mantido original. `screens` fica original se `states` ou `flow` já foram mantidos. O único caso não coberto é `states` falhar depois de `flow` ter sido alterado; o log marca `INCONSISTENTE`. `test_ui_patch` aplica os três patches nas seis ordens e exige o mesmo resultado.
 
 | Documento | Acréscimo |
 | :--- | :--- |
-| `states.bin` | `<StateScreenFECore id="1146224640" screen_name="dr2modloader"/>`. |
-| `flow.bin` | Em cada nó com link `options`, um `<link id="dr2modloader" target=M/>`. `<node id=M state="1146224640">` fica no mesmo pai do alvo de `options`, com `<link id="back" target=origem type="back"/>`. `M` é o primeiro id livre a partir de `0x0d520000` e fica abaixo de `2^28`. |
-| `screens.bin` | Na `pause_menu`, o item do evento `reset_view` passa a disparar `dr2modloader`, ganha `BTextStatic string="DR2 ModLoader" explicit="true"` e perde o `BVisibilityControlData`. A `Screen id="dr2modloader"` é uma cópia de `options_ingame` com um só item, no mesmo `World`. Esse item dispara `dr2modloader_open_overlay`, que ainda não tem destino. |
+| `states.bin` | Dois `StateScreenFECore`: `1146224640` com `screen_name="dr2hook_hub"` e `1146224641` com `dr2hook_mod`. As páginas das abas não têm estado. |
+| `flow.bin` | Em cada nó de origem `P` com link `options`, um `<link id="dr2hook" target=H/>` e dois nós novos no mesmo pai do alvo de `options`. `H` (hub com abas) tem `dr2hook_nav_mod_0` a `_23` para `M` e `back` para `P`. `M` (tela do mod) tem `back` para `H`. Os ids são os primeiros livres a partir de `0x0d520000`, abaixo de `2^28`. |
+| `screens.bin` | Na `pause_menu`, o item do evento `reset_view` passa a disparar `dr2hook`, ganha `BTextStatic string="DR2 Hook" explicit="true"` e perde o `BVisibilityControlData`. No World de `graphics_calibration` entram o host `dr2hook_hub`, as páginas `dr2hook_page_main` e `dr2hook_page_mods` e a tela `dr2hook_mod`, descritos em [Telas do DR2 Hook](#telas-do-dr2-hook). |
 
-`explicit="true"` em `BTextStatic` é atributo que o jogo já usa (468 ocorrências). O título da tela nova continua o de `options_ingame`.
+`explicit="true"` em `BTextStatic` é atributo que o jogo já usa (468 ocorrências). Não vale para `SBScreenTitle`, que não tem filhos.
 
-Um arquivo `dr2hook_ui_patch.disabled` ao lado da `dxgi.dll` desliga o patch; o detour continua registrando os documentos. Os testes estão em `tests/test_ui_patch.cpp`. Com `DR2_UI_DIR` apontando para os `.bin` extraídos, eles conferem a ida e volta e o patch com os dados reais; `DR2_UI_OUT` grava o resultado. Ainda não validado no jogo.
+Um arquivo `dr2hook_ui_patch.disabled` ao lado da `dxgi.dll` desliga o patch; o detour continua registrando os documentos. Os testes estão em `tests/test_ui_patch.cpp`. Com `DR2_UI_DIR` apontando para os `.bin` extraídos, eles conferem a ida e volta e o patch com os dados reais; `DR2_UI_OUT` grava o resultado.
 
 Como o parser tenta o decodificador de texto quando o binário falha, entregar XML texto no lugar do `.bin` deve funcionar. HIPÓTESE, não testada.
 
@@ -290,7 +291,86 @@ Com os dados, uma tela nova é uma questão de três acréscimos:
 
 CONFIRMADO no jogo, com o patch da seção anterior. Nessa sessão a ordem foi `flow`, `links`, `states`, `screens`, e o log registrou `alterado` nos três documentos: `link em 80 no(s) com options`, `estado 1146224640` e `tela dr2modloader`. Selecionar "DR2 ModLoader" na pausa abriu a tela nativa `dr2modloader` em vez do overlay. O evento do item tem link no grafo, o dispatcher nativo não o trata, e o runner abre a tela sozinho. O hook de `+0x88` deixa de ser necessário para a navegação e fica só como reserva.
 
-Pendências da tela: o título ainda é o de `options_ingame`, e o evento `dr2modloader_open_overlay` do item interno não tem tratador.
+### Eventos da tela
+
+Esta seção e a seguinte descrevem a primeira versão, com uma tela `dr2modloader` e ids `dr2modloader_*`. A versão atual está em [Telas do DR2 Hook](#telas-do-dr2-hook).
+
+| Botão | Evento | Quem trata |
+| :--- | :--- | :--- |
+| Open overlay | `dr2modloader_open_overlay` | DLL: o core abre o overlay no próximo quadro |
+| Reload Lua mods | `dr2modloader_reload_mods` | DLL: o core chama `ModManager::ReloadMods` |
+| Reload native core | `dr2modloader_reload_core` | DLL: o mesmo pedido do F8 |
+| Back | `back` | Fluxo: o link `back` do nó novo volta à pausa |
+
+Análise estática, ainda não validada no jogo. O slot `+0x88` da vtable do `StateScreenFECore` (`0x141256e98`, slot em `0x141256f20`) aponta para `0x140ebb300`, um stub `xor al, al; ret` compartilhado com outras classes. Por isso a DLL troca o ponteiro na vtable em vez de desviar o código. A vtable só é usada pelo `StateScreenFECore`: das 115 classes que passam pelo construtor base, as outras 114 gravam uma vtable própria logo depois. O callback `0x1402d5ad0` limpa a transição pendente, chama o slot com `(estado, const char* nome)` e só chama `0x140215a80` quando o slot devolve falso. O detour (`src/core/native_screen.cpp`) só age quando `estado+8` é `0x44520000` e o nome começa com `dr2modloader_`; devolve verdadeiro e não deixa transição pendente. O resto vai para o stub. Antes de trocar, a DLL confere o valor do slot e os bytes `32 c0 c3` do stub.
+
+Primeiro teste no jogo, em 30/09. O log registrou `NativeScreen: eventos da tela dr2modloader tratados pela DLL.` e os três documentos alterados. O usuário relatou um problema: o cursor não descia para selecionar os outros itens. Nenhum evento `dr2modloader_*` apareceu no log, mas essa versão só registrava evento sem tratador. A versão seguinte registra `NativeScreen: evento <nome>` a cada botão tratado. No teste seguinte, com um id por linha, o cursor desceu pelos quatro botões, e o log registrou `NativeScreen: evento dr2modloader_open_overlay`. Segundo o usuário, só o título continuava "Opções".
+
+A causa do cursor está no formato da grade, e não no tratador. O texto de `SBGridItemFlow` descreve a grade de navegação: cada linha do texto é uma linha da grade, e ids separados por espaço na mesma linha viram colunas. CONFIRMADO pelos dados:
+
+- `options_ingame` e `pause_menu` têm um id por linha (`\r\n item_0\r\n item_1 ...`).
+- Das 82 grades de `screens.bin`, 15 têm mais de um id por linha, como `spare_new0 spare_new1 spare_new2 spare_new3`.
+
+O patch montava `" item_0 item_1 item_2 item_3 "`, uma linha com quatro colunas, e por isso para baixo não tinha destino. HIPÓTESE: esquerda e direita teriam trocado de item. Agora o patch gera um id por linha, e `test_ui_patch` exige isso. O parser da grade no executável não foi desmontado.
+
+`back` já é o evento do botão de voltar do controle (`SBHotButtonScreenEvent event_primary="back"`), gravado no mesmo `data_path="event"`. Por isso um item com `select_value="back"` deve voltar pelo mesmo link.
+
+### Título
+
+O título da tela nativa vem de uma chave própria, `lng_dr2modloader_title`, que a DLL responde na busca da tabela de idioma. CONFIRMADO no jogo: o título mostrou "DR2 MODLOADER".
+
+- Sem `override_data_path`, `SBScreenTitle` lê o `string_id` (RefString em `+0x50`) em `0x1401b4b70` e chama `0x140d010c0(RefString** saída, provider, const char* chave)`.
+- O provider é o serviço `neon::NeLanguageStringHandler` (índice em `[0x142018ba8]`, vtable `0x14126a2f0`). O slot `+8` é `0x1403a8820`: `const char* Lookup(handler, const char* chave)`. Ele devolve um ponteiro UTF-8 para o texto dentro da tabela carregada, ou nulo. Ao vivo, `lng_options_ingame_title` deu `OPÇÕES`, `lng_pause_menu_title` deu `MENU DE PAUSA`, e `lng_dr2modloader_title` não existe.
+- `0x140d010c0` copia o texto devolvido para uma RefString nova (`0x140d36360`), com o alocador do jogo. Por isso a DLL pode devolver um buffer estático sem alocar nada.
+- Com a chave ausente e o flag `[0x14169539c]` em `0`, o jogo mostra `<lng_dr2modloader_title>`. Se isso aparecer, o hook não foi instalado.
+- O formato `localise_upper` busca a chave com o sufixo `_caps`; a DLL responde as duas.
+
+O patch troca só o `string_id` do `SBScreenTitle` da tela clonada. A DLL (`src/core/native_screen.cpp`) põe um hook MinHook em `0x1403a8820`, depois de conferir 24 bytes de prólogo (`48 89 5c 24 10 48 89 6c 24 18 56 48 83 ec 20 48 8b 99 88 00 00 00 48 8b`). O texto é `DR2 MODLOADER`, em maiúsculas como os outros títulos. A busca é chamada a cada texto traduzido, então o filtro olha o primeiro caractere antes do `strcmp`.
+
+Caminho descartado: gravar a string `ui.dr2modloader.<caminho>` no modelo de dados, com `override_data_path` e `override_format_id="explicit"`. `0x140d08770` recebe um binding e uma RefString, não um caminho. `0x14011eba0` copia o texto com o alocador do store (`0x14011eaa0`), e `0x140816210` é o "último erro" do jogo em TLS, não uma tag de memória. Funcionaria chamando o setter com o binding do override (`SBScreenTitle+0x40`, acessor em `[+8]`, caminho internado em `acessor+0x40`) e uma RefString estática com refcount 2, mas exige mais peças que a busca de idioma.
+
+### Telas do DR2 Hook
+
+Versão atual: abas nativas e listas com rolagem, no molde de Opções > Gráficos. A primeira versão desta seção usava três telas `smart_hub` de 8 posições, sem rolagem e com o valor dentro do rótulo; foi substituída.
+
+| Tela | Molde | Estado | Conteúdo |
+| :--- | :--- | :--- | :--- |
+| `dr2hook_hub` | `graphics_calibration` (`smart_screen_tabbed`) | `1146224640` | Só o `SBTabGroup`, sem `requested_index_check_data_path`. |
+| `dr2hook_page_main` (aba "DR2 Hook") | `basic_graphics` (`smart_screen`) | nenhum | Botões literais Open overlay, Reload Lua mods e Reload native core. |
+| `dr2hook_page_mods` (aba "Mods") | `basic_graphics` | nenhum | 24 linhas `button`, chave `lng_dr2hook_mod_N`, evento `dr2hook_nav_mod_N`. |
+| `dr2hook_mod` | `basic_graphics` | `1146224641` | 24 linhas `toggle_15col` com `IBComboTextData` (`dr2hook_opt_N.index`, `dr2hook_opt_N.list[%u]`, `list_value_format_id="explicit"`) e `IBSelectableSimple` (`dr2hook_do_opt_N`). |
+
+As páginas das abas usam `data_parent_override="dr2hook_hub"`: os eventos caem em `ui.dr2hook_hub.event`, que o estado do host observa. As quatro telas ficam no World de `graphics_calibration`, que as Opções da pausa já abrem. Das páginas se tira o rodapé `apply`, como em `profile_save_management`. Título (`SBScreenTitle` e o item `title`) e painel da direita (`smart_contextual_info.text_title` e `.text`) usam chaves `lng_dr2hook_*`. A lista do `SBScrollableItemFlow` segue o formato do binário: `\r\n` e 8 espaços antes de cada id, `\r\n` e 6 espaços no fim.
+
+Dados criados pela DLL no slot `+0x80` da vtable do `StateScreenFECore` (`0x141256f18`, stub `0x1406bfe70` `c2 00 00`), trocado só para os dois estados. O Enter `0x1402d2040` chama esse slot uma vez por entrada, antes de abrir a tela. Funções e regras do data store em [UI Tabs](ui_tabs.md#especificação-para-telas-próprias).
+
+| Estado | Nós sob `ui.<tela>` |
+| :--- | :--- |
+| hub | `tabs.info[0..1].screen`/`.label` (nome da página e "DR2 Hook"/"Mods"), `tabs.current_index` (Mods ao voltar da tela de um mod, senão 0), `dr2hook_slot_N` (int, visibilidade de reserva) |
+| mod | `dr2hook_opt_N.list[]` (textos do combo; ao menos um, vazio, para a lista nunca ficar vazia), `dr2hook_opt_N.index` (int tipo 5), `dr2hook_vis_N` |
+
+Eventos, no detour de `+0x88`, só nos dois estados:
+
+| Evento | Tratamento |
+| :--- | :--- |
+| `dr2hook_do_overlay`, `dr2hook_do_reload_mods`, `dr2hook_do_reload_core` | DLL. Devolve verdadeiro. |
+| `dr2hook_do_opt_N` (A) | Só em botão: enfileira `(mod, N, -1)`. Em toggle e choice o valor muda só pelo combo. |
+| `dr2hook_nav_mod_N` | Com `N` abaixo do número de mods, guarda o mod selecionado e a aba Mods para a volta, e devolve falso para o runner seguir o link. Sem mod, consome. |
+| `back` | Fluxo. |
+
+O combo grava o índice no nó sem gerar evento. O hook do predicado `0x140d09380`, que roda na thread da UI, chama `NativeScreenTick` no máximo a cada 15 ms. Com a tela de mod aberta, ele trava o store, acha cada `ui.dr2hook_mod.dr2hook_opt_N.index` por hash (`0x140c815e0`), lê o int em `nó+0x30` e enfileira `(mod, N, índice)` quando muda. Quando a raiz some, na saída do estado, a leitura para. O hash reimplementado é conferido contra o `Path` em `estado+0x40`; se não bater, o log avisa e a leitura fica desligada.
+
+Visibilidade: cada linha dinâmica tem `BVisibilityControlData data_path="dr2hook_slot_N"` (ou `dr2hook_vis_N`) com `watch_data="false"` e sem `glyph`. O hook do predicado esconde as linhas além do número de mods ou de opções quando `+0xa0` aponta, dentro da imagem, para `ui.dr2hook_hub.dr2hook_slot_N` ou `ui.dr2hook_mod.dr2hook_vis_N`. A linha `0` nunca some. Se o caminho não cair na imagem, vale o int que a DLL grava no nó. Quando o modelo muda, a DLL reaplica o texto do item com `ApplyText`.
+
+Textos: a busca de idioma responde `lng_dr2hook_*`, com ou sem `_caps`, a partir do modelo publicado pelo core em `Dr2Host_NativeMenuPublish`. Linha sem mod ou sem opção fica vazia; a linha `0` mostra "No mods loaded" ou "This mod has no options".
+
+Testado fora do jogo (`test_ui_patch` com os arquivos reais, `test_mod_menu`, `test_lua_engine`). No jogo, falta ver: a faixa de abas e LB/RB sem estado de abas, as páginas abertas por nome, `button` e `toggle_15col` fora das telas de origem, `IBComboTextData` com a lista criada pela DLL, `IBSelectableSimple` num combo, as 24 linhas com rolagem, a leitura do índice por hash e a visibilidade.
+
+### Itens com valor
+
+Toggle e lista usam `IBComboTextStatic data_path=... value_list="a;b"`. Nos dados, `value_list` é sempre uma lista de chaves `lng_` (48 usos). `explicit_string` não aparece em nenhum combo dos dados, mas o executável tem a string ao lado de `value_list`. Que ele torne os valores literais é HIPÓTESE. Como a busca de idioma já é nossa, chaves `lng_dr2hook_*` na `value_list` bastam. `IBComboTextData` (90 usos) tira a lista de `list_value_data_path="x.list[%u]"`, preenchida pelo C++. Ao apertar `< >`, `0x140d58a60` chama o setter `0x140d08350`: sem o nó ele devolve `0x57` e nada muda; com o nó grava e notifica os observadores, sem gerar `event`. A DLL precisa observar o nó ou lê-lo a cada quadro. CONFIRMADO no executável ([UI Tabs](ui_tabs.md#combos)). O slider usa `IBSlider`. Nos três, o valor mora num nó do modelo de dados que tem de existir: o setter de índice `0x140d08350` recusa nó ausente. Os objetos `toggle_15col` e `nub_slider_labelled_15col` aparecem só em telas `smart_screen`, e `smart_hub` só usa `smart_hub_button_5col`. PROVÁVEL que exijam trocar o molde e criar os nós pela DLL, e gravar o valor pelo setter do jogo (`0x14011eba0` e parecidos) na thread do jogo.
+
+`SBDataDeclarator` (8 telas) declara nós do modelo de dados na própria tela: `<data data_path="selected_option_index" type="int" value="0"/>`, com os tipos `int`, `string`, `double` e `sign`. Em `replay` e `spectator` há a variante `<dataItems><data id=... type=... value=.../>`. É o candidato para criar `ui.<tela>.<caminho>` dos combos sem a DLL, de modo que o setter `0x140d08350` não recuse. HIPÓTESE, a testar. Hoje nenhum combo dos dados depende só de dados: os `data_path` são preenchidos por estados C++.
 
 Há dois atalhos sem mexer nos dados, os dois só por análise estática:
 
@@ -299,10 +379,34 @@ Há dois atalhos sem mexer nos dados, os dois só por análise estática:
 
 Montar a tela, o estado e o nó direto na memória (chamando `0x140d1f3f0` com elementos fabricados) é caro e frágil. Injetar nos dados, antes que o Coordinator e o carregador de `World` os leiam, reaproveita o caminho que o jogo já usa.
 
-Em aberto:
+### Abas e listas com rolagem
 
-- **Como entregar os dados sem mexer na pasta do jogo.** Não há evidência de que arquivos soltos tenham prioridade. O executável tem um `PATCH_MANAGER` e monta pacotes `info_*.nefs`, o que sugere substituição entre pacotes. HYPOTHESIS. A alternativa na DLL é interceptar a leitura de `system/*.bin` e devolver o buffer modificado, ou alterar a árvore depois que o parser a monta. A função que lê esses arquivos ainda não foi localizada.
-- **Texto literal.** `BTextStatic` provavelmente traduz a chave. Um rótulo literal deve precisar de `BTextData ... format_id="explicit"` com um `data_path` gravado pela DLL. HYPOTHESIS.
+Há dois mecanismos de abas. Nenhuma das 38 telas com abas usa um estado genérico. CONFIRMADO nos dados e no executável:
+
+| Mecanismo | Telas | Quem define as abas |
+| :--- | :--- | :--- |
+| `SBTabGroup` (host `smart_screen_tabbed`, ex. `graphics_calibration`) | 35 | O behaviour é genérico: desenha a faixa, trata LB/RB e abre a página pelo nome lido em `tabs.info[i].screen`. O estado C++ só cria esses nós. Em `StateScreenGraphicsCalibration`, o CreateTabs `0x1402cecd0` carrega pares `{lng_basic_graphics_tab_label, basic_graphics}` (strings em `0x141259358`/`0x141259378`) e cria um controlador de página de `0xc0` bytes por aba. Nos dados, nada liga o host às páginas. Detalhes em [Abas no executável](ui_tabs.md). |
+| `SBScreenTabControl` (host `smart_results_tabbed` ou `service_area`) | 6 | Os dados: `<tab screen_id=... title=... enable_data_path=.../>`. A página é uma `Screen` no mesmo `World`, com `glyph="results_set_library.switch"` e `data_parent_override` apontando para o host. Os `screen_id` usados, como `time_trial_results_splits`, não existem no executável. |
+
+Atributos do `SBScreenTabControl` que o parser conhece: `max_visible_tabs`, `hide_single_tab`, `tab_transition_blocks_input`, `stacker_glyph`, `stacker_tab_glyph`, `tab_label_glyph_path`, `tab_highlight_glyph_path`, `screen_id`, `show_icon`, `button_extras_item_id`, `num_enabled_out`, `tooltip_*`, `button_l` e `button_r`. Que o comportamento troque a página e trate LB/RB sem o estado dono é HIPÓTESE, forte pelos atributos `button_l`/`button_r`. As páginas de resultado têm 12 linhas (`"0"` a `"11"`, `scroller_glyph="scroller"`).
+
+Lista com rolagem, como em Gráficos. CONFIRMADO:
+
+- A tela é `object="smart_screen"`. Cada linha é um `Item glyph="smart_set.N.switch"` com `IBStackItem` e `BSwitchStatic object="toggle_15col"`. A tela tem `SBItemStack glyph="smart_set.stacker"`, e o rodapé `apply` usa `smart_set.switch_footer` e `IBScrollTargetOverride fallback_direction="up"`.
+- `<SBScrollableItemFlow wrapV="true" scroller_glyph="smart_set.scroller">` aparece 33 vezes, sempre assim. No binário os ids ficam um por linha, separados por CRLF, como na grade: `"\r\n        item_0\r\n        item_1 ..."` em `basic_graphics`. O `screens.xml` convertido mostra tudo numa linha, mas isso é artefato da conversão. Dos 80 textos de fluxo, 66 são listas com um id por linha e 14 são grades com colunas ([limites](ui_limits.md)).
+- `advanced_graphics` usa `smart_set.0` a `.28`: 29 posições mais o rodapé. É o maior índice em `smart_screen`.
+- Nenhuma `smart_screen` é aberta por `StateScreenFECore`. Que ele abra uma `smart_screen` clonada é HIPÓTESE, forte, porque o estado só abre a tela pelo nome.
+- `SBDynamicItemFlow` (lista virtualizada com `top_index_data_path`, `view_size_data_path`, `list_size_data_path` e 12 linhas `view[N]`) depende do C++ para preencher.
+
+Caminhos, do mais viável ao menos:
+
+1. **`smart_screen` com rolagem e combos, abas por LB/RB sem faixa visual.** Clonar `basic_graphics` e usar até 29 linhas `toggle_15col` com `IBComboTextStatic`, `value_list` de chaves `lng_dr2hook_*` e `SBDataDeclarator` para os índices. A DLL lê o índice no modelo de dados. Falta verificar: se o `SBDataDeclarator` cria o nó e o combo gira, se o `StateScreenFECore` abre `smart_screen`, e se o `toggle_15col` responde sem o C++ de gráficos.
+2. **Abas nativas com `SBScreenTabControl`.** Um host clonado de `time_trial_p2p_results`, com as abas "DR2 Hook" e "Mods" apontando para páginas clonadas de `time_trial_results`. Falta verificar se o comportamento troca as páginas sozinho e se `toggle_15col` funciona dentro do slot `smart_results_set`.
+3. **`SBTabGroup`, igual a Gráficos.** Host clonado de `graphics_calibration` com `StateScreenFECore`, e páginas `smart_screen` com `data_parent_override` apontando para o host, para que `event` caia em `ui.<host>.event`. A DLL cria `tabs.info[i].screen`, `.label` e `tabs.current_index` num hook do slot `+0x80` (`0x141256f18`, hoje o stub `0x1406bfe70`), chamado pelo Enter `0x1402d2040` antes de abrir a tela. Mais trabalho que os outros, mas é a faixa de abas de verdade. Ver [Abas no executável](ui_tabs.md#como-seria-na-nossa-tela). É o caminho implementado, descrito em [Telas do DR2 Hook](#telas-do-dr2-hook).
+
+### Em aberto
+
+- **Arquivos soltos ou pacotes.** Resolvido na DLL pelo detour do parser. Não há evidência de que arquivos soltos tenham prioridade, e o `PATCH_MANAGER` com pacotes `info_*.nefs` continua só HYPOTHESIS.
 - **Posições do `smart_hub`.** O `pause_menu` usa `smart_set.0` a `smart_set.10`. Não se sabe se existe `smart_set.11` na cena PSSG. Por isso o item da pausa continua sendo o `item_9`.
 - **Ids.** Os ids de estado e de nó não são CRC32 dos nomes. Ainda não se sabe se o jogo exige alguma relação entre id e nome.
 - **Alguns `.pssg` grandes** saem da extração alguns KB menores que o tamanho declarado. Deve haver um tipo de bloco que a ferramenta não trata. Os `.bin` e os `.xml` batem exatamente.
