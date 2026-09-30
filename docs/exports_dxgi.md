@@ -68,8 +68,9 @@ Invocação de I/O em disco, chamadas a `LoadLibrary` ou sincronização complex
 | `DXGIDeclareAdapterRemovalSupport` | `HRESULT WINAPI ()` | DXGI 1.6 | Repassa para ponteiro genuíno de `System32\dxgi.dll` com log DEBUG. | Retorna `DXGI_ERROR_UNSUPPORTED` e loga ERROR se ponteiro nulo. |
 | `Dr2Host_RequestReload` | `void ()` | — | Marca o pedido de reload. O `Present` da proxy, no frame seguinte, troca o core. | Não faz nada se o core ainda não foi carregado. O pedido fica pendente. |
 | `Dr2Host_Log` | `void (int level, const char* message)` | — | Log da `dxgi.dll`. Níveis: `0` info, `1` warn, `2` error, `3` debug. O core encaminha `Logger::*` para cá. | Mensagem nula vira string vazia. |
+| `Dr2Host_ConsumePauseMenuRequest` | `int ()` | — | Devolve `1` uma vez por ativação do item `DR2 ModLoader` no menu de pausa e limpa o pedido. O core chama a cada quadro e abre o overlay. | Devolve `0` sem pedido ou se os hooks do menu não foram instalados. |
 
-O jogo só importa os cinco exports DXGI. `Dr2Host_RequestReload` e `Dr2Host_Log` existem para o `dr2hook_core.dll` chamar a proxy por `GetProcAddress`, sem link estático entre as duas DLLs.
+O jogo só importa os cinco exports DXGI. `Dr2Host_RequestReload`, `Dr2Host_Log` e `Dr2Host_ConsumePauseMenuRequest` existem para o `dr2hook_core.dll` chamar a proxy por `GetProcAddress`, sem link estático entre as duas DLLs.
 
 ---
 

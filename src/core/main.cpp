@@ -2,6 +2,7 @@
 #include "dr2hook/hooks.h"
 #include "dr2hook/host.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/pause_menu.h"
 #include "dr2hook/proxy.h"
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
@@ -15,6 +16,7 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
     }
     if (dr2hook::InitializeHooks()) {
       dr2hook::HostLog("Hooks principais inicializados com sucesso.");
+      dr2hook::InstallPauseMenuHooks();
     } else {
       dr2hook::HostLog("Falha ao inicializar hooks principais.");
     }

@@ -61,6 +61,7 @@ add_library(dxgi SHARED
     src/core/host.cpp
     src/core/hooks.cpp
     src/core/logger.cpp
+    src/core/pause_menu.cpp
     vendor/minhook/src/buffer.c
     vendor/minhook/src/hook.c
     vendor/minhook/src/trampoline.c

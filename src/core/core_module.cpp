@@ -15,6 +15,18 @@ dr2hook::DirectMemoryAccessor g_directAccessor;
 dr2hook::MemoryScanner g_memoryScanner(&g_directAccessor);
 bool g_notifyReload = false;
 
+bool ConsumePauseMenuRequest() {
+  using ConsumeFn = int (*)();
+  static const auto consume = [] {
+    const HMODULE host = GetModuleHandleA("dxgi.dll");
+    return host == nullptr
+               ? nullptr
+               : reinterpret_cast<ConsumeFn>(
+                     GetProcAddress(host, "Dr2Host_ConsumePauseMenuRequest"));
+  }();
+  return consume != nullptr && consume() != 0;
+}
+
 int Core_Initialize(int truncateLog) {
   try {
     dr2hook::Logger::Init("dr2hook.log", truncateLog != 0);
@@ -81,6 +93,10 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
           reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     }
     dr2hook::ModManager::DispatchTick(deltaTime);
+
+    if (ConsumePauseMenuRequest()) {
+      dr2hook::OverlayManager::SetMenuVisible(true);
+    }
 
     if (dr2hook::OverlayManager::IsInitialized()) {
       dr2hook::OverlayManager::Render(swapChain);
