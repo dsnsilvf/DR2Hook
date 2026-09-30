@@ -63,8 +63,9 @@ Instalação **obrigatória** com tick start, integrator e commit: falha de pró
 
 - **Ficheiro:** `dr2hook_physics_tick_harness_YYYYMMDD_HHMMSS.csv` (novo ficheiro por sessão, **sem append**).
 - **Contador `tick`:** `s_tickCounter` (`uint64_t`, monotônico), incrementado em **B2** (tick start).
+- **Self-test `in_stage_ticks`:** `s_inStageTickCounter` — só incrementa em **B2** quando a cadeia `car → container → rig` é válida (mesmo critério do CSV); **PASS ≥ 600** usa este contador, não `s_tickCounter`.
 - **Contador `step`:** `s_stepCounter`, incrementado na **entrada de H3** (`0x140dbc500`, physics step). Linhas de H3/H4/H5 e dos boundaries B/M partilham o `tick` do ciclo actual; o `step` reflecte o último physics step visto na thread.
-- **Cada boundary** chama `LogBoundarySample` → uma linha no CSV (após validação da cadeia do jogador).
+- **Cada boundary** chama `LogBoundarySample` → linhas bufferizadas (`kCsvFlushRowBatch` = 32) e flush em shutdown / fim do self-test (sem `flush` por linha).
 - **Filtro:** só regista se a cadeia `car → container → rig` do jogador for válida (`+0x12c0 == rig`, `+0x12d0 == 4`).
 - **Cadeia:** `[exe + 0x1681ce8]` → `car`; `car + 0x30` → `container`; `container + 0x08` → `rig`.
 
@@ -106,12 +107,12 @@ Todas as lin CSV incluem `thread_id` (`GetCurrentThreadId`) e ponteiros `contain
 
 **Critério PASS (self-test):**
 
-1. Hooks obrigatórios instalados: **B2 (tick_start)**, **M2/H6 (integrator)**, **commit**, **frame_loop**.
-2. **`in_stage_ticks` ≥ 600** (contador monotónico em tick start).
+1. Hooks obrigatórios instalados: **B2 (tick_start)**, **M2/H6 (integrator)**, **commit**, **frame_loop** (trampoline MinHook **não nulo** — instalação falha se `*orig_trampoline == nullptr`).
+2. **`in_stage_ticks` ≥ 600** (`s_inStageTickCounter`, só com cadeia rig válida em B2).
 
-O log e `dr2hook_physics_harness_self_test.log` incluem `result=PASS` ou `result=FAIL`, contagem de **re-entrancy** (nested `OnBoundary`) e **sham_writes** (escritas enfileiradas executadas sem alterar memória).
+O log e `dr2hook_physics_harness_self_test.log` incluem `result=PASS` ou `result=FAIL`, contagem de **re-entrancy** (nested `OnBoundary`) e **sham_writes** (escritas enfileiradas **e** exercício sham in-game em cada boundary com fila de write durante self-test).
 
-**Sham-write:** com self-test activo, `ExecuteScheduledWriteIfDue` consome a fila, regista `sham-write` no log e **nunca** chama `memcpy` para o rig. `ScheduleWrite` continua a aceitar enfileiramento para validar o caminho.
+**Sham-write:** com self-test activo, `ExecuteScheduledWriteIfDue` consome a fila via `PerformShamWrite` (sem `memcpy`). Em cada boundary com writes permitidos, `InvokeSelfTestShamWritePath` chama o mesmo caminho in-game (cadeia rig válida).
 
 **CSV extra:** após os escalares do rig, `container_vec4_0xC930_{x,y,z,w}` e `rig_vec4_0x290_{x,y,z,w}`.
 
@@ -149,8 +150,11 @@ Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatóri
 Os detours expostos ao MinHook são **thunks em assembly** (`physics_harness_detour_x64.S`): guardam **RCX/RDX/R8/R9** e **XMM0–XMM3** antes do logging C++, chamam o trampoline original com o mesmo estado de argumentos (preservando **`dt` em XMM1** no tick start / integrator), e depois do retorno restauram **RAX** e **XMM0** antes de devolver ao caller do jogo.
 
 - O ponteiro `DetourOps` fica em **r12** (callee-saved), não em r11 (clobbered por syscalls / `GetAsyncKeyState`).
+- **`Frame`** começa em **`rsp+0x20`**, acima dos **32 bytes** de shadow/home space Win64 (`rsp+0x00..0x1F`) usados pelos `call` C++; offsets em `physics_harness_detour_abi.h` (`static_assert` alinhados com o `.S`).
 - **`Frame::caller_return`** recebe o endereço de retorno do caller original (`[rsp]` na entrada do thunk), usado pelos filtros **M2/H6** no `after` do integrator (não usar `__builtin_return_address` no handler).
 - O corpo comum do thunk declara **`.seh_proc` / `.seh_pushreg` / `.seh_stackalloc` / `.seh_endprologue`** para gerar unwind info (`.pdata`).
+- Leituras da cadeia `car → rig` e amostras CSV usam **`VirtualQuery`** (fail-closed) antes de `memcpy`.
+- O trampoline original **nunca é omitido**: se MinHook devolver ponteiro nulo, **`TryInstall` falha**.
 
 ## API
 

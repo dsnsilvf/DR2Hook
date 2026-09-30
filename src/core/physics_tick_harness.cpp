@@ -64,6 +64,7 @@ HookInstallRecord s_hookInstallRecords[kHookSiteCount] = {};
 size_t s_hookInstallRecordCount = 0;
 
 std::atomic<uint64_t> s_tickCounter{0};
+std::atomic<uint64_t> s_inStageTickCounter{0};
 std::atomic<uint64_t> s_stepCounter{0};
 std::atomic<uint64_t> s_boundaryFireCounts[20] = {};
 
@@ -81,6 +82,9 @@ std::atomic<bool> s_practiceKeyF7{false};
 std::mutex s_csvMutex;
 std::ofstream s_csvStream;
 bool s_csvHeaderWritten = false;
+std::string s_csvRowBuffer;
+size_t s_csvBufferedRowCount = 0;
+constexpr size_t kCsvFlushRowBatch = 32;
 
 struct ScheduledWrite {
   bool active = false;
@@ -291,6 +295,109 @@ void BumpBoundaryFire(PhysicsHarnessBoundary boundary) {
 void LogSelfTestReport(bool afterObservationWindow);
 
 bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
+                        uintptr_t *outRig);
+
+#if defined(_WIN32)
+bool IsCommittedReadable(uintptr_t address, size_t size) {
+  if (address < 0x10000 || size == 0 || address + size < address) {
+    return false;
+  }
+  if (address > 0x00007FFFFFFFFFFFULL) {
+    return false;
+  }
+  MEMORY_BASIC_INFORMATION info{};
+  if (VirtualQuery(reinterpret_cast<const void *>(address), &info,
+                   sizeof(info)) == 0) {
+    return false;
+  }
+  constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE |
+                              PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                              PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+  const auto regionEnd =
+      reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+  return info.State == MEM_COMMIT && (info.Protect & kReadable) != 0 &&
+         (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 &&
+         address + size <= regionEnd;
+}
+#else
+bool IsCommittedReadable(uintptr_t address, size_t size) {
+  return address >= 0x10000 && size > 0 && address + size >= address;
+}
+#endif
+
+bool TryReadU64(uintptr_t address, uint64_t *out) {
+  if (out == nullptr) {
+    return false;
+  }
+  if (!IsCommittedReadable(address, sizeof(uint64_t))) {
+    return false;
+  }
+  std::memcpy(out, reinterpret_cast<const void *>(address), sizeof(uint64_t));
+  return true;
+}
+
+bool TryReadU32(uintptr_t address, uint32_t *out) {
+  if (out == nullptr) {
+    return false;
+  }
+  if (!IsCommittedReadable(address, sizeof(uint32_t))) {
+    return false;
+  }
+  std::memcpy(out, reinterpret_cast<const void *>(address), sizeof(uint32_t));
+  return true;
+}
+
+bool TryReadBytes(uintptr_t address, void *out, size_t size) {
+  if (out == nullptr || size == 0) {
+    return false;
+  }
+  if (!IsCommittedReadable(address, size)) {
+    return false;
+  }
+  std::memcpy(out, reinterpret_cast<const void *>(address), size);
+  return true;
+}
+
+void FlushCsvBufferLocked() {
+  if (s_csvRowBuffer.empty() || !s_csvStream.is_open()) {
+    s_csvRowBuffer.clear();
+    s_csvBufferedRowCount = 0;
+    return;
+  }
+  s_csvStream << s_csvRowBuffer;
+  s_csvStream.flush();
+  s_csvRowBuffer.clear();
+  s_csvBufferedRowCount = 0;
+}
+
+void PerformShamWrite(const ScheduledWrite &pending,
+                      PhysicsHarnessBoundary boundary) {
+  char offsetHex[16] = {};
+  std::snprintf(offsetHex, sizeof(offsetHex), "%X", pending.rigOffset);
+  Logger::Info("PhysicsTickHarness: sham-write tick=" +
+               std::to_string(pending.tick) + " boundary=" +
+               BoundaryName(boundary) + " rig_offset=0x" + offsetHex +
+               " bytes=" + std::to_string(pending.bytes.size()) +
+               " (memoria nao alterada)");
+  s_shamWriteCounter.fetch_add(1, std::memory_order_relaxed);
+}
+
+void InvokeSelfTestShamWritePath(PhysicsHarnessBoundary boundary) {
+  if (!s_selfTestMode) {
+    return;
+  }
+  if (!ResolvePlayerChain(s_gameBase, nullptr, nullptr)) {
+    return;
+  }
+  ScheduledWrite pending{};
+  pending.tick = s_tickCounter.load(std::memory_order_relaxed);
+  pending.boundary = boundary;
+  pending.rigOffset = 0x320;
+  pending.bytes = {0x5A, 0x5A, 0x5A, 0x5A};
+  PerformShamWrite(pending, boundary);
+}
+
+bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
                         uintptr_t *outRig) {
   if (outContainer != nullptr) {
     *outContainer = 0;
@@ -303,37 +410,31 @@ bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
   }
 
   uintptr_t car = 0;
-  std::memcpy(&car,
-              reinterpret_cast<void *>(gameBase + kRvaActiveCarPointer),
-              sizeof(car));
-  if (car == 0) {
+  if (!TryReadU64(gameBase + kRvaActiveCarPointer, &car) || car == 0) {
+    return false;
+  }
+  if (car < 0x10000) {
     return false;
   }
 
   uintptr_t container = 0;
-  std::memcpy(&container, reinterpret_cast<void *>(car + 0x30),
-              sizeof(container));
-  if (container == 0) {
+  if (!TryReadU64(car + 0x30, &container) || container == 0) {
     return false;
   }
 
   uintptr_t rig = 0;
-  std::memcpy(&rig, reinterpret_cast<void *>(container + 0x08), sizeof(rig));
-  if (rig == 0) {
+  if (!TryReadU64(container + 0x08, &rig) || rig == 0) {
     return false;
   }
 
   uintptr_t self = 0;
-  std::memcpy(&self, reinterpret_cast<void *>(rig + kRigSelfPointerOffset),
-              sizeof(self));
-  if (self != rig) {
+  if (!TryReadU64(rig + kRigSelfPointerOffset, &self) || self != rig) {
     return false;
   }
 
   uint32_t tag = 0;
-  std::memcpy(&tag, reinterpret_cast<void *>(rig + kRigTypeTagOffset),
-              sizeof(tag));
-  if (tag != kRigExpectedTypeTag) {
+  if (!TryReadU32(rig + kRigTypeTagOffset, &tag) ||
+      tag != kRigExpectedTypeTag) {
     return false;
   }
 
@@ -442,39 +543,60 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
   }
   WriteCsvHeaderIfNeeded();
 
-  s_csvStream << s_tickCounter.load(std::memory_order_relaxed) << ','
-              << s_stepCounter.load(std::memory_order_relaxed) << ','
-              << BoundaryName(boundary) << ',' << threadId << ",0x" << std::hex
-              << container << ",0x" << rig << std::dec;
-  AppendPracticeKeyColumnsToCsv();
+  std::ostringstream row;
+  row << s_tickCounter.load(std::memory_order_relaxed) << ','
+      << s_stepCounter.load(std::memory_order_relaxed) << ','
+      << BoundaryName(boundary) << ',' << threadId << ",0x" << std::hex
+      << container << ",0x" << rig << std::dec;
+
+  const uint64_t tick = s_tickCounter.load(std::memory_order_relaxed);
+  bool f5 = false;
+  bool f6 = false;
+  bool f7 = false;
+  if (s_practiceKeysTick.load(std::memory_order_relaxed) == tick) {
+    f5 = s_practiceKeyF5.load(std::memory_order_relaxed);
+    f6 = s_practiceKeyF6.load(std::memory_order_relaxed);
+    f7 = s_practiceKeyF7.load(std::memory_order_relaxed);
+  }
+  row << ',' << (f5 ? 1 : 0) << ',' << (f6 ? 1 : 0) << ',' << (f7 ? 1 : 0);
 
   for (uint32_t off : kRigVec4OffsetsPart3) {
     float values[4] = {};
-    std::memcpy(values, reinterpret_cast<void *>(rig + off), sizeof(values));
-    s_csvStream << ',' << values[0] << ',' << values[1] << ',' << values[2]
-                << ',' << values[3];
+    if (!TryReadBytes(rig + off, values, sizeof(values))) {
+      return;
+    }
+    row << ',' << values[0] << ',' << values[1] << ',' << values[2] << ','
+        << values[3];
   }
   for (uint32_t off : kRigScalarOffsetsPart3) {
     float scalar = 0.f;
-    std::memcpy(&scalar, reinterpret_cast<void *>(rig + off), sizeof(scalar));
-    s_csvStream << ',' << scalar;
+    if (!TryReadBytes(rig + off, &scalar, sizeof(scalar))) {
+      return;
+    }
+    row << ',' << scalar;
   }
 
   float containerExtra[4] = {};
-  std::memcpy(containerExtra,
-              reinterpret_cast<void *>(container + kContainerExtraVec4Offset),
-              sizeof(containerExtra));
-  s_csvStream << ',' << containerExtra[0] << ',' << containerExtra[1] << ','
-              << containerExtra[2] << ',' << containerExtra[3];
+  if (!TryReadBytes(container + kContainerExtraVec4Offset, containerExtra,
+                    sizeof(containerExtra))) {
+    return;
+  }
+  row << ',' << containerExtra[0] << ',' << containerExtra[1] << ','
+      << containerExtra[2] << ',' << containerExtra[3];
 
   float rigExtra[4] = {};
-  std::memcpy(rigExtra, reinterpret_cast<void *>(rig + kRigExtraVec4Offset),
-              sizeof(rigExtra));
-  s_csvStream << ',' << rigExtra[0] << ',' << rigExtra[1] << ',' << rigExtra[2]
-              << ',' << rigExtra[3];
+  if (!TryReadBytes(rig + kRigExtraVec4Offset, rigExtra, sizeof(rigExtra))) {
+    return;
+  }
+  row << ',' << rigExtra[0] << ',' << rigExtra[1] << ',' << rigExtra[2] << ','
+      << rigExtra[3];
 
-  s_csvStream << '\n';
-  s_csvStream.flush();
+  row << '\n';
+  s_csvRowBuffer += row.str();
+  ++s_csvBufferedRowCount;
+  if (s_csvBufferedRowCount >= kCsvFlushRowBatch) {
+    FlushCsvBufferLocked();
+  }
 }
 
 void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
@@ -495,14 +617,7 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
   }
 
   if (s_selfTestMode) {
-    char offsetHex[16] = {};
-    std::snprintf(offsetHex, sizeof(offsetHex), "%X", pending.rigOffset);
-    Logger::Info("PhysicsTickHarness: sham-write tick=" +
-                 std::to_string(pending.tick) + " boundary=" +
-                 BoundaryName(boundary) + " rig_offset=0x" + offsetHex +
-                 " bytes=" + std::to_string(pending.bytes.size()) +
-                 " (memoria nao alterada)");
-    s_shamWriteCounter.fetch_add(1, std::memory_order_relaxed);
+    PerformShamWrite(pending, boundary);
     return;
   }
 
@@ -524,7 +639,10 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
 
   const uintptr_t target = rig + pending.rigOffset;
   std::vector<uint8_t> before(pending.bytes.size());
-  std::memcpy(before.data(), reinterpret_cast<void *>(target), before.size());
+  if (!TryReadBytes(target, before.data(), before.size())) {
+    Logger::Warn("PhysicsTickHarness: escrita recusada (leitura rig falhou).");
+    return;
+  }
 
   std::ostringstream beforeHex;
   for (uint8_t b : before) {
@@ -536,7 +654,10 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
               pending.bytes.size());
 
   std::vector<uint8_t> after(pending.bytes.size());
-  std::memcpy(after.data(), reinterpret_cast<void *>(target), after.size());
+  if (!TryReadBytes(target, after.data(), after.size())) {
+    Logger::Warn("PhysicsTickHarness: escrita recusada (leitura pos falhou).");
+    return;
+  }
   std::ostringstream afterHex;
   for (uint8_t b : after) {
     afterHex << std::hex << std::setw(2) << std::setfill('0')
@@ -610,6 +731,9 @@ void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
   ++s_onBoundaryDepth;
   if (allowWritePoints) {
     ExecuteScheduledWriteIfDue(boundary);
+    if (s_selfTestMode) {
+      InvokeSelfTestShamWritePath(boundary);
+    }
     ExecuteScheduledNativeIfDue(boundary);
   }
   LogBoundarySample(boundary);
@@ -620,7 +744,8 @@ void MaybeCompleteSelfTestObservation() {
   if (!s_selfTestMode) {
     return;
   }
-  if (s_tickCounter.load(std::memory_order_relaxed) < kSelfTestPassInStageTicks) {
+  if (s_inStageTickCounter.load(std::memory_order_relaxed) <
+      kSelfTestPassInStageTicks) {
     return;
   }
   bool expected = false;
@@ -632,7 +757,8 @@ void MaybeCompleteSelfTestObservation() {
 }
 
 bool EvaluateSelfTestPassCriteria() {
-  if (s_tickCounter.load(std::memory_order_relaxed) < kSelfTestPassInStageTicks) {
+  if (s_inStageTickCounter.load(std::memory_order_relaxed) <
+      kSelfTestPassInStageTicks) {
     return false;
   }
   bool tickStartHook = false;
@@ -662,7 +788,7 @@ void LogSelfTestReport(bool afterObservationWindow) {
   const char *phase =
       afterObservationWindow ? "relatorio final" : "hooks apos instalacao";
   const uint64_t inStageTicks =
-      s_tickCounter.load(std::memory_order_relaxed);
+      s_inStageTickCounter.load(std::memory_order_relaxed);
   const uint64_t reentrancy =
       s_reentrancyCounter.load(std::memory_order_relaxed);
   const uint64_t shamWrites =
@@ -671,7 +797,7 @@ void LogSelfTestReport(bool afterObservationWindow) {
 
   Logger::Info(std::string("PhysicsTickHarness: self-test (") + phase + ").");
   Logger::Info("PhysicsTickHarness: self-test writes=0 (forcado); sham-write "
-               "activo nos boundaries com fila.");
+               "activo em boundaries com fila e nos pontos de escrita in-game.");
   Logger::Info("PhysicsTickHarness: self-test in_stage_ticks=" +
                std::to_string(inStageTicks) + " (PASS requer >= " +
                std::to_string(kSelfTestPassInStageTicks) + ").");
@@ -727,6 +853,11 @@ void LogSelfTestReport(bool afterObservationWindow) {
              << "\n";
     }
   }
+
+  {
+    std::lock_guard<std::mutex> lock(s_csvMutex);
+    FlushCsvBufferLocked();
+  }
 }
 
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__)) &&                           \
@@ -736,7 +867,10 @@ void HarnessBeforeTickStart(physics_harness_abi::Frame *) {
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
   CapturePracticeModKeysForCurrentTick();
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
-  MaybeCompleteSelfTestObservation();
+  if (ResolvePlayerChain(s_gameBase, nullptr, nullptr)) {
+    s_inStageTickCounter.fetch_add(1, std::memory_order_relaxed);
+    MaybeCompleteSelfTestObservation();
+  }
 }
 
 void HarnessAfterIntegrator(physics_harness_abi::Frame *frame) {
@@ -855,6 +989,14 @@ bool InstallHookSite(const char *name, void *target, void *detour,
   if (MH_EnableHook(target) != MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_EnableHook falhou em ") +
                   name);
+    RecordHookInstallResult(name, false);
+    return false;
+  }
+  if (originalOut == nullptr || *originalOut == nullptr) {
+    Logger::Error(std::string("PhysicsTickHarness: trampoline original nulo em ") +
+                  name);
+    MH_DisableHook(target);
+    MH_RemoveHook(target);
     RecordHookInstallResult(name, false);
     return false;
   }
@@ -1095,10 +1237,10 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
 
   if (s_selfTestMode) {
     LogSelfTestReport(false);
-    Logger::Info(
-        "PhysicsTickHarness: self-test aguarda >= " +
-        std::to_string(kSelfTestPassInStageTicks) +
-        " ticks in-stage (B2) para relatorio final PASS/FAIL.");
+  Logger::Info(
+      "PhysicsTickHarness: self-test aguarda >= " +
+      std::to_string(kSelfTestPassInStageTicks) +
+      " ticks in-stage (cadeia rig valida em B2) para relatorio final PASS/FAIL.");
   }
   return true;
 #endif
@@ -1146,12 +1288,15 @@ void PhysicsTickHarness::Shutdown() {
 
   {
     std::lock_guard<std::mutex> lock(s_csvMutex);
+    FlushCsvBufferLocked();
     if (s_csvStream.is_open()) {
-      s_csvStream.flush();
       s_csvStream.close();
     }
     s_csvHeaderWritten = false;
+    s_csvRowBuffer.clear();
+    s_csvBufferedRowCount = 0;
   }
+  s_inStageTickCounter.store(0, std::memory_order_relaxed);
 }
 
 uint64_t PhysicsTickHarness::GetTickCounter() {
@@ -1285,11 +1430,13 @@ void PhysicsTickHarness::TestingSetSelfTestMode(bool enabled) {
     s_writesEnabled = false;
     s_experimentalNativeEnabled = false;
     s_selfTestFinalReportEmitted.store(false, std::memory_order_relaxed);
+    s_inStageTickCounter.store(0, std::memory_order_relaxed);
   }
 }
 
 void PhysicsTickHarness::TestingSimulateInStageTick() {
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
+  s_inStageTickCounter.fetch_add(1, std::memory_order_relaxed);
   MaybeCompleteSelfTestObservation();
 }
 

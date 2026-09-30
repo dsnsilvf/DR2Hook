@@ -9,6 +9,13 @@
 
 namespace dr2hook::physics_harness_abi {
 
+// Stack layout in PhysicsHarness_DetourCommon (matches physics_harness_detour_x64.S):
+// [rsp+0x00 .. rsp+0x1F]  Win64 home/shadow for C calls
+// [rsp+0x20]              Frame (16-byte aligned)
+inline constexpr size_t kDetourShadowSpaceBytes = 0x20;
+inline constexpr size_t kDetourFrameRspOffset = kDetourShadowSpaceBytes;
+inline constexpr size_t kDetourStackAllocBytes = 0xC0;
+
 struct alignas(16) Frame {
   uint64_t rcx;
   uint64_t rdx;
@@ -18,18 +25,27 @@ struct alignas(16) Frame {
   alignas(16) uint8_t xmm1[16];
   alignas(16) uint8_t xmm2[16];
   alignas(16) uint8_t xmm3[16];
-  // Endereço de retorno do caller do jogo ([rsp] na entrada do thunk), não do stub.
   uint64_t caller_return;
   uint64_t rax;
   alignas(16) uint8_t xmm0_ret[16];
 };
 
+static_assert(alignof(Frame) == 16, "Frame must be 16-byte aligned");
+static_assert(sizeof(Frame) == 0x80, "Frame size must match detour stack frame");
+
+static_assert(offsetof(Frame, rcx) == 0x00, "Frame::rcx");
+static_assert(offsetof(Frame, rdx) == 0x08, "Frame::rdx");
+static_assert(offsetof(Frame, r8) == 0x10, "Frame::r8");
+static_assert(offsetof(Frame, r9) == 0x18, "Frame::r9");
+static_assert(offsetof(Frame, xmm0) == 0x20, "Frame::xmm0 vs [rsp+0x40]");
+static_assert(offsetof(Frame, xmm1) == 0x30, "Frame::xmm1");
+static_assert(offsetof(Frame, xmm2) == 0x40, "Frame::xmm2");
+static_assert(offsetof(Frame, xmm3) == 0x50, "Frame::xmm3");
 static_assert(offsetof(Frame, caller_return) == 0x60,
-              "physics_harness_detour_x64.S must store caller return at [frame+0x60]");
-static_assert(offsetof(Frame, rax) == 0x68,
-              "physics_harness_detour_x64.S must store RAX at [frame+0x68]");
+              "Frame::caller_return vs [rsp+0x80]");
+static_assert(offsetof(Frame, rax) == 0x68, "Frame::rax vs [rsp+0x88]");
 static_assert(offsetof(Frame, xmm0_ret) == 0x70,
-              "physics_harness_detour_x64.S must store XMM0 ret at [frame+0x70]");
+              "Frame::xmm0_ret vs [rsp+0x90]");
 
 struct DetourOps {
   void (*before)(Frame *frame);

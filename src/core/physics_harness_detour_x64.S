@@ -4,6 +4,8 @@
 
 // r12 = DetourOps* (callee-saved; survives C calls that clobber r11)
 // r13 = caller return address at thunk entry ([rsp] before prologue push)
+// [rsp+0x00..0x1F] shadow/home space for Win64 C calls
+// Frame @ rsp+0x20 — must match dr2hook::physics_harness_abi::Frame
 PhysicsHarness_DetourCommon:
 .seh_proc PhysicsHarness_DetourCommon
   push rbp
@@ -13,51 +15,48 @@ PhysicsHarness_DetourCommon:
   .seh_stackalloc 0xC0
   .seh_endprologue
 
-  mov QWORD PTR [rsp + 0x08], rcx
-  mov QWORD PTR [rsp + 0x10], rdx
-  mov QWORD PTR [rsp + 0x18], r8
-  mov QWORD PTR [rsp + 0x20], r9
-  movaps XMMWORD PTR [rsp + 0x30], xmm0
-  movaps XMMWORD PTR [rsp + 0x40], xmm1
-  movaps XMMWORD PTR [rsp + 0x50], xmm2
-  movaps XMMWORD PTR [rsp + 0x60], xmm3
-  mov QWORD PTR [rsp + 0x68], r13
+  mov QWORD PTR [rsp + 0x20], rcx
+  mov QWORD PTR [rsp + 0x28], rdx
+  mov QWORD PTR [rsp + 0x30], r8
+  mov QWORD PTR [rsp + 0x38], r9
+  movaps XMMWORD PTR [rsp + 0x40], xmm0
+  movaps XMMWORD PTR [rsp + 0x50], xmm1
+  movaps XMMWORD PTR [rsp + 0x60], xmm2
+  movaps XMMWORD PTR [rsp + 0x70], xmm3
+  mov QWORD PTR [rsp + 0x80], r13
 
   mov rax, QWORD PTR [r12]
   test rax, rax
   je skip_before
-  lea rcx, [rsp + 0x08]
+  lea rcx, [rsp + 0x20]
   call rax
 
 skip_before:
-  mov rcx, QWORD PTR [rsp + 0x08]
-  mov rdx, QWORD PTR [rsp + 0x10]
-  mov r8, QWORD PTR [rsp + 0x18]
-  mov r9, QWORD PTR [rsp + 0x20]
-  movaps xmm0, XMMWORD PTR [rsp + 0x30]
-  movaps xmm1, XMMWORD PTR [rsp + 0x40]
-  movaps xmm2, XMMWORD PTR [rsp + 0x50]
-  movaps xmm3, XMMWORD PTR [rsp + 0x60]
+  mov rcx, QWORD PTR [rsp + 0x20]
+  mov rdx, QWORD PTR [rsp + 0x28]
+  mov r8, QWORD PTR [rsp + 0x30]
+  mov r9, QWORD PTR [rsp + 0x38]
+  movaps xmm0, XMMWORD PTR [rsp + 0x40]
+  movaps xmm1, XMMWORD PTR [rsp + 0x50]
+  movaps xmm2, XMMWORD PTR [rsp + 0x60]
+  movaps xmm3, XMMWORD PTR [rsp + 0x70]
 
   mov rax, QWORD PTR [r12 + 16]
   mov rax, QWORD PTR [rax]
-  test rax, rax
-  je skip_orig
   call rax
 
-skip_orig:
-  mov QWORD PTR [rsp + 0x70], rax
-  movaps XMMWORD PTR [rsp + 0x78], xmm0
+  mov QWORD PTR [rsp + 0x88], rax
+  movaps XMMWORD PTR [rsp + 0x90], xmm0
 
   mov rax, QWORD PTR [r12 + 8]
   test rax, rax
   je skip_after
-  lea rcx, [rsp + 0x08]
+  lea rcx, [rsp + 0x20]
   call rax
 
 skip_after:
-  mov rax, QWORD PTR [rsp + 0x70]
-  movaps xmm0, XMMWORD PTR [rsp + 0x78]
+  mov rax, QWORD PTR [rsp + 0x88]
+  movaps xmm0, XMMWORD PTR [rsp + 0x90]
 
   mov rsp, rbp
   pop rbp

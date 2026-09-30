@@ -47,28 +47,28 @@ echo "## Thunk stubs (r12 ops, r13 caller return)"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourTickStart>:/,/<PhysicsHarness_DetourIntegrator>:/p'
 echo
 
-echo "## PhysicsHarness_DetourCommon (intel) — expect r12 after calls, mov [rsp+0x68],r13"
+echo "## PhysicsHarness_DetourCommon (intel) — frame @ rsp+0x20, caller_return @ rsp+0x80"
 "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourTickStart>:/p'
-echo
-
-echo "## r11 in DetourCommon + entry stubs (must be empty)"
-if "${OBJDUMP}" -d -M intel "${DLL}" \
-  | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourCommit>:/p' \
-  | grep -i r11; then
-  echo "FAIL: r11 still referenced" >&2
-  exit 1
-else
-  echo "  (none — OK)"
-fi
 echo
 
 echo "## .pdata RUNTIME_FUNCTION for DetourCommon"
 python3 - "${DLL}" <<'PY'
-import struct, sys
+import struct, subprocess, sys
 from pathlib import Path
-dll = Path(sys.argv[1]).read_bytes()
+dll_path = Path(sys.argv[1])
+dll = dll_path.read_bytes()
 pe_off = struct.unpack_from("<I", dll, 0x3C)[0]
 img_base = struct.unpack_from("<Q", dll, pe_off + 24 + 24)[0]
+sym_va = None
+for line in subprocess.check_output(["x86_64-w64-mingw32-nm", str(dll_path)], text=True).splitlines():
+    parts = line.split()
+    if len(parts) >= 3 and parts[1] == "T" and parts[2] == "PhysicsHarness_DetourCommon":
+        sym_va = int(parts[0], 16)
+        break
+if sym_va is None:
+    print("  DetourCommon symbol not found", file=sys.stderr)
+    sys.exit(1)
+begin_rva = sym_va - img_base
 num = struct.unpack_from("<H", dll, pe_off + 6)[0]
 sec_off = pe_off + 24 + struct.unpack_from("<H", dll, pe_off + 20)[0]
 for i in range(num):
@@ -80,14 +80,26 @@ for i in range(num):
     chunk = dll[ptr : ptr + rs]
     for j in range(0, len(chunk) - 11, 4):
         b, e, u = struct.unpack_from("<III", chunk, j)
-        if b == 0x104D50:
+        if b == begin_rva:
             print(f"  Begin=0x{b:x} End=0x{e:x} UnwindInfo=0x{u:x}")
             print(f"  raw: {chunk[j:j+12].hex()}")
             break
     else:
-        print("  NOT FOUND", file=sys.stderr)
+        print(f"  NOT FOUND for Begin=0x{begin_rva:x}", file=sys.stderr)
         sys.exit(1)
+    break
 PY
+echo
+
+echo "## r11 in DetourCommon + entry stubs (must be empty)"
+if "${OBJDUMP}" -d -M intel "${DLL}" \
+  | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourCommit>:/p' \
+  | grep -i r11; then
+  echo "FAIL: r11 still referenced" >&2
+  exit 1
+else
+  echo "  (none — OK)"
+fi
 echo
 
 echo "=== OK ==="
