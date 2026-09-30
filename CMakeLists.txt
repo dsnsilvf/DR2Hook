@@ -4,6 +4,12 @@ project(dr2hook LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(NOT WIN32 AND EXISTS "/usr/include/wine/wine/windows/windows.h")
+    set(DR2HOOK_WINE_WINDOWS_INCLUDE "/usr/include/wine/wine/windows")
+elseif(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
+    set(DR2HOOK_WINE_WINDOWS_INCLUDE "/usr/include/wine/windows")
+endif()
+
 # Fontes do Lua 5.4 compilados como C++ para stack unwinding seguro (try/catch)
 set(LUA_SOURCES
     vendor/lua/lapi.c
@@ -81,6 +87,7 @@ add_library(dr2hook_core SHARED
     src/core/safety.cpp
     src/core/player.cpp
     src/core/savestate.cpp
+    src/core/physics_tick_harness.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
@@ -88,6 +95,11 @@ add_library(dr2hook_core SHARED
     ${IMGUI_CORE_SOURCES}
     ${IMGUI_BACKEND_SOURCES}
     ${LUA_SOURCES}
+    vendor/minhook/src/buffer.c
+    vendor/minhook/src/hook.c
+    vendor/minhook/src/trampoline.c
+    vendor/minhook/src/hde/hde32.c
+    vendor/minhook/src/hde/hde64.c
 )
 
 foreach(dr2_target dxgi dr2hook_core)
@@ -100,7 +112,13 @@ foreach(dr2_target dxgi dr2hook_core)
         vendor/minhook/include
     )
 
-    if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
+    if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+        target_include_directories(${dr2_target} PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
+        target_compile_definitions(${dr2_target} PRIVATE
+            WINE_UNICODE_NATIVE
+            _DPI_AWARENESS_CONTEXTS_
+        )
+    elseif(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
         target_include_directories(${dr2_target} PRIVATE /usr/include/wine/windows)
         target_compile_definitions(${dr2_target} PRIVATE
             WINE_UNICODE_NATIVE
@@ -157,8 +175,8 @@ target_include_directories(test_memory_safety PRIVATE
     vendor/minhook/include
 )
 
-if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
-    target_include_directories(test_memory_safety PRIVATE /usr/include/wine/windows)
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_memory_safety PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
 endif()
 
 if(WIN32 OR MSVC)
@@ -194,8 +212,8 @@ target_include_directories(test_lua_engine PRIVATE
     vendor/minhook/include
 )
 
-if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
-    target_include_directories(test_lua_engine PRIVATE /usr/include/wine/windows)
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_lua_engine PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
 endif()
 
 if(WIN32 OR MSVC)
@@ -235,8 +253,8 @@ target_include_directories(test_overlay PRIVATE
     vendor/minhook/include
 )
 
-if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
-    target_include_directories(test_overlay PRIVATE /usr/include/wine/windows)
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_overlay PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
 endif()
 
 if(WIN32 OR MSVC)
@@ -276,8 +294,8 @@ target_include_directories(test_stability_soak PRIVATE
     vendor/minhook/include
 )
 
-if(NOT WIN32 AND EXISTS "/usr/include/wine/windows")
-    target_include_directories(test_stability_soak PRIVATE /usr/include/wine/windows)
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_stability_soak PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
 endif()
 
 if(WIN32 OR MSVC)
@@ -308,6 +326,42 @@ add_executable(test_mod_menu
 )
 
 target_include_directories(test_mod_menu PRIVATE include)
+
+add_executable(test_physics_tick_harness
+    tests/test_physics_tick_harness.cpp
+    src/core/logger.cpp
+    src/core/physics_tick_harness.cpp
+    src/core/safety.cpp
+    src/core/memory.cpp
+)
+
+target_include_directories(test_physics_tick_harness PRIVATE
+    include
+    src
+    vendor/minhook/include
+)
+
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_physics_tick_harness PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
+endif()
+
+if(WIN32 OR MSVC)
+    target_compile_definitions(test_physics_tick_harness PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+        DR2HOOK_PHYSICS_HARNESS_TESTING
+    )
+else()
+    target_compile_definitions(test_physics_tick_harness PRIVATE
+        DR2HOOK_PHYSICS_HARNESS_NO_HOOKS
+        DR2HOOK_PHYSICS_HARNESS_TESTING
+    )
+endif()
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_physics_tick_harness PRIVATE m)
+endif()
 
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release

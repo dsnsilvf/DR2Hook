@@ -1,6 +1,7 @@
 # Compilação e Build
 build/
 build-release/
+build-mingw/
 dist/
 bin/
 lib/
