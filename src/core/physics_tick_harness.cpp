@@ -1,5 +1,6 @@
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/hook_prologue.h"
+#include "dr2hook/physics_harness_addresses.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/safety.h"
@@ -31,12 +32,8 @@ namespace dr2hook {
 
 namespace {
 
-constexpr uintptr_t kRvaIntegrator = 0x746150;
-constexpr uintptr_t kRvaTickStart = 0x74B8F0;
-constexpr uintptr_t kRvaCommit = 0x74D190;
-constexpr uintptr_t kRvaPerTickCaller = 0x7511E0;
-constexpr uintptr_t kRvaSetPose = 0x746770;
-constexpr uintptr_t kRvaFrameLoop = 0xDBCA20;
+using namespace physics_harness;
+
 constexpr uintptr_t kRvaPhysicsStep = 0xDBC500;
 constexpr uintptr_t kRvaPreTick = 0x749A30;
 constexpr uintptr_t kRvaCommitAuxA = 0x73A070;
@@ -505,6 +502,7 @@ void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
 
 void __fastcall DetourTickStart(void *a1, void *a2, void *a3, void *a4) {
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
+  // B1 — antes do tick start @ 0x14074b8f0
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
   if (g_origTickStart != nullptr) {
     g_origTickStart(a1, a2, a3, a4);
@@ -512,10 +510,12 @@ void __fastcall DetourTickStart(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourIntegrator(void *a1, void *a2, void *a3, void *a4) {
+  // M1 — antes do integrator @ 0x140746150
   OnBoundary(PhysicsHarnessBoundary::M1_BeforeIntegrator, true);
   if (g_origIntegrator != nullptr) {
     g_origIntegrator(a1, a2, a3, a4);
   }
+  // M2 — depois do integrator
   OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, true);
 
 #if defined(_WIN32) && !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
@@ -532,10 +532,12 @@ void __fastcall DetourIntegrator(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourCommit(void *a1, void *a2, void *a3, void *a4) {
+  // M3 — antes do Commit @ 0x14074d190
   OnBoundary(PhysicsHarnessBoundary::M3_BeforeCommit, true);
   if (g_origCommit != nullptr) {
     g_origCommit(a1, a2, a3, a4);
   }
+  // B2 — depois do Commit
   OnBoundary(PhysicsHarnessBoundary::B2_AfterCommit, true);
 }
 
@@ -609,21 +611,31 @@ bool InstallHookSite(const char *name, void *target, void *detour,
 }
 
 void LogReferenceAddresses(uintptr_t gameBase) {
-  auto fmt = [](uintptr_t base, uintptr_t rva) {
+  auto fmt = [](uintptr_t base, uintptr_t rva, uintptr_t specVa) {
     std::ostringstream oss;
-    oss << "0x" << std::hex << (base + rva) << " (RVA 0x" << rva << ")";
+    oss << "0x" << std::hex << (base + rva) << " (RVA 0x" << rva
+        << ", spec VA 0x" << specVa << ")";
     return oss.str();
   };
-  Logger::Info("PhysicsTickHarness: integrator " + fmt(gameBase, kRvaIntegrator));
-  Logger::Info("PhysicsTickHarness: tick start " + fmt(gameBase, kRvaTickStart));
-  Logger::Info("PhysicsTickHarness: commit " + fmt(gameBase, kRvaCommit));
-  Logger::Info("PhysicsTickHarness: frame loop " + fmt(gameBase, kRvaFrameLoop));
-  Logger::Info("PhysicsTickHarness: physics step " +
-               fmt(gameBase, kRvaPhysicsStep));
-  Logger::Info("PhysicsTickHarness: pretick " + fmt(gameBase, kRvaPreTick));
-  Logger::Info("PhysicsTickHarness: end step " +
-               fmt(gameBase, kRvaPerTickCaller));
-  Logger::Info("PhysicsTickHarness: SetPose " + fmt(gameBase, kRvaSetPose));
+  char baseHex[24] = {};
+  std::snprintf(baseHex, sizeof(baseHex), "%llX",
+                static_cast<unsigned long long>(gameBase));
+  Logger::Info(std::string("PhysicsTickHarness: image base spec=0x140000000 "
+                           "actual=0x") +
+               baseHex);
+  Logger::Info("PhysicsTickHarness: integrator " +
+               fmt(gameBase, kRvaIntegrator, kVaIntegrator));
+  Logger::Info("PhysicsTickHarness: tick start " +
+               fmt(gameBase, kRvaTickStart, kVaTickStart));
+  Logger::Info("PhysicsTickHarness: commit " + fmt(gameBase, kRvaCommit, kVaCommit));
+  Logger::Info("PhysicsTickHarness: per-tick caller " +
+               fmt(gameBase, kRvaPerTickCaller, kVaPerTickCaller));
+  Logger::Info("PhysicsTickHarness: SetPose " +
+               fmt(gameBase, kRvaSetPose, kVaSetPose));
+  Logger::Info("PhysicsTickHarness: frame loop " +
+               fmt(gameBase, kRvaFrameLoop, kVaFrameLoop));
+  Logger::Info(
+      "PhysicsTickHarness: hook B1/M1-M3/B2 -> tick_start, integrator, commit");
 }
 
 DWORD WINAPI SelfTestThread(LPVOID) {
@@ -770,12 +782,12 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
-  if (!InstallHookSite("frame_loop", pFrameLoop,
-                       reinterpret_cast<void *>(&DetourFrameLoop),
-                       &g_origFrameLoop, kFrameLoop, kPrologueLength, true)) {
-    PhysicsTickHarness::Shutdown();
-    return false;
-  }
+
+  // Spec parte 2: apenas tick_start (B1), integrator (M1/M2), commit (M3/B2).
+  // Frame loop / per-tick caller / SetPose são referência ou extensões opcionais.
+  (void)InstallHookSite("frame_loop", pFrameLoop,
+                         reinterpret_cast<void *>(&DetourFrameLoop),
+                         &g_origFrameLoop, kFrameLoop, kPrologueLength, false);
 
   (void)InstallHookSite("physics_step", pPhysicsStep,
                          reinterpret_cast<void *>(&DetourPhysicsStep),

@@ -15,33 +15,30 @@ Sem `DR2HOOK_PHYSICS_HARNESS=1` (ou `instrumentation=1` no INI), **nenhum** hook
 
 Toda escrita ou chamada nativa também passa por `SafetyGuard::CanWriteState()`. O padrão permissivo do `SafetyGuard` **não é alterado** neste módulo.
 
-## Endereços (image base `0x140000000`)
+## Endereços (spec parte 2, image base `0x140000000`)
 
-| Símbolo | VA |
-| :--- | :--- |
-| Integrator | `0x140746150` |
-| Tick start | `0x14074b8f0` |
-| Commit | `0x14074d190` |
-| Frame loop (H1/H2) | `0x140dbca20` |
-| Physics step (H3) | `0x140dbc500` |
-| PreTick (H4) | `0x140749a30` |
-| End step (H5) | `0x1407511e0` |
-| SetPose | `0x140746770` |
-| SetTransform (experimental) | `0x14074ad80` |
-| SetLinVel / SetAngVel | `0x14074a910` / `0x14074a890` |
+Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runtime: `GetModuleHandle(nullptr) + RVA`.
 
-## Pontos de hook
+| Símbolo | VA spec | RVA | Hook spec parte 2 |
+| :--- | :--- | :--- | :--- |
+| Integrator | `0x140746150` | `0x746150` | M1 entrada, M2 retorno |
+| Tick start | `0x14074b8f0` | `0x74B8F0` | B1 entrada |
+| Commit | `0x14074d190` | `0x74D190` | M3 entrada, B2 retorno |
+| Per-tick caller | `0x1407511e0` | `0x7511E0` | Referência (log na instalação) |
+| SetPose | `0x140746770` | `0x746770` | Referência |
+| Frame loop | `0x140dbca20` | `0xDBCA20` | Referência; hook opcional (extensões) |
 
-| ID | Momento | Escritas enfileiradas |
+### Pontos B1 / M1–M3 / B2
+
+| ID | Momento | Endereço |
 | :--- | :--- | :--- |
-| B1 | Antes do tick start | Sim |
-| M1 / M2 | Antes / depois do integrator | Sim |
-| M3 / B2 | Antes / depois do Commit | Sim |
-| H2 / H1 | Entrada / retorno do frame loop | Sim (ponto “between tick”) |
-| H3 / H4 | Physics step / PreTick | Log only |
-| H5 | End step | Sim |
-| H6 | Integrator quando `_ReturnAddress()` == `0x14073e314` | Sim |
-| LOG_COMMIT_A/B | `0x14073a070`, `0x14073b620` | Log only (opcional) |
+| **B1** | Antes do corpo de tick start | `0x14074b8f0` |
+| **M1** | Antes do integrator | `0x140746150` |
+| **M2** | Depois do integrator (pós-trampoline) | `0x140746150` |
+| **M3** | Antes do Commit | `0x14074d190` |
+| **B2** | Depois do Commit (pós-trampoline) | `0x14074d190` |
+
+## Endereços adicionais (extensões)
 
 Cada instalação chama `VerifyHookPrologue` (`include/dr2hook/hook_prologue.h`, mesma política dos hooks de UI/game) **antes** de `MH_CreateHook`. Em mismatch o hook em causa **não** é instalado; hooks obrigatórios (tick start, integrator, commit, frame loop) abortam `TryInstall` inteiro.
 

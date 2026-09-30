@@ -1,0 +1,24 @@
+#pragma once
+
+#include <cstdint>
+
+// Endereços VA/RVA do dirtrally2.exe (spec parte 2, image base 0x140000000).
+namespace dr2hook::physics_harness {
+
+inline constexpr uintptr_t kImageBase = 0x140000000ULL;
+
+inline constexpr uintptr_t kRvaIntegrator = 0x746150;
+inline constexpr uintptr_t kRvaTickStart = 0x74B8F0;
+inline constexpr uintptr_t kRvaCommit = 0x74D190;
+inline constexpr uintptr_t kRvaPerTickCaller = 0x7511E0;
+inline constexpr uintptr_t kRvaSetPose = 0x746770;
+inline constexpr uintptr_t kRvaFrameLoop = 0xDBCA20;
+
+inline constexpr uintptr_t kVaIntegrator = kImageBase + kRvaIntegrator;       // 0x140746150
+inline constexpr uintptr_t kVaTickStart = kImageBase + kRvaTickStart;         // 0x14074b8f0
+inline constexpr uintptr_t kVaCommit = kImageBase + kRvaCommit;               // 0x14074d190
+inline constexpr uintptr_t kVaPerTickCaller = kImageBase + kRvaPerTickCaller; // 0x1407511e0
+inline constexpr uintptr_t kVaSetPose = kImageBase + kRvaSetPose;             // 0x140746770
+inline constexpr uintptr_t kVaFrameLoop = kImageBase + kRvaFrameLoop;         // 0x140dbca20
+
+} // namespace dr2hook::physics_harness
