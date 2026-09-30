@@ -52,6 +52,17 @@ bool s_experimentalNativeEnabled = false;
 bool s_installed = false;
 uintptr_t s_gameBase = 0;
 
+constexpr DWORD kSelfTestLogDurationMs = 5000;
+
+struct HookInstallRecord {
+  const char *name = nullptr;
+  bool installed = false;
+};
+
+constexpr size_t kHookSiteCount = 9;
+HookInstallRecord s_hookInstallRecords[kHookSiteCount] = {};
+size_t s_hookInstallRecordCount = 0;
+
 std::atomic<uint64_t> s_tickCounter{0};
 std::atomic<uint64_t> s_stepCounter{0};
 std::atomic<uint64_t> s_boundaryFireCounts[20] = {};
@@ -348,6 +359,10 @@ void WriteCsvHeaderIfNeeded() {
     std::snprintf(label, sizeof(label), "0x%X", off);
     s_csvStream << ",scalar_" << label;
   }
+  s_csvStream << ",container_vec4_0xC930_x,container_vec4_0xC930_y,"
+                 "container_vec4_0xC930_z,container_vec4_0xC930_w"
+                 ",rig_vec4_0x290_x,rig_vec4_0x290_y,rig_vec4_0x290_z,"
+                 "rig_vec4_0x290_w";
   s_csvStream << "\n";
   s_csvHeaderWritten = true;
 }
@@ -390,11 +405,28 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
     std::memcpy(&scalar, reinterpret_cast<void *>(rig + off), sizeof(scalar));
     s_csvStream << ',' << scalar;
   }
+
+  float containerExtra[4] = {};
+  std::memcpy(containerExtra,
+              reinterpret_cast<void *>(container + kContainerExtraVec4Offset),
+              sizeof(containerExtra));
+  s_csvStream << ',' << containerExtra[0] << ',' << containerExtra[1] << ','
+              << containerExtra[2] << ',' << containerExtra[3];
+
+  float rigExtra[4] = {};
+  std::memcpy(rigExtra, reinterpret_cast<void *>(rig + kRigExtraVec4Offset),
+              sizeof(rigExtra));
+  s_csvStream << ',' << rigExtra[0] << ',' << rigExtra[1] << ',' << rigExtra[2]
+              << ',' << rigExtra[3];
+
   s_csvStream << '\n';
   s_csvStream.flush();
 }
 
 void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
+  if (s_selfTestMode) {
+    return;
+  }
   // Spec parte 4: só corre nos detours de física (OnBoundary), nunca no Present.
   ScheduledWrite pending{};
   {
@@ -459,6 +491,9 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
 }
 
 void ExecuteScheduledNativeIfDue(PhysicsHarnessBoundary boundary) {
+  if (s_selfTestMode) {
+    return;
+  }
   // Spec parte 5: só nos detours de física; requer flag experimental + SafetyGuard.
   ScheduledNative pending{};
   {
@@ -611,12 +646,66 @@ void __fastcall DetourCommitAuxB(void *a1, void *a2, void *a3, void *a4) {
 
 #if !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
 
+void RecordHookInstallResult(const char *name, bool installed) {
+  if (s_hookInstallRecordCount >= kHookSiteCount) {
+    return;
+  }
+  s_hookInstallRecords[s_hookInstallRecordCount].name = name;
+  s_hookInstallRecords[s_hookInstallRecordCount].installed = installed;
+  ++s_hookInstallRecordCount;
+}
+
+void LogSelfTestReport(bool afterObservationWindow) {
+  const char *phase =
+      afterObservationWindow ? "relatorio final" : "hooks apos instalacao";
+  Logger::Info(std::string("PhysicsTickHarness: self-test (") + phase + ").");
+  Logger::Info("PhysicsTickHarness: self-test writes=0 (forcado).");
+
+  Logger::Info("PhysicsTickHarness: self-test hook sites:");
+  for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
+    const auto &rec = s_hookInstallRecords[i];
+    Logger::Info(std::string("PhysicsTickHarness: self-test hook ") +
+                 (rec.name != nullptr ? rec.name : "?") + " installed=" +
+                 (rec.installed ? "1" : "0"));
+  }
+
+  Logger::Info("PhysicsTickHarness: self-test boundary fires:");
+  for (size_t i = 0;
+       i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
+       ++i) {
+    const auto boundary = static_cast<PhysicsHarnessBoundary>(i);
+    const uint64_t count =
+        s_boundaryFireCounts[i].load(std::memory_order_relaxed);
+    Logger::Info("PhysicsTickHarness: self-test boundary " +
+                 BoundaryName(boundary) + " fires=" + std::to_string(count));
+  }
+
+  const auto reportPath = std::filesystem::path(GetExecutableDirectory()) /
+                          "dr2hook_physics_harness_self_test.log";
+  std::ofstream report(reportPath, std::ios::out | std::ios::trunc);
+  if (report.is_open()) {
+    report << "phase=" << phase << "\nwrites=0\n";
+    for (size_t i = 0; i < s_hookInstallRecordCount; ++i) {
+      report << "hook," << s_hookInstallRecords[i].name << ","
+             << (s_hookInstallRecords[i].installed ? 1 : 0) << "\n";
+    }
+    for (size_t i = 0;
+         i <= static_cast<size_t>(PhysicsHarnessBoundary::Log_Commit_73B620);
+         ++i) {
+      report << "boundary," << BoundaryName(static_cast<PhysicsHarnessBoundary>(i))
+             << "," << s_boundaryFireCounts[i].load(std::memory_order_relaxed)
+             << "\n";
+    }
+  }
+}
+
 bool InstallHookSite(const char *name, void *target, void *detour,
                      PhysicsCall *originalOut,
                      const uint8_t *expectedPrologue, size_t prologueLength,
                      bool required) {
   if (!VerifyHookPrologue(target, expectedPrologue, prologueLength)) {
     LogPrologueMismatch(name, target, expectedPrologue, prologueLength);
+    RecordHookInstallResult(name, false);
     return false;
   }
 
@@ -624,14 +713,17 @@ bool InstallHookSite(const char *name, void *target, void *detour,
       MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_CreateHook falhou em ") +
                   name);
+    RecordHookInstallResult(name, false);
     return false;
   }
   if (MH_EnableHook(target) != MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_EnableHook falhou em ") +
                   name);
+    RecordHookInstallResult(name, false);
     return false;
   }
   Logger::Info(std::string("PhysicsTickHarness: hook instalado em ") + name);
+  RecordHookInstallResult(name, true);
   return true;
 }
 
@@ -671,17 +763,10 @@ void LogReferenceAddresses(uintptr_t gameBase) {
 }
 
 DWORD WINAPI SelfTestThread(LPVOID) {
-  Sleep(3000);
-  Logger::Info("PhysicsTickHarness: self-test concluido (sem writes).");
-  for (size_t i = 0; i < 20; ++i) {
-    const uint64_t count =
-        s_boundaryFireCounts[i].load(std::memory_order_relaxed);
-    if (count == 0) {
-      continue;
-    }
-    Logger::Info("PhysicsTickHarness: self-test boundary idx=" +
-                 std::to_string(i) + " fires=" + std::to_string(count));
-  }
+  Logger::Info("PhysicsTickHarness: self-test a observar CSV/logs por " +
+               std::to_string(kSelfTestLogDurationMs) + " ms.");
+  Sleep(kSelfTestLogDurationMs);
+  LogSelfTestReport(true);
   return 0;
 }
 
@@ -753,6 +838,13 @@ bool PhysicsTickHarness::LoadConfiguration() {
   if (s_experimentalNativeEnabled && !s_instrumentationEnabled) {
     s_experimentalNativeEnabled = false;
   }
+  if (s_selfTestMode) {
+    s_instrumentationEnabled = true;
+    s_writesEnabled = false;
+    s_experimentalNativeEnabled = false;
+    Logger::Info(
+        "PhysicsTickHarness: modo self-test (instrumentacao ligada, sem writes).");
+  }
 
   return s_instrumentationEnabled;
 }
@@ -762,13 +854,14 @@ bool PhysicsTickHarness::IsInstrumentationEnabled() {
 }
 
 bool PhysicsTickHarness::AreWritesEnabled() {
-  return s_writesEnabled && s_instrumentationEnabled;
+  return s_writesEnabled && s_instrumentationEnabled && !s_selfTestMode;
 }
 
 bool PhysicsTickHarness::IsSelfTestMode() { return s_selfTestMode; }
 
 bool PhysicsTickHarness::IsExperimentalNativeEnabled() {
-  return s_experimentalNativeEnabled && s_instrumentationEnabled;
+  return s_experimentalNativeEnabled && s_instrumentationEnabled &&
+         !s_selfTestMode;
 }
 
 bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
@@ -785,6 +878,7 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   }
 
   s_gameBase = gameModuleBase;
+  s_hookInstallRecordCount = 0;
   LogReferenceAddresses(gameModuleBase);
 
   using namespace physics_harness_prologues;
@@ -845,6 +939,7 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   Logger::Info("PhysicsTickHarness: instrumentation ativa (opt-in).");
 
   if (s_selfTestMode) {
+    LogSelfTestReport(false);
     CreateThread(nullptr, 0, SelfTestThread, nullptr, 0, nullptr);
   }
   return true;
@@ -883,6 +978,7 @@ void PhysicsTickHarness::Shutdown() {
   g_origCommitAuxA = nullptr;
   g_origCommitAuxB = nullptr;
   s_installed = false;
+  s_hookInstallRecordCount = 0;
 
   {
     std::lock_guard<std::mutex> lock(s_writeQueueMutex);
@@ -1016,6 +1112,15 @@ void PhysicsTickHarness::TestingSetPracticeKeysForTick(uint64_t tick, bool f5,
   s_practiceKeyF5.store(f5, std::memory_order_relaxed);
   s_practiceKeyF6.store(f6, std::memory_order_relaxed);
   s_practiceKeyF7.store(f7, std::memory_order_relaxed);
+}
+
+void PhysicsTickHarness::TestingSetSelfTestMode(bool enabled) {
+  s_selfTestMode = enabled;
+  if (enabled) {
+    s_instrumentationEnabled = true;
+    s_writesEnabled = false;
+    s_experimentalNativeEnabled = false;
+  }
 }
 
 #endif

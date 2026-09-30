@@ -70,6 +70,7 @@ public:
   static void TestingClearScheduledNative();
   static void TestingSetPracticeKeysForTick(uint64_t tick, bool f5, bool f6,
                                             bool f7);
+  static void TestingSetSelfTestMode(bool enabled);
 #endif
 };
 

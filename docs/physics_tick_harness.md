@@ -10,7 +10,7 @@ Sem `DR2HOOK_PHYSICS_HARNESS=1` (ou `instrumentation=1` no INI), **nenhum** hook
 | :--- | :--- |
 | Instrumentação | `DR2HOOK_PHYSICS_HARNESS=1` ou `dr2hook_physics_harness.ini` → `instrumentation=1` |
 | Escritas na memória do rig | `DR2HOOK_PHYSICS_HARNESS_WRITES=1` ou `writes=1` (exige instrumentação) |
-| Self-test (log de hooks disparados, sem writes) | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` ou `self_test=1` |
+| Self-test | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` ou `self_test=1` — liga instrumentação, **sem writes**; tenta todos os hooks; CSV ~5 s; relatório em log + `dr2hook_physics_harness_self_test.log` |
 | Chamadas nativas experimentais | `DR2HOOK_PHYSICS_HARNESS_EXPERIMENTAL_NATIVE=1` ou `experimental_native=1` |
 
 Toda escrita ou chamada nativa também passa por `SafetyGuard::CanWriteState()`. O padrão permissivo do `SafetyGuard` **não é alterado** neste módulo.
@@ -86,8 +86,14 @@ Todas as lin CSV incluem `thread_id` (`GetCurrentThreadId`) e ponteiros `contain
 | :--- | :--- |
 | `vec4` (4× float) | `0x170`, `0x180`, `0x200`, `0x210`, `0x2b0`, `0x2c0`, `0x2d0`, `0x2e0`, `0x320`, `0x330` |
 | `scalar` (float) | `0x2508`, `0x1338` |
+| `container` vec4 | `0xc930` (spec correction 4) |
+| `rig` vec4 extra | `0x290` (spec correction 4) |
 
-Cabeçalho (campos fixos): ver acima; offsets de amostragem do rig:
+### Spec correction 4 — self-test e colunas extra
+
+**Self-test:** com `self_test=1`, `LoadConfiguration` força instrumentação ligada e desliga `writes` / `experimental_native`. `TryInstall` regista cada site (obrigatório + opcional); após instalar imprime hooks `installed=0/1`; uma thread espera **5 s** de jogo (CSV normal) e imprime contagem de **fires** por boundary. Nenhuma escrita ou native experimental é executada.
+
+**CSV extra:** após os escalares do rig, `container_vec4_0xC930_{x,y,z,w}` e `rig_vec4_0x290_{x,y,z,w}`.
 
 ## Spec parte 4 — escritas enfileiradas
 

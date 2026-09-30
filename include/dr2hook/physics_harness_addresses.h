@@ -54,4 +54,8 @@ inline constexpr uint32_t kRigSelfPointerOffset = 0x12C0;
 inline constexpr uint32_t kRigTypeTagOffset = 0x12D0;
 inline constexpr uint32_t kRigExpectedTypeTag = 4;
 
+// Spec correction 4 — colunas CSV extra
+inline constexpr uint32_t kContainerExtraVec4Offset = 0xC930;
+inline constexpr uint32_t kRigExtraVec4Offset = 0x290;
+
 } // namespace dr2hook::physics_harness

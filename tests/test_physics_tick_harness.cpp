@@ -205,6 +205,29 @@ void TestSpecCorrection1FrameLoopWriteBoundaries() {
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
 }
 
+void TestSpecCorrection4SelfTestDisablesWrites() {
+  std::cout << "[RUN] TestSpecCorrection4SelfTestDisablesWrites..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(true);
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::IsSelfTestMode(),
+              "Self-test flag ativa");
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::IsInstrumentationEnabled(),
+              "Self-test liga instrumentacao");
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::AreWritesEnabled(),
+              "Self-test desliga writes");
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::IsExperimentalNativeEnabled(),
+              "Self-test desliga native experimental");
+  dr2hook::PhysicsTickHarness::TestingSetSelfTestMode(false);
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
+}
+
+void TestSpecCorrection4ExtraCsvOffsets() {
+  std::cout << "[RUN] TestSpecCorrection4ExtraCsvOffsets..." << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kContainerExtraVec4Offset == 0xC930,
+              "Container vec4 offset 0xc930");
+  TEST_ASSERT(dr2hook::physics_harness::kRigExtraVec4Offset == 0x290,
+              "Rig vec4 offset 0x290");
+}
+
 void TestSpecCorrection3IntegratorReturnAndH6Write() {
   std::cout << "[RUN] TestSpecCorrection3IntegratorReturnAndH6Write..."
             << std::endl;
@@ -289,6 +312,8 @@ int main() {
   TestSpecCorrection2HookAddresses();
   TestSpecCorrection3IntegratorReturnAndH6Write();
   TestSpecCorrection3PracticeKeysSnapshot();
+  TestSpecCorrection4ExtraCsvOffsets();
+  TestSpecCorrection4SelfTestDisablesWrites();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun
