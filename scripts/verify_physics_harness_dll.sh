@@ -48,8 +48,7 @@ echo "## Thunk stubs (r12 ops, r13 caller return)"
 echo
 
 echo "## PhysicsHarness_DetourCommon (intel) — expect r12 after calls, mov [rsp+0x68],r13"
-"${OBJDUMP}" -d -M intel "${DLL}" --disassemble=PhysicsHarness_DetourCommon 2>/dev/null \
-  || "${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourTickStart>:/p'
+"${OBJDUMP}" -d -M intel "${DLL}" | sed -n '/<PhysicsHarness_DetourCommon>:/,/<PhysicsHarness_DetourTickStart>:/p'
 echo
 
 echo "## r11 in DetourCommon + entry stubs (must be empty)"
