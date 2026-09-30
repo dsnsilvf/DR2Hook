@@ -28,7 +28,16 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 | Physics step (H3) | `0x140dbc500` | `0xDBC500` | H3 entrada/retorno; contador `step` |
 | PreTick (H4) | `0x140749a30` | `0x749A30` | H4 entrada/retorno; só log |
 | SetPose | `0x140746770` | `0x746770` | Referência |
-| Frame loop | `0x140dbca20` | `0xDBCA20` | Referência; hook opcional (extensões) |
+| Frame loop | `0x140dbca20` | `0xDBCA20` | **H2** entrada, **H1** retorno (between-tick); obrigatórios; writes enfileirados |
+
+### Spec correction 1 — H1 / H2 (frame loop `@ 0x140dbca20`)
+
+| ID | Momento | Endereço | Writes / native |
+| :--- | :--- | :--- | :--- |
+| **H2** | Entrada do frame loop | `0x140dbca20` | `ScheduleWrite` / `ScheduleExperimentalNative` |
+| **H1** | Retorno do frame loop (between-tick) | `0x140dbca20` | Idem |
+
+Instalação **obrigatória** com tick start, integrator e commit: falha de prólogo em `frame_loop` aborta `TryInstall`.
 
 ### Pontos B1 / M1–M3 / B2
 
@@ -73,7 +82,7 @@ Cabeçalho (campos fixos): ver acima; offsets de amostragem do rig:
 
 - **API:** `ScheduleWrite(tick, boundary, rigOffset, bytes, len)` — uma escrita na fila.
 - **Gating:** flag `writes` **e** `SafetyGuard::CanWriteState()` (agendamento e execução). `SetPermissiveMode(true)` em `main.cpp` inalterado.
-- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`.
+- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`. Boundaries com fila: B1, M1–M3, B2, **H1**, **H2**, H5_ENTRY, H5_RETURN, …
 - **Log:** `before=` / `after=` em hex no `dr2hook.log`.
 
 ## Spec parte 5 — API nativa experimental
@@ -96,7 +105,7 @@ Tipos e convenções inferidas (`__fastcall`, `DynamicsCarImpl*` em RCX): `inclu
 
 ## Prólogo e instalação
 
-Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start, integrator, commit) abortam `TryInstall` se o prólogo falhar.
+Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start, integrator, commit, **frame loop H1/H2**) abortam `TryInstall` se o prólogo falhar.
 
 ## API
 

@@ -519,6 +519,7 @@ void __fastcall DetourCommit(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourFrameLoop(void *a1, void *a2, void *a3, void *a4) {
+  // Spec correction 1: H2 @ 0x140dbca20 entrada; H1 retorno (between-tick); writes enfileirados.
   OnBoundary(PhysicsHarnessBoundary::H2_FrameLoopEntry, true);
   if (g_origFrameLoop != nullptr) {
     g_origFrameLoop(a1, a2, a3, a4);
@@ -625,7 +626,8 @@ void LogReferenceAddresses(uintptr_t gameBase) {
   Logger::Info("PhysicsTickHarness: end step (H5) " +
                fmt(gameBase, kRvaEndStep, kVaEndStep));
   Logger::Info(
-      "PhysicsTickHarness: hook B1/M1-M3/B2 -> tick_start, integrator, commit");
+      "PhysicsTickHarness: hooks obrigatorios B1/M/B2 + H1/H2 frame_loop @ 0x"
+      "140dbca20");
 }
 
 DWORD WINAPI SelfTestThread(LPVOID) {
@@ -771,13 +773,14 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
+  if (!InstallHookSite("frame_loop", pFrameLoop,
+                       reinterpret_cast<void *>(&DetourFrameLoop),
+                       &g_origFrameLoop, kFrameLoop, kPrologueLength, true)) {
+    PhysicsTickHarness::Shutdown();
+    return false;
+  }
 
-  // Spec parte 2: apenas tick_start (B1), integrator (M1/M2), commit (M3/B2).
-  // Frame loop / per-tick caller / SetPose são referência ou extensões opcionais.
-  (void)InstallHookSite("frame_loop", pFrameLoop,
-                         reinterpret_cast<void *>(&DetourFrameLoop),
-                         &g_origFrameLoop, kFrameLoop, kPrologueLength, false);
-
+  // Opcionais se prólogo falhar: physics_step, pretick, end_step, aux logs.
   (void)InstallHookSite("physics_step", pPhysicsStep,
                          reinterpret_cast<void *>(&DetourPhysicsStep),
                          &g_origPhysicsStep, kPhysicsStep, kPrologueLength,

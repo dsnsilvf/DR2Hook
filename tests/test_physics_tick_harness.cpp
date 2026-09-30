@@ -180,6 +180,31 @@ void TestSpecPart3RigPointerConstant() {
               "Tag do rig == 4");
 }
 
+void TestSpecCorrection1FrameLoopWriteBoundaries() {
+  std::cout << "[RUN] TestSpecCorrection1FrameLoopWriteBoundaries..." << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaFrameLoop == 0x140DBCA20ULL,
+              "VA frame loop H1/H2");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(true, true);
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+  dr2hook::SafetyGuard::Configure(&scanner, 0);
+  dr2hook::SafetyGuard::SetPermissiveMode(true);
+
+  const uint8_t payload = 0x01;
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  1, dr2hook::PhysicsHarnessBoundary::H2_FrameLoopEntry, 0x320,
+                  &payload, sizeof(payload)),
+              "ScheduleWrite em H2");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  1, dr2hook::PhysicsHarnessBoundary::H1_FrameLoopReturn, 0x320,
+                  &payload, sizeof(payload)),
+              "ScheduleWrite em H1");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
+}
+
 void TestSpecCorrection2HookAddresses() {
   std::cout << "[RUN] TestSpecCorrection2HookAddresses..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kVaPhysicsStep == 0x140DBC500ULL,
@@ -225,6 +250,7 @@ int main() {
   TestSpecPart5NativeAddresses();
   TestSpecPart5NativeInvokeStub();
   TestSpecPart3RigPointerConstant();
+  TestSpecCorrection1FrameLoopWriteBoundaries();
   TestSpecCorrection2HookAddresses();
   TestRigChainValidationLogic();
 
