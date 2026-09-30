@@ -4,10 +4,12 @@
 #include "dr2hook/logger.h"
 #include "dr2hook/pause_menu.h"
 #include "dr2hook/proxy.h"
+#include "dr2hook/ui_data.h"
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   dr2hook::SetHostModule(static_cast<HMODULE>(lpParam));
   dr2hook::Logger::Init("dr2hook.log");
+  dr2hook::StartUiDataLog();
   dr2hook::EnsureProxyInitialized();
 
   if (dr2hook::GetOriginalProc("CreateDXGIFactory") != nullptr) {
@@ -32,6 +34,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   switch (ul_reason_for_call) {
   case DLL_PROCESS_ATTACH: {
     DisableThreadLibraryCalls(hModule);
+    dr2hook::InstallUiDataHook(hModule);
     HANDLE hThread =
         CreateThread(nullptr, 0, DR2Hook_InitThread, hModule, 0, nullptr);
     if (hThread != nullptr) {

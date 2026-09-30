@@ -34,9 +34,9 @@ echo "-> Gate 2 APROVADO: Validação sintática C++20 concluída sem erros."
 # -----------------------------------------------------------------------------
 # Gate 3: Compilação de Todos os Alvos de Teste
 # -----------------------------------------------------------------------------
-echo "[Gate 3/5] Compilando suítes de teste (Memória, Lua, Overlay e Soak)..."
+echo "[Gate 3/5] Compilando suítes de teste (Memória, Lua, Overlay, Soak e UI)..."
 cmake -B build
-cmake --build build --target test_memory_safety test_lua_engine test_overlay test_stability_soak -j"$(nproc)"
+cmake --build build --target test_memory_safety test_lua_engine test_overlay test_stability_soak test_ui_patch -j"$(nproc)"
 echo "-> Gate 3 APROVADO: Todos os executáveis de teste compilados."
 
 # -----------------------------------------------------------------------------
@@ -55,6 +55,9 @@ echo "  Executando test_overlay..."
 
 echo "  Executando test_stability_soak (10.000 iterações)..."
 ./build/test_stability_soak
+
+echo "  Executando test_ui_patch..."
+./build/test_ui_patch
 
 echo "-> Gate 4 APROVADO: 100% dos testes unitários e de soak aprovados."
 

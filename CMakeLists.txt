@@ -62,6 +62,9 @@ add_library(dxgi SHARED
     src/core/hooks.cpp
     src/core/logger.cpp
     src/core/pause_menu.cpp
+    src/core/ui_data.cpp
+    src/core/bxml.cpp
+    src/core/ui_patch.cpp
     vendor/minhook/src/buffer.c
     vendor/minhook/src/hook.c
     vendor/minhook/src/trampoline.c
@@ -283,6 +286,15 @@ endif()
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_stability_soak PRIVATE m)
 endif()
+
+# Alvo de teste executável local: XML binário e patch dos documentos de UI
+add_executable(test_ui_patch
+    tests/test_ui_patch.cpp
+    src/core/bxml.cpp
+    src/core/ui_patch.cpp
+)
+
+target_include_directories(test_ui_patch PRIVATE include)
 
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release

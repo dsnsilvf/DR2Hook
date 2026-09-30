@@ -28,7 +28,7 @@ Offsets do objeto de `0x130` bytes. Os valores são da sessão com o menu aberto
 | `+0x100` | ponteiro | Chave `pause_menu`. | CONFIRMADO |
 | `+0x118` | word | `1`. O construtor grava `1`. | Observado; papel UNKNOWN |
 | `+0x11c` | dword | `0xffffffff`. O construtor grava `-1`. Continuou `-1` com Continuar em destaque. | Não é o índice do destaque |
-| `+0x120` | qword | Preenchido por `0x1402d2122` a partir do retorno de `0x140d32200`. | Writer conhecido; significado UNKNOWN |
+| `+0x120` | qword | Handle da tela no gerenciador de UI, `{byte, u32 hash FNV-1a do nome}`, devolvido por `0x140d32200`. Ver [UI Data](ui_data.md#do-evento-à-tela-no-executável). | CONFIRMADO por análise estática |
 
 ## Text
 
@@ -161,7 +161,7 @@ As entradas `+0x18`, `+0x80` e `+0x88` e as seis strings de evento foram conferi
 
 ## Candidate Injection Point
 
-Candidato para a ativação: trocar a entrada `+0x88` da vtable `0x141250b50` por uma função que trate um nome de evento próprio, devolva verdadeiro e repasse o resto a `0x140285640`. Um evento que ninguém trata vira uma transição de fluxo inexistente, por isso o nome próprio tem de devolver verdadeiro. `0x1402d5ad0` e `0x140215a80` são compartilhados por outras telas e não servem para esse hook.
+Candidato para a ativação: trocar a entrada `+0x88` da vtable `0x141250b50` por uma função que trate um nome de evento próprio, devolva verdadeiro e repasse o resto a `0x140285640`. O nome próprio tem de devolver verdadeiro para não ficar pendente como transição. Pela análise estática, um nome sem link em nenhum nó da pilha não abre nada: ele só fica em `+0xd8` até o próximo evento ou até a saída do estado. HIPÓTESE forte, não testada ao vivo. `0x1402d5ad0` e `0x140215a80` são compartilhados por outras telas e não servem para esse hook.
 
 Candidato para a visibilidade: reaproveitar o item 9 (`reset_view`). Mostrá-lo já foi confirmado ao vivo, com `filho+0x28 = 1`. Como a ativação da tela recalcula esse byte, a DLL precisa regravá-lo a cada abertura. Os pontos para isso são um pós-hook em `+0x80` (`0x14025b460`) ou no avaliador `0x140d09380`. Faltam o texto (hoje `lng_vr_reset_view`) e a ação: o nome `reset_view` fica em `+0xa0` do objeto de ação e é tratado por `0x140285640`.
 
@@ -182,7 +182,7 @@ A primeira versão fechou o jogo no carregamento da especial, com violação de 
 ## Roadmap
 
 1. Item "DR2 ModLoader" no lugar do item 9. Implementado em `src/core/pause_menu.cpp` e validado no jogo.
-2. Tela totalmente personalizada, aberta por esse item. Ainda não investigado. O ponto de partida é o que já se sabe de `options`: ele é um evento que o dispatcher `0x140285640` não trata, então vira uma transição de fluxo e abre `ui.options_ingame`, outra tela `smart_hub`.
+2. Tela totalmente personalizada, aberta por esse item. `options` é um evento que o dispatcher `0x140285640` não trata, então vira uma transição de fluxo e abre `ui.options_ingame`, outra tela `smart_hub`. As telas, os estados e esse link estão nos dados do jogo, descritos em [UI Data](ui_data.md). A cadeia no executável e o ponto de leitura dos dados estão no mesmo documento. A versão atual altera os dados no boot: o item 9 passa a vir dos dados, com rótulo literal e sem condição de visibilidade, e abre a tela `dr2modloader`. CONFIRMADO no jogo: o item abre a tela nativa em vez do overlay. Os hooks desta página continuam instalados como reserva, para o caso de o patch dos dados falhar ou estar desligado.
 
 ## Gráficos
 
