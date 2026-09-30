@@ -1,0 +1,9 @@
+/workspace/build-mingw/CMakeFiles/dxgi.dir
+/workspace/build-mingw/CMakeFiles/test_memory_safety.dir
+/workspace/build-mingw/CMakeFiles/test_lua_engine.dir
+/workspace/build-mingw/CMakeFiles/test_overlay.dir
+/workspace/build-mingw/CMakeFiles/test_stability_soak.dir
+/workspace/build-mingw/CMakeFiles/test_physics_tick_harness.dir
+/workspace/build-mingw/CMakeFiles/package_release.dir
+/workspace/build-mingw/CMakeFiles/edit_cache.dir
+/workspace/build-mingw/CMakeFiles/rebuild_cache.dir

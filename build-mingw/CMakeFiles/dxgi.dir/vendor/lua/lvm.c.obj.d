@@ -1,0 +1,93 @@
+CMakeFiles/dxgi.dir/vendor/lua/lvm.c.obj: /workspace/vendor/lua/lvm.c \
+ /workspace/vendor/lua/lprefix.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/float.h \
+ /usr/share/mingw-w64/include/float.h \
+ /usr/share/mingw-w64/include/crtdefs.h \
+ /usr/share/mingw-w64/include/corecrt.h \
+ /usr/share/mingw-w64/include/_mingw.h \
+ /usr/share/mingw-w64/include/_mingw_mac.h \
+ /usr/share/mingw-w64/include/_mingw_secapi.h \
+ /usr/share/mingw-w64/include/vadefs.h \
+ /usr/share/mingw-w64/include/sdks/_mingw_ddk.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/limits.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/syslimits.h \
+ /usr/share/mingw-w64/include/limits.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/math.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/cmath \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/requires_hosted.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/x86_64-w64-mingw32/bits/c++config.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/x86_64-w64-mingw32/bits/os_defines.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/x86_64-w64-mingw32/bits/cpu_defines.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/pstl/pstl_config.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/cpp_type_traits.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/ext/type_traits.h \
+ /usr/share/mingw-w64/include/math.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/std_abs.h \
+ /usr/share/mingw-w64/include/stdlib.h \
+ /usr/share/mingw-w64/include/corecrt_wstdlib.h \
+ /usr/share/mingw-w64/include/sec_api/stdlib_s.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/stdlib.h \
+ /usr/share/mingw-w64/include/malloc.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/mm_malloc.h \
+ /usr/share/mingw-w64/include/errno.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/specfun.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_algobase.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/functexcept.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/exception_defines.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/ext/numeric_traits.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_pair.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/type_traits \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/move.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/utility.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/compare \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/concepts \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_iterator_base_types.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/iterator_concepts.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/ptr_traits.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/ranges_cmp.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_iterator_base_funcs.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/concept_check.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/debug/assertions.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_iterator.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/new \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/exception.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/stl_construct.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/debug/debug.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bits/predefined_ops.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/bit \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/limits \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/gamma.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/special_function_util.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/bessel_function.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/beta_function.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/ell_integral.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/exp_integral.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/hypergeometric.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/legendre_function.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/modified_bessel_func.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/poly_hermite.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/poly_laguerre.tcc \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/tr1/riemann_zeta.tcc \
+ /usr/share/mingw-w64/include/stdio.h \
+ /usr/share/mingw-w64/include/corecrt_stdio_config.h \
+ /usr/share/mingw-w64/include/_mingw_off_t.h \
+ /usr/share/mingw-w64/include/swprintf.inl \
+ /usr/share/mingw-w64/include/sec_api/stdio_s.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/c++/cstdlib \
+ /usr/share/mingw-w64/include/string.h \
+ /usr/share/mingw-w64/include/sec_api/string_s.h \
+ /workspace/vendor/lua/lua.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/stdarg.h \
+ /usr/share/mingw-w64/include/stdarg.h \
+ /usr/share/mingw-w64/include/_mingw_stdarg.h \
+ /usr/lib/gcc/x86_64-w64-mingw32/13-win32/include/stddef.h \
+ /usr/share/mingw-w64/include/stddef.h /workspace/vendor/lua/luaconf.h \
+ /workspace/vendor/lua/ldebug.h /workspace/vendor/lua/lstate.h \
+ /workspace/vendor/lua/lobject.h /workspace/vendor/lua/llimits.h \
+ /workspace/vendor/lua/ltm.h /workspace/vendor/lua/lzio.h \
+ /workspace/vendor/lua/lmem.h /usr/share/mingw-w64/include/signal.h \
+ /usr/share/mingw-w64/include/pthread_signal.h \
+ /workspace/vendor/lua/ldo.h /workspace/vendor/lua/lfunc.h \
+ /workspace/vendor/lua/lgc.h /workspace/vendor/lua/lopcodes.h \
+ /workspace/vendor/lua/lstring.h /workspace/vendor/lua/ltable.h \
+ /workspace/vendor/lua/lvm.h /workspace/vendor/lua/ljumptab.h

@@ -1,6 +1,7 @@
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/hook_prologue.h"
 #include "dr2hook/physics_harness_addresses.h"
+#include "dr2hook/physics_native_api.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/safety.h"
@@ -40,10 +41,6 @@ constexpr uintptr_t kRvaCommitAuxA = 0x73A070;
 constexpr uintptr_t kRvaCommitAuxB = 0x73B620;
 constexpr uintptr_t kRvaIntegratorReturnSite = 0x73E314;
 
-constexpr uintptr_t kRvaSetTransform = 0x74AD80;
-constexpr uintptr_t kRvaSetLinVel = 0x74A910;
-constexpr uintptr_t kRvaSetAngVel = 0x74A890;
-
 // Spec parte 3 — amostras CSV (16 bytes float vec4 por offset)
 constexpr uint32_t kRigVec4OffsetsPart3[] = {
     0x170, 0x180, 0x200, 0x210, 0x2b0, 0x2c0, 0x2d0, 0x2e0, 0x320, 0x330};
@@ -81,6 +78,7 @@ struct ScheduledNative {
   uint64_t tick = 0;
   PhysicsHarnessBoundary boundary = PhysicsHarnessBoundary::B1_TickStart;
   PhysicsNativeCallKind kind = PhysicsNativeCallKind::Commit;
+  physics_native::CallParams params{};
 };
 
 std::mutex s_writeQueueMutex;
@@ -99,8 +97,9 @@ PhysicsCall g_origEndStep = nullptr;
 PhysicsCall g_origCommitAuxA = nullptr;
 PhysicsCall g_origCommitAuxB = nullptr;
 
-using RigOnlyCall = void(__fastcall *)(void *rig);
-using SetLinVelCall = void(__fastcall *)(void *rig, float x, float y, float z);
+static physics_native::CallKind ToNativeCallKind(PhysicsNativeCallKind kind) {
+  return static_cast<physics_native::CallKind>(static_cast<uint8_t>(kind));
+}
 
 std::string GetExecutableDirectory() {
 #if defined(_WIN32)
@@ -408,6 +407,7 @@ void ExecuteScheduledWriteIfDue(PhysicsHarnessBoundary boundary) {
 }
 
 void ExecuteScheduledNativeIfDue(PhysicsHarnessBoundary boundary) {
+  // Spec parte 5: só nos detours de física; requer flag experimental + SafetyGuard.
   ScheduledNative pending{};
   {
     std::lock_guard<std::mutex> lock(s_writeQueueMutex);
@@ -435,34 +435,22 @@ void ExecuteScheduledNativeIfDue(PhysicsHarnessBoundary boundary) {
 
   uintptr_t rig = 0;
   if (!ResolvePlayerChain(s_gameBase, nullptr, &rig)) {
+    Logger::Warn("PhysicsTickHarness: native experimental recusado (rig invalido).");
     return;
   }
 
   void *rigPtr = reinterpret_cast<void *>(rig);
-  switch (pending.kind) {
-  case PhysicsNativeCallKind::SetTransform: {
-    auto fn = reinterpret_cast<RigOnlyCall>(s_gameBase + kRvaSetTransform);
-    fn(rigPtr);
-    break;
-  }
-  case PhysicsNativeCallKind::SetLinVel: {
-    auto fn = reinterpret_cast<SetLinVelCall>(s_gameBase + kRvaSetLinVel);
-    fn(rigPtr, 0.f, 0.f, 0.f);
-    break;
-  }
-  case PhysicsNativeCallKind::SetAngVel: {
-    auto fn = reinterpret_cast<SetLinVelCall>(s_gameBase + kRvaSetAngVel);
-    fn(rigPtr, 0.f, 0.f, 0.f);
-    break;
-  }
-  case PhysicsNativeCallKind::Commit: {
-    auto fn = reinterpret_cast<RigOnlyCall>(s_gameBase + kRvaCommit);
-    fn(rigPtr);
-    break;
-  }
-  }
+  const auto api = physics_native::ResolveEntrypoints(s_gameBase);
+  const auto nativeKind = ToNativeCallKind(pending.kind);
 
-  Logger::Info("PhysicsTickHarness: native experimental executado boundary=" +
+  Logger::Info("PhysicsTickHarness: native experimental antes kind=" +
+               std::to_string(static_cast<unsigned>(pending.kind)) + " boundary=" +
+               BoundaryName(boundary));
+
+  physics_native::Invoke(nativeKind, rigPtr, pending.params, api);
+
+  Logger::Info("PhysicsTickHarness: native experimental depois kind=" +
+               std::to_string(static_cast<unsigned>(pending.kind)) + " boundary=" +
                BoundaryName(boundary));
 }
 
@@ -887,22 +875,56 @@ bool PhysicsTickHarness::ScheduleWrite(uint64_t tick,
 
 bool PhysicsTickHarness::ScheduleExperimentalNative(
     uint64_t tick, PhysicsHarnessBoundary boundary,
-    PhysicsNativeCallKind kind) {
+    PhysicsNativeCallKind kind, const physics_native::CallParams &params) {
   if (!IsExperimentalNativeEnabled()) {
+    Logger::Warn(
+        "PhysicsTickHarness: ScheduleExperimentalNative recusado (desligado).");
+    return false;
+  }
+  if (!SafetyGuard::CanWriteState()) {
+    Logger::Warn(
+        "PhysicsTickHarness: ScheduleExperimentalNative recusado (SafetyGuard).");
     return false;
   }
   std::lock_guard<std::mutex> lock(s_writeQueueMutex);
-  if (s_scheduledWrite.active || s_scheduledNative.active) {
+  if (s_scheduledNative.active) {
+    Logger::Warn("PhysicsTickHarness: ja existe chamada nativa enfileirada.");
     return false;
   }
   s_scheduledNative.active = true;
   s_scheduledNative.tick = tick;
   s_scheduledNative.boundary = boundary;
   s_scheduledNative.kind = kind;
+  s_scheduledNative.params = params;
+  Logger::Info("PhysicsTickHarness: native enfileirada tick=" +
+               std::to_string(tick) + " boundary=" + BoundaryName(boundary) +
+               " kind=" + std::to_string(static_cast<unsigned>(kind)));
   return true;
 }
 
 #if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
+
+void PhysicsTickHarness::TestingSetExperimentalNative(bool enabled) {
+  s_experimentalNativeEnabled = enabled;
+  if (enabled) {
+    s_instrumentationEnabled = true;
+  }
+}
+
+void PhysicsTickHarness::TestingClearScheduledNative() {
+  std::lock_guard<std::mutex> lock(s_writeQueueMutex);
+  s_scheduledNative = ScheduledNative{};
+}
+
+bool PhysicsTickHarnessTestingInvokeNative(
+    PhysicsNativeCallKind kind, void *rig,
+    const physics_native::CallParams &params,
+    const physics_native::NativeEntrypoints &stubs) {
+  const auto nativeKind =
+      static_cast<physics_native::CallKind>(static_cast<uint8_t>(kind));
+  physics_native::Invoke(nativeKind, rig, params, stubs);
+  return true;
+}
 
 void PhysicsTickHarness::TestingSetInstrumentationAndWrites(bool instrumentation,
                                                             bool writes) {

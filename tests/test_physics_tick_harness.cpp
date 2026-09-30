@@ -4,6 +4,7 @@
 #include "dr2hook/physics_harness_addresses.h"
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
+#include "dr2hook/physics_native_api.h"
 #include "dr2hook/safety.h"
 
 #include <cstring>
@@ -113,6 +114,64 @@ void TestScheduleWriteSingleQueue() {
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
 }
 
+struct NativeStubState {
+  int setLinVelCalls = 0;
+  void *lastRig = nullptr;
+  float lastVx = 0.f;
+};
+
+NativeStubState g_nativeStubState;
+
+void __fastcall StubSetLinVel(void *rig, float x, float y, float z) {
+  g_nativeStubState.setLinVelCalls++;
+  g_nativeStubState.lastRig = rig;
+  g_nativeStubState.lastVx = x;
+  (void)y;
+  (void)z;
+}
+
+void TestSpecPart5NativeInvokeStub() {
+  std::cout << "[RUN] TestSpecPart5NativeInvokeStub..." << std::endl;
+  g_nativeStubState = NativeStubState{};
+  dr2hook::physics_native::NativeEntrypoints stubs{};
+  stubs.setLinVel = StubSetLinVel;
+
+  dr2hook::physics_native::CallParams params{};
+  params.vx = 12.5f;
+  void *rig = reinterpret_cast<void *>(0x7000);
+
+  TEST_ASSERT(dr2hook::PhysicsTickHarnessTestingInvokeNative(
+                  dr2hook::PhysicsNativeCallKind::SetLinVel, rig, params,
+                  stubs),
+              "Invoke com stub deve retornar true");
+  TEST_ASSERT(g_nativeStubState.setLinVelCalls == 1,
+              "Stub SetLinVel deve ser chamado uma vez");
+  TEST_ASSERT(g_nativeStubState.lastRig == rig, "Rig passado ao stub");
+  TEST_ASSERT(g_nativeStubState.lastVx == 12.5f, "Componente vx preservado");
+}
+
+void TestSpecPart5NativeAddresses() {
+  std::cout << "[RUN] TestSpecPart5NativeAddresses..." << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaSetTransform == 0x14074AD80ULL,
+              "VA SetTransform");
+  TEST_ASSERT(dr2hook::physics_harness::kVaSetLinVel == 0x14074A910ULL,
+              "VA SetLinVel");
+  TEST_ASSERT(dr2hook::physics_harness::kVaSetAngVel == 0x14074A890ULL,
+              "VA SetAngVel");
+  TEST_ASSERT(dr2hook::physics_harness::kVaCommit == 0x14074D190ULL,
+              "VA Commit");
+}
+
+void TestScheduleExperimentalNativeRequiresOptIn() {
+  std::cout << "[RUN] TestScheduleExperimentalNativeRequiresOptIn..." << std::endl;
+  dr2hook::PhysicsTickHarness::LoadConfiguration();
+  dr2hook::physics_native::CallParams params{};
+  TEST_ASSERT(!dr2hook::PhysicsTickHarness::ScheduleExperimentalNative(
+                  1, dr2hook::PhysicsHarnessBoundary::B2_AfterCommit,
+                  dr2hook::PhysicsNativeCallKind::Commit, params),
+              "Native recusado sem flag experimental");
+}
+
 void TestSpecPart3RigPointerConstant() {
   std::cout << "[RUN] TestSpecPart3RigPointerConstant..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kRvaActiveCarPointer == 0x1681CE8,
@@ -149,6 +208,9 @@ int main() {
   TestVerifyPrologue();
   TestScheduleWriteRequiresOptIn();
   TestScheduleWriteSingleQueue();
+  TestScheduleExperimentalNativeRequiresOptIn();
+  TestSpecPart5NativeAddresses();
+  TestSpecPart5NativeInvokeStub();
   TestSpecPart3RigPointerConstant();
   TestRigChainValidationLogic();
 

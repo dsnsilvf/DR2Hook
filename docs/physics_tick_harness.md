@@ -61,6 +61,22 @@ Cabeçalho: `tick,boundary,rig`, depois `vec4_0x…_{x,y,z,w}` e `scalar_0x…`.
 - **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`.
 - **Log:** `before=` / `after=` em hex no `dr2hook.log`.
 
+## Spec parte 5 — API nativa experimental
+
+Desligada por defeito (`experimental_native=0`). Endereços (base `0x140000000`):
+
+| API | VA |
+| :--- | :--- |
+| SetTransform | `0x14074ad80` |
+| SetLinVel | `0x14074a910` |
+| SetAngVel | `0x14074a890` |
+| Commit | `0x14074d190` |
+
+Tipos e convenções inferidas (`__fastcall`, `DynamicsCarImpl*` em RCX): `include/dr2hook/physics_native_api.h`.
+
+- **Agendar:** `ScheduleExperimentalNative(tick, boundary, kind, CallParams)` — uma chamada na fila; exige flag experimental **e** `SafetyGuard`.
+- **Executar:** `ExecuteScheduledNativeIfDue` nos detours de física (mesmo boundary/tick que a fila).
+
 ## Endereços adicionais (extensões)
 
 ## Prólogo e instalação
@@ -69,8 +85,7 @@ Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatóri
 
 ## API
 
-- `ScheduleWrite(...)` — spec parte 4 (acima).
-- `ScheduleExperimentalNative(...)` — extensão separada; não partilha a fila de `ScheduleWrite`.
+- `ScheduleExperimentalNative(..., CallParams)` — spec parte 5.
 
 ## Calibrar prólogos
 

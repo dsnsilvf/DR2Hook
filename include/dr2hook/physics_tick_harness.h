@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dr2hook/common.h"
+#include "dr2hook/physics_native_api.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -46,18 +47,29 @@ public:
                             uint32_t rigOffset, const void *bytes,
                             size_t byteCount);
 
+  static bool ScheduleExperimentalNative(
+      uint64_t tick, PhysicsHarnessBoundary boundary,
+      PhysicsNativeCallKind kind,
+      const physics_native::CallParams &params = {});
+
+  static uintptr_t ResolvePlayerRig(uintptr_t gameModuleBase);
+
 #if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
   static void TestingSetInstrumentationAndWrites(bool instrumentation,
                                                  bool writes);
+  static void TestingSetExperimentalNative(bool enabled);
   static void TestingClearScheduledWrite();
+  static void TestingClearScheduledNative();
 #endif
-
-  static bool ScheduleExperimentalNative(uint64_t tick,
-                                         PhysicsHarnessBoundary boundary,
-                                         PhysicsNativeCallKind kind);
-
-  static uintptr_t ResolvePlayerRig(uintptr_t gameModuleBase);
 };
+
+#if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
+// Executa Invoke() com stubs (unit tests, memória simulada).
+bool PhysicsTickHarnessTestingInvokeNative(PhysicsNativeCallKind kind,
+                                           void *rig,
+                                           const physics_native::CallParams &params,
+                                           const physics_native::NativeEntrypoints &stubs);
+#endif
 
 } // namespace dr2hook
 

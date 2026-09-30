@@ -21,6 +21,15 @@ inline constexpr uintptr_t kVaPerTickCaller = kImageBase + kRvaPerTickCaller; //
 inline constexpr uintptr_t kVaSetPose = kImageBase + kRvaSetPose;             // 0x140746770
 inline constexpr uintptr_t kVaFrameLoop = kImageBase + kRvaFrameLoop;         // 0x140dbca20
 
+// Spec parte 5 — API nativa experimental (DynamicsCarImpl* em RCX)
+inline constexpr uintptr_t kRvaSetTransform = 0x74AD80;
+inline constexpr uintptr_t kRvaSetLinVel = 0x74A910;
+inline constexpr uintptr_t kRvaSetAngVel = 0x74A890;
+
+inline constexpr uintptr_t kVaSetTransform = kImageBase + kRvaSetTransform; // 0x14074ad80
+inline constexpr uintptr_t kVaSetLinVel = kImageBase + kRvaSetLinVel;         // 0x14074a910
+inline constexpr uintptr_t kVaSetAngVel = kImageBase + kRvaSetAngVel;         // 0x14074a890
+
 // Spec parte 3 — ponteiro global do carro ativo (.data)
 inline constexpr uintptr_t kRvaActiveCarPointer = 0x1681CE8;
 inline constexpr uintptr_t kVaActiveCarPointer = kImageBase + kRvaActiveCarPointer;

@@ -41,7 +41,15 @@ Step-by-step notes for Windows and Linux / Steam Deck are in [docs/INSTALL.md](d
 
 ## Physics tick harness (opt-in)
 
-For reverse-engineering and instrumentation only: hooks on the EGO physics tick path, CSV logging of rig/container samples, and optional queued writes on the physics thread (never from `Present`). It is **off by default**; enable with `DR2HOOK_PHYSICS_HARNESS=1` or `dr2hook_physics_harness.ini`. See [docs/physics_tick_harness.md](docs/physics_tick_harness.md).
+For reverse-engineering and instrumentation only: hooks on the EGO physics tick path, CSV logging of rig samples, optional queued **memory writes**, and optional **experimental native API** calls (`SetTransform`, `SetLinVel`, `SetAngVel`, `Commit` at the spec VAs). Everything is **off by default**.
+
+| Enable | Env / INI |
+| --- | --- |
+| Instrumentation + CSV | `DR2HOOK_PHYSICS_HARNESS=1` or `instrumentation=1` |
+| Queued rig writes | `DR2HOOK_PHYSICS_HARNESS_WRITES=1` or `writes=1` |
+| Experimental native calls | `DR2HOOK_PHYSICS_HARNESS_EXPERIMENTAL_NATIVE=1` or `experimental_native=1` |
+
+Native calls require instrumentation, the experimental flag, and `SafetyGuard::CanWriteState()`. They run only on a chosen physics boundary (never on `Present`). Details: [docs/physics_tick_harness.md](docs/physics_tick_harness.md).
 
 ## Build
 
