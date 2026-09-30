@@ -2,10 +2,16 @@
 .text
 .globl PhysicsHarness_DetourCommon
 
+// r12 = DetourOps* (callee-saved; survives C calls that clobber r11)
+// r13 = caller return address at thunk entry ([rsp] before prologue push)
 PhysicsHarness_DetourCommon:
+.seh_proc PhysicsHarness_DetourCommon
   push rbp
+  .seh_pushreg rbp
   mov rbp, rsp
   sub rsp, 0xC0
+  .seh_stackalloc 0xC0
+  .seh_endprologue
 
   mov QWORD PTR [rsp + 0x08], rcx
   mov QWORD PTR [rsp + 0x10], rdx
@@ -15,8 +21,9 @@ PhysicsHarness_DetourCommon:
   movaps XMMWORD PTR [rsp + 0x40], xmm1
   movaps XMMWORD PTR [rsp + 0x50], xmm2
   movaps XMMWORD PTR [rsp + 0x60], xmm3
+  mov QWORD PTR [rsp + 0x68], r13
 
-  mov rax, QWORD PTR [r11]
+  mov rax, QWORD PTR [r12]
   test rax, rax
   je skip_before
   lea rcx, [rsp + 0x08]
@@ -32,7 +39,7 @@ skip_before:
   movaps xmm2, XMMWORD PTR [rsp + 0x50]
   movaps xmm3, XMMWORD PTR [rsp + 0x60]
 
-  mov rax, QWORD PTR [r11 + 16]
+  mov rax, QWORD PTR [r12 + 16]
   mov rax, QWORD PTR [rax]
   test rax, rax
   je skip_orig
@@ -40,9 +47,9 @@ skip_before:
 
 skip_orig:
   mov QWORD PTR [rsp + 0x70], rax
-  movaps XMMWORD PTR [rsp + 0x80], xmm0
+  movaps XMMWORD PTR [rsp + 0x78], xmm0
 
-  mov rax, QWORD PTR [r11 + 8]
+  mov rax, QWORD PTR [r12 + 8]
   test rax, rax
   je skip_after
   lea rcx, [rsp + 0x08]
@@ -50,16 +57,18 @@ skip_orig:
 
 skip_after:
   mov rax, QWORD PTR [rsp + 0x70]
-  movaps xmm0, XMMWORD PTR [rsp + 0x80]
+  movaps xmm0, XMMWORD PTR [rsp + 0x78]
 
   mov rsp, rbp
   pop rbp
   ret
+.seh_endproc
 
 .macro detour_entry name, ops
 .globl \name
 \name:
-  lea r11, [\ops + rip]
+  lea r12, [\ops + rip]
+  mov r13, QWORD PTR [rsp]
   jmp PhysicsHarness_DetourCommon
 .endm
 

@@ -742,14 +742,8 @@ void HarnessBeforeTickStart(physics_harness_abi::Frame *) {
   MaybeCompleteSelfTestObservation();
 }
 
-void HarnessAfterIntegrator(physics_harness_abi::Frame *) {
-  void *ret = nullptr;
-#if defined(_MSC_VER)
-  ret = _ReturnAddress();
-#elif defined(__GNUC__)
-  ret = __builtin_return_address(0);
-#endif
-  const uintptr_t retAddr = reinterpret_cast<uintptr_t>(ret);
+void HarnessAfterIntegrator(physics_harness_abi::Frame *frame) {
+  const uintptr_t retAddr = frame->caller_return;
   if (retAddr == s_gameBase + kRvaIntegratorM2ReturnSite) {
     OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, false);
   }

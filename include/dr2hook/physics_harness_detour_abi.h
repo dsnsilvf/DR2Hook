@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // Win64: preserva RCX/RDX/R8/R9 e XMM0–XMM3 em torno do logging (BUG 2 — dt em XMM1).
@@ -17,9 +18,18 @@ struct alignas(16) Frame {
   alignas(16) uint8_t xmm1[16];
   alignas(16) uint8_t xmm2[16];
   alignas(16) uint8_t xmm3[16];
+  // Endereço de retorno do caller do jogo ([rsp] na entrada do thunk), não do stub.
+  uint64_t caller_return;
   uint64_t rax;
   alignas(16) uint8_t xmm0_ret[16];
 };
+
+static_assert(offsetof(Frame, caller_return) == 0x60,
+              "physics_harness_detour_x64.S must store caller return at [frame+0x60]");
+static_assert(offsetof(Frame, rax) == 0x68,
+              "physics_harness_detour_x64.S must store RAX at [frame+0x68]");
+static_assert(offsetof(Frame, xmm0_ret) == 0x70,
+              "physics_harness_detour_x64.S must store XMM0 ret at [frame+0x70]");
 
 struct DetourOps {
   void (*before)(Frame *frame);
