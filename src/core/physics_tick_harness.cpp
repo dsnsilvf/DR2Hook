@@ -8,9 +8,6 @@
 
 #if !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
 #include <MinHook.h>
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif
 #endif
 
 #include "dr2hook/physics_harness_detour_abi.h"
