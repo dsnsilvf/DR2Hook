@@ -1,6 +1,7 @@
 #include "dr2hook/hook_prologue.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
+#include "dr2hook/physics_harness_addresses.h"
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
 
@@ -87,6 +88,14 @@ bool ResolveRigWithMock(dr2hook::MockMemoryAccessor &mock, uintptr_t gameBase) {
   return tag == 4 && rig == kRig;
 }
 
+void TestSpecPart3RigPointerConstant() {
+  std::cout << "[RUN] TestSpecPart3RigPointerConstant..." << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kRvaActiveCarPointer == 0x1681CE8,
+              "Ponteiro global do carro 0x1681ce8");
+  TEST_ASSERT(dr2hook::physics_harness::kRigExpectedTypeTag == 4,
+              "Tag do rig == 4");
+}
+
 void TestRigChainValidationLogic() {
   std::cout << "[RUN] TestRigChainValidationLogic..." << std::endl;
   dr2hook::MockMemoryAccessor mock;
@@ -114,6 +123,7 @@ int main() {
   std::cout << "DR2Hook - Physics Tick Harness (unit)" << std::endl;
   TestVerifyPrologue();
   TestScheduleWriteRequiresOptIn();
+  TestSpecPart3RigPointerConstant();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun

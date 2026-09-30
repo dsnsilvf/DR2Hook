@@ -38,21 +38,27 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 | **M3** | Antes do Commit | `0x14074d190` |
 | **B2** | Depois do Commit (pós-trampoline) | `0x14074d190` |
 
+## Spec parte 3 — logging CSV
+
+- **Contador:** `s_tickCounter` (`uint64_t`, monotônico), incrementado em **B1** (tick start); todas as linhas CSV do mesmo ciclo partilham o mesmo `tick`.
+- **Cada boundary** (B1, M1, M2, M3, B2, …) chama `LogBoundarySample` → uma linha em `dr2hook_physics_tick_harness.csv`.
+- **Cadeia do rig:** `[exe + 0x1681ce8]` → `car`; `car + 0x30` → `container`; `container + 0x08` → `rig`.
+- **Validação:** `*(uint64_t*)(rig + 0x12c0) == rig` e `*(uint32_t*)(rig + 0x12d0) == 4`. Se falhar, **não** escreve linha CSV.
+
+### Colunas (rig)
+
+| Campo | Offsets |
+| :--- | :--- |
+| `vec4` (4× float) | `0x170`, `0x180`, `0x200`, `0x210`, `0x2b0`, `0x2c0`, `0x2d0`, `0x2e0`, `0x320`, `0x330` |
+| `scalar` (float) | `0x2508`, `0x1338` |
+
+Cabeçalho: `tick,boundary,rig`, depois `vec4_0x…_{x,y,z,w}` e `scalar_0x…`.
+
 ## Endereços adicionais (extensões)
 
-Cada instalação chama `VerifyHookPrologue` (`include/dr2hook/hook_prologue.h`, mesma política dos hooks de UI/game) **antes** de `MH_CreateHook`. Em mismatch o hook em causa **não** é instalado; hooks obrigatórios (tick start, integrator, commit, frame loop) abortam `TryInstall` inteiro.
+## Prólogo e instalação
 
-## Cadeia do rig (filtro jogador)
-
-```
-[exe + 0x1681ce8] -> car -> +0x30 container -> +0x08 rig
-```
-
-Validação: `*(rig + 0x12c0) == rig` e `*(uint32_t*)(rig + 0x12d0) == 4`. CSV e writes só quando a cadeia é válida.
-
-## CSV (`dr2hook_physics_tick_harness.csv`)
-
-Colunas: tick, boundary, `thread_id`, rig, F5/F6/F7, offsets rig `0x170`…`0x330` (vec4), escalares `0x2508`/`0x1338`, vec4 rig `0x290`, vec4 container `0xc930`.
+Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start, integrator, commit) abortam `TryInstall` se o prólogo falhar.
 
 ## API
 

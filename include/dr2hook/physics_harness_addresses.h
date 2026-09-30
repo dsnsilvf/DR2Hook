@@ -21,4 +21,13 @@ inline constexpr uintptr_t kVaPerTickCaller = kImageBase + kRvaPerTickCaller; //
 inline constexpr uintptr_t kVaSetPose = kImageBase + kRvaSetPose;             // 0x140746770
 inline constexpr uintptr_t kVaFrameLoop = kImageBase + kRvaFrameLoop;         // 0x140dbca20
 
+// Spec parte 3 — ponteiro global do carro ativo (.data)
+inline constexpr uintptr_t kRvaActiveCarPointer = 0x1681CE8;
+inline constexpr uintptr_t kVaActiveCarPointer = kImageBase + kRvaActiveCarPointer;
+
+// Validação do rig (DynamicsCarImpl)
+inline constexpr uint32_t kRigSelfPointerOffset = 0x12C0;
+inline constexpr uint32_t kRigTypeTagOffset = 0x12D0;
+inline constexpr uint32_t kRigExpectedTypeTag = 4;
+
 } // namespace dr2hook::physics_harness

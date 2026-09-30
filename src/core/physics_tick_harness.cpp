@@ -44,13 +44,15 @@ constexpr uintptr_t kRvaSetTransform = 0x74AD80;
 constexpr uintptr_t kRvaSetLinVel = 0x74A910;
 constexpr uintptr_t kRvaSetAngVel = 0x74A890;
 
-constexpr uintptr_t kGlobalCarPointer = 0x1681CE8;
+// Spec parte 3 — amostras CSV (16 bytes float vec4 por offset)
+constexpr uint32_t kRigVec4OffsetsPart3[] = {
+    0x170, 0x180, 0x200, 0x210, 0x2b0, 0x2c0, 0x2d0, 0x2e0, 0x320, 0x330};
+constexpr uint32_t kRigScalarOffsetsPart3[] = {0x2508, 0x1338};
 
-constexpr uint32_t kRigVec4Offsets[] = {0x170, 0x180, 0x200, 0x210, 0x2b0,
-                                        0x2c0, 0x2d0, 0x2e0, 0x320, 0x330};
-constexpr uint32_t kRigScalarOffsets[] = {0x2508, 0x1338};
-constexpr uint32_t kRigExtraVec4Offset = 0x290;
-constexpr uint32_t kContainerExtraVec4Offset = 0xC930;
+static_assert(sizeof(kRigVec4OffsetsPart3) / sizeof(uint32_t) == 10,
+              "Spec parte 3: dez offsets vec4");
+static_assert(sizeof(kRigScalarOffsetsPart3) / sizeof(uint32_t) == 2,
+              "Spec parte 3: dois escalares");
 
 bool s_instrumentationEnabled = false;
 bool s_writesEnabled = false;
@@ -213,7 +215,8 @@ bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
   }
 
   uintptr_t car = 0;
-  std::memcpy(&car, reinterpret_cast<void *>(gameBase + kGlobalCarPointer),
+  std::memcpy(&car,
+              reinterpret_cast<void *>(gameBase + kRvaActiveCarPointer),
               sizeof(car));
   if (car == 0) {
     return false;
@@ -233,14 +236,16 @@ bool ResolvePlayerChain(uintptr_t gameBase, uintptr_t *outContainer,
   }
 
   uintptr_t self = 0;
-  std::memcpy(&self, reinterpret_cast<void *>(rig + 0x12C0), sizeof(self));
+  std::memcpy(&self, reinterpret_cast<void *>(rig + kRigSelfPointerOffset),
+              sizeof(self));
   if (self != rig) {
     return false;
   }
 
   uint32_t tag = 0;
-  std::memcpy(&tag, reinterpret_cast<void *>(rig + 0x12D0), sizeof(tag));
-  if (tag != 4) {
+  std::memcpy(&tag, reinterpret_cast<void *>(rig + kRigTypeTagOffset),
+              sizeof(tag));
+  if (tag != kRigExpectedTypeTag) {
     return false;
   }
 
@@ -290,38 +295,25 @@ void WriteCsvHeaderIfNeeded() {
   if (s_csvHeaderWritten || !s_csvStream.is_open()) {
     return;
   }
-  s_csvStream << "tick,boundary,thread_id,rig,f5,f6,f7";
-  for (uint32_t off : kRigVec4Offsets) {
+  s_csvStream << "tick,boundary,rig";
+  for (uint32_t off : kRigVec4OffsetsPart3) {
     char label[32];
     std::snprintf(label, sizeof(label), "0x%X", off);
     s_csvStream << ",vec4_" << label << "_x,vec4_" << label
                 << "_y,vec4_" << label << "_z,vec4_" << label << "_w";
   }
-  for (uint32_t off : kRigScalarOffsets) {
+  for (uint32_t off : kRigScalarOffsetsPart3) {
     char label[32];
     std::snprintf(label, sizeof(label), "0x%X", off);
     s_csvStream << ",scalar_" << label;
   }
-  s_csvStream << ",vec4_rig_0x290_x,vec4_rig_0x290_y,vec4_rig_0x290_z,vec4_"
-                 "rig_0x290_w";
-  s_csvStream << ",vec4_container_0xc930_x,vec4_container_0xc930_y,vec4_"
-                 "container_0xc930_z,vec4_container_0xc930_w\n";
+  s_csvStream << "\n";
   s_csvHeaderWritten = true;
 }
 
-bool IsFunctionKeyDown(int vk) {
-#if defined(_WIN32)
-  return (GetAsyncKeyState(vk) & 0x8000) != 0;
-#else
-  (void)vk;
-  return false;
-#endif
-}
-
 void LogBoundarySample(PhysicsHarnessBoundary boundary) {
-  uintptr_t container = 0;
   uintptr_t rig = 0;
-  if (!ResolvePlayerChain(s_gameBase, &container, &rig)) {
+  if (!ResolvePlayerChain(s_gameBase, nullptr, &rig)) {
     return;
   }
 
@@ -333,42 +325,21 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
   }
   WriteCsvHeaderIfNeeded();
 
-#if defined(_WIN32)
-  const unsigned long threadId = GetCurrentThreadId();
-#else
-  const unsigned long threadId = 0;
-#endif
-
   s_csvStream << s_tickCounter.load(std::memory_order_relaxed) << ','
-              << BoundaryName(boundary) << ',' << threadId << ",0x" << std::hex
-              << rig << std::dec << ',' << (IsFunctionKeyDown(VK_F5) ? 1 : 0)
-              << ',' << (IsFunctionKeyDown(VK_F6) ? 1 : 0) << ','
-              << (IsFunctionKeyDown(VK_F7) ? 1 : 0);
+              << BoundaryName(boundary) << ",0x" << std::hex << rig << std::dec;
 
-  for (uint32_t off : kRigVec4Offsets) {
+  for (uint32_t off : kRigVec4OffsetsPart3) {
     float values[4] = {};
     std::memcpy(values, reinterpret_cast<void *>(rig + off), sizeof(values));
     s_csvStream << ',' << values[0] << ',' << values[1] << ',' << values[2]
                 << ',' << values[3];
   }
-  for (uint32_t off : kRigScalarOffsets) {
+  for (uint32_t off : kRigScalarOffsetsPart3) {
     float scalar = 0.f;
     std::memcpy(&scalar, reinterpret_cast<void *>(rig + off), sizeof(scalar));
     s_csvStream << ',' << scalar;
   }
-
-  float rigExtra[4] = {};
-  std::memcpy(rigExtra, reinterpret_cast<void *>(rig + kRigExtraVec4Offset),
-              sizeof(rigExtra));
-  s_csvStream << ',' << rigExtra[0] << ',' << rigExtra[1] << ',' << rigExtra[2]
-              << ',' << rigExtra[3];
-
-  float containerExtra[4] = {};
-  std::memcpy(containerExtra,
-              reinterpret_cast<void *>(container + kContainerExtraVec4Offset),
-              sizeof(containerExtra));
-  s_csvStream << ',' << containerExtra[0] << ',' << containerExtra[1] << ','
-              << containerExtra[2] << ',' << containerExtra[3] << '\n';
+  s_csvStream << '\n';
   s_csvStream.flush();
 }
 
@@ -501,6 +472,7 @@ void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
 }
 
 void __fastcall DetourTickStart(void *a1, void *a2, void *a3, void *a4) {
+  // Contador monotônico de tick (spec parte 3): incrementa uma vez por tick start.
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
   // B1 — antes do tick start @ 0x14074b8f0
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
