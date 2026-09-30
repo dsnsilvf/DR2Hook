@@ -54,6 +54,13 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 
 Cabeçalho: `tick,boundary,rig`, depois `vec4_0x…_{x,y,z,w}` e `scalar_0x…`.
 
+## Spec parte 4 — escritas enfileiradas
+
+- **API:** `ScheduleWrite(tick, boundary, rigOffset, bytes, len)` — uma escrita na fila.
+- **Gating:** flag `writes` **e** `SafetyGuard::CanWriteState()` (agendamento e execução). `SetPermissiveMode(true)` em `main.cpp` inalterado.
+- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`.
+- **Log:** `before=` / `after=` em hex no `dr2hook.log`.
+
 ## Endereços adicionais (extensões)
 
 ## Prólogo e instalação
