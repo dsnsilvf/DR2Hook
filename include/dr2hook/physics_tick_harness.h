@@ -50,9 +50,6 @@ public:
                                          PhysicsHarnessBoundary boundary,
                                          PhysicsNativeCallKind kind);
 
-  static bool VerifyPrologue(const void *target, const uint8_t *expected,
-                             size_t expectedLength);
-
   static uintptr_t ResolvePlayerRig(uintptr_t gameModuleBase);
 };
 

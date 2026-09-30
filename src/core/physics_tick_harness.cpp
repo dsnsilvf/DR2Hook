@@ -1,4 +1,5 @@
 #include "dr2hook/physics_tick_harness.h"
+#include "dr2hook/hook_prologue.h"
 #include "dr2hook/physics_tick_harness_prologues.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/safety.h"
@@ -587,22 +588,21 @@ bool InstallHookSite(const char *name, void *target, void *detour,
                      PhysicsCall *originalOut,
                      const uint8_t *expectedPrologue, size_t prologueLength,
                      bool required) {
-  if (!PhysicsTickHarness::VerifyPrologue(target, expectedPrologue,
-                                          prologueLength)) {
+  if (!VerifyHookPrologue(target, expectedPrologue, prologueLength)) {
     LogPrologueMismatch(name, target, expectedPrologue, prologueLength);
-    return !required;
+    return false;
   }
 
   if (MH_CreateHook(target, detour, reinterpret_cast<void **>(originalOut)) !=
       MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_CreateHook falhou em ") +
                   name);
-    return !required;
+    return false;
   }
   if (MH_EnableHook(target) != MH_OK) {
     Logger::Error(std::string("PhysicsTickHarness: MH_EnableHook falhou em ") +
                   name);
-    return !required;
+    return false;
   }
   Logger::Info(std::string("PhysicsTickHarness: hook instalado em ") + name);
   return true;
@@ -644,16 +644,6 @@ DWORD WINAPI SelfTestThread(LPVOID) {
 #endif // !DR2HOOK_PHYSICS_HARNESS_NO_HOOKS
 
 } // namespace
-
-bool PhysicsTickHarness::VerifyPrologue(const void *target,
-                                        const uint8_t *expected,
-                                        size_t expectedLength) {
-  if (target == nullptr || expected == nullptr || expectedLength == 0) {
-    return false;
-  }
-  const auto *actual = static_cast<const uint8_t *>(target);
-  return std::memcmp(actual, expected, expectedLength) == 0;
-}
 
 uintptr_t PhysicsTickHarness::ResolvePlayerRig(uintptr_t gameModuleBase) {
   uintptr_t rig = 0;
@@ -787,22 +777,25 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
     return false;
   }
 
-  InstallHookSite("physics_step", pPhysicsStep,
-                  reinterpret_cast<void *>(&DetourPhysicsStep), &g_origPhysicsStep,
-                  kPhysicsStep, kPrologueLength, false);
-  InstallHookSite("pretick", pPreTick, reinterpret_cast<void *>(&DetourPreTick),
-                  &g_origPreTick, kPreTick, kPrologueLength, false);
-  InstallHookSite("end_step", pEndStep, reinterpret_cast<void *>(&DetourEndStep),
-                  &g_origEndStep, kEndStep, kPrologueLength, false);
+  (void)InstallHookSite("physics_step", pPhysicsStep,
+                         reinterpret_cast<void *>(&DetourPhysicsStep),
+                         &g_origPhysicsStep, kPhysicsStep, kPrologueLength,
+                         false);
+  (void)InstallHookSite("pretick", pPreTick,
+                         reinterpret_cast<void *>(&DetourPreTick), &g_origPreTick,
+                         kPreTick, kPrologueLength, false);
+  (void)InstallHookSite("end_step", pEndStep,
+                         reinterpret_cast<void *>(&DetourEndStep), &g_origEndStep,
+                         kEndStep, kPrologueLength, false);
 
   void *pAuxA = reinterpret_cast<void *>(gameModuleBase + kRvaCommitAuxA);
   void *pAuxB = reinterpret_cast<void *>(gameModuleBase + kRvaCommitAuxB);
-  InstallHookSite("commit_aux_a", pAuxA,
-                  reinterpret_cast<void *>(&DetourCommitAuxA),
-                  &g_origCommitAuxA, kCommitAuxA, kPrologueLength, false);
-  InstallHookSite("commit_aux_b", pAuxB,
-                  reinterpret_cast<void *>(&DetourCommitAuxB),
-                  &g_origCommitAuxB, kCommitAuxB, kPrologueLength, false);
+  (void)InstallHookSite("commit_aux_a", pAuxA,
+                         reinterpret_cast<void *>(&DetourCommitAuxA),
+                         &g_origCommitAuxA, kCommitAuxA, kPrologueLength, false);
+  (void)InstallHookSite("commit_aux_b", pAuxB,
+                         reinterpret_cast<void *>(&DetourCommitAuxB),
+                         &g_origCommitAuxB, kCommitAuxB, kPrologueLength, false);
 
   s_installed = true;
   Logger::Info("PhysicsTickHarness: instrumentation ativa (opt-in).");

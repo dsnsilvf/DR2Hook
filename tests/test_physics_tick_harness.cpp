@@ -1,3 +1,4 @@
+#include "dr2hook/hook_prologue.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
 #include "dr2hook/physics_tick_harness.h"
@@ -28,14 +29,13 @@ void TestVerifyPrologue() {
   const uint8_t buffer[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
                             0x24, 0x10, 0x48, 0x89};
   TEST_ASSERT(
-      dr2hook::PhysicsTickHarness::VerifyPrologue(
+      dr2hook::VerifyHookPrologue(
           buffer, dr2hook::physics_harness_prologues::kTickStart,
           dr2hook::physics_harness_prologues::kPrologueLength),
       "Prologo esperado deve coincidir");
   const uint8_t bad[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  TEST_ASSERT(!dr2hook::PhysicsTickHarness::VerifyPrologue(
-                  buffer, bad, sizeof(bad)),
+  TEST_ASSERT(!dr2hook::VerifyHookPrologue(buffer, bad, sizeof(bad)),
               "Prologo divergente deve falhar");
 }
 
