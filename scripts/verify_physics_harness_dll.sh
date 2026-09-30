@@ -34,7 +34,7 @@ patterns = {
     "tick_start": "48 8b c4 48 89 58 18 48 89 70 20 55",
     "integrator": "48 8b c4 48 89 58 10 55 48 8d a8 38",
     "commit": "48 8b c4 48 89 58 18 48 89 70 20 55",
-    "frame_loop": "48 8b c4 57 48 81 ec b0 00 00 00 33",
+    "post_physics_task": "48 8b c4 57 48 81 ec b0 00 00 00 33",
     "mov_r11_rsp_aux": "4c 8b dc 55 53 57 41 55 41 57 49 8d",
 }
 for name, hexstr in patterns.items():

@@ -3,7 +3,7 @@
 .globl PhysicsHarness_DetourCommon
 
 // Stub: lea r11,[g_ops+rip]; jmp here (não tocar r12/r13).
-// Prologue: push rbp/r12/r13 + SEH; r12=DetourOps*, r13=caller return @ [rbp+24].
+// Prologue: push rbp/r12/r13 + SEH; r13=caller return @ [rbp+24]; restore game r12 before orig.
 // DetourOps* também em [rsp+0xA8] (≥ Frame) para sobreviver ao trampoline mov rax,rsp.
 // Frame @ rsp+0x20 — must match dr2hook::physics_harness_abi::Frame
 PhysicsHarness_DetourCommon:
@@ -50,7 +50,6 @@ skip_before:
   movaps xmm3, XMMWORD PTR [rsp + 0x70]
 
   mov r12, QWORD PTR [rbp + 8]
-  mov r13, QWORD PTR [rbp + 16]
 
   mov rax, QWORD PTR [rsp + 0xA8]
   mov rax, QWORD PTR [rax + 16]
@@ -71,7 +70,7 @@ skip_after:
   mov rax, QWORD PTR [rsp + 0x88]
   movaps xmm0, XMMWORD PTR [rsp + 0x90]
 
-  mov rsp, rbp
+  add rsp, 0xC0
   pop r13
   pop r12
   pop rbp
@@ -88,7 +87,7 @@ skip_after:
 .extern g_ops_tick_start
 .extern g_ops_integrator
 .extern g_ops_commit
-.extern g_ops_frame_loop
+.extern g_ops_post_physics_task
 .extern g_ops_physics_step
 .extern g_ops_pretick
 .extern g_ops_end_step
@@ -98,7 +97,7 @@ skip_after:
 detour_entry PhysicsHarness_DetourTickStart, g_ops_tick_start
 detour_entry PhysicsHarness_DetourIntegrator, g_ops_integrator
 detour_entry PhysicsHarness_DetourCommit, g_ops_commit
-detour_entry PhysicsHarness_DetourFrameLoop, g_ops_frame_loop
+detour_entry PhysicsHarness_DetourPostPhysicsTask, g_ops_post_physics_task
 detour_entry PhysicsHarness_DetourPhysicsStep, g_ops_physics_step
 detour_entry PhysicsHarness_DetourPreTick, g_ops_pretick
 detour_entry PhysicsHarness_DetourEndStep, g_ops_end_step

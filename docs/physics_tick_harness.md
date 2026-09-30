@@ -30,7 +30,7 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 | Physics step (H3) | `0x140dbc500` | `0xDBC500` | H3 entrada/retorno; contador `step` |
 | PreTick (H4) | `0x140749a30` | `0x749A30` | H4 entrada/retorno; só log |
 | SetPose | `0x140746770` | `0x746770` | Referência |
-| Frame loop | `0x140dbca20` | `0xDBCA20` | **H2** entrada, **H1** retorno (between-tick); obrigatórios; writes enfileirados |
+| Post-physics task (H1/H2) | `0x140dbca20` | `0xDBCA20` | **H2** entrada, **H1** retorno; hook `post_physics_task`; obrigatório |
 
 ### Nomes de hooks obrigatórios (plano)
 
@@ -46,7 +46,7 @@ Constantes em `include/dr2hook/physics_harness_addresses.h`. Resolução em runt
 | **H2** | Entrada do frame loop | `0x140dbca20` | `ScheduleWrite` / `ScheduleExperimentalNative` |
 | **H1** | Retorno do frame loop (between-tick) | `0x140dbca20` | Idem |
 
-Instalação **obrigatória** com tick start, integrator e commit: falha de prólogo em `frame_loop` aborta `TryInstall`.
+Instalação **obrigatória** com tick start, integrator e commit: falha de prólogo em `post_physics_task` aborta `TryInstall`.
 
 ### Pontos B2 / M1–M3 / B3
 
@@ -107,7 +107,7 @@ Todas as lin CSV incluem `thread_id` (`GetCurrentThreadId`) e ponteiros `contain
 
 **Critério PASS (self-test):**
 
-1. Hooks obrigatórios instalados: **B2 (tick_start)**, **M2/H6 (integrator)**, **commit**, **frame_loop** (trampoline MinHook **não nulo** — instalação falha se `*orig_trampoline == nullptr`).
+1. Hooks obrigatórios instalados: **B2 (tick_start)**, **M2/H6 (integrator)**, **commit**, **post_physics_task** (trampoline MinHook **não nulo** — instalação falha se `*orig_trampoline == nullptr`).
 2. **`in_stage_ticks` ≥ 600** (`s_inStageTickCounter`, só com cadeia rig válida em B2).
 
 O log e `dr2hook_physics_harness_self_test.log` incluem `result=PASS` ou `result=FAIL`, contagem de **re-entrancy** (nested `OnBoundary`) e **sham_writes** (escritas enfileiradas **e** exercício sham in-game em cada boundary com fila de write durante self-test).
@@ -150,7 +150,7 @@ Os primeiros **12 bytes** em disco (hex verificado) vivem em `include/dr2hook/ph
 | tick_start | `488bc4488958184889702055` |
 | integrator | `488bc44889581055488da838` |
 | commit | `488bc4488958184889702055` |
-| frame_loop | `488bc4574881ecb000000033` |
+| post_physics_task | `488bc4574881ecb000000033` |
 | physics_step | `488bc44889501041554883ec` |
 | pretick | `488bc4488958104889781855` |
 | end_step | `40534883ec50488b05b3b2e6` |

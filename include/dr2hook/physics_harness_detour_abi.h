@@ -59,7 +59,7 @@ struct DetourOps {
 extern DetourOps g_ops_tick_start;
 extern DetourOps g_ops_integrator;
 extern DetourOps g_ops_commit;
-extern DetourOps g_ops_frame_loop;
+extern DetourOps g_ops_post_physics_task;
 extern DetourOps g_ops_physics_step;
 extern DetourOps g_ops_pretick;
 extern DetourOps g_ops_end_step;
@@ -69,7 +69,7 @@ extern DetourOps g_ops_commit_aux_b;
 extern "C" void PhysicsHarness_DetourTickStart();
 extern "C" void PhysicsHarness_DetourIntegrator();
 extern "C" void PhysicsHarness_DetourCommit();
-extern "C" void PhysicsHarness_DetourFrameLoop();
+extern "C" void PhysicsHarness_DetourPostPhysicsTask();
 extern "C" void PhysicsHarness_DetourPhysicsStep();
 extern "C" void PhysicsHarness_DetourPreTick();
 extern "C" void PhysicsHarness_DetourEndStep();
