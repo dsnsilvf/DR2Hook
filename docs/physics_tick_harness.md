@@ -1,6 +1,6 @@
 # Physics Tick Harness (instrumentação opt-in)
 
-Harness de **somente instrumentação** para o tick de física do `dirtrally2.exe`. Desligado por padrão; não altera o comportamento do jogo quando desabilitado.
+O harness vive em **`dr2hook_core.dll`** (inicializado em `Core_Initialize`); a proxy **`dxgi.dll`** só carrega o core.
 
 ## Ativação (spec: desligado por padrão)
 

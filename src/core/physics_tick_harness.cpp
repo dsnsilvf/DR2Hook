@@ -881,6 +881,12 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   s_hookInstallRecordCount = 0;
   LogReferenceAddresses(gameModuleBase);
 
+  const MH_STATUS mhInit = MH_Initialize();
+  if (mhInit != MH_OK && mhInit != MH_ERROR_ALREADY_INITIALIZED) {
+    Logger::Error("PhysicsTickHarness: MH_Initialize falhou.");
+    return false;
+  }
+
   using namespace physics_harness_prologues;
   void *pTickStart = reinterpret_cast<void *>(gameModuleBase + kRvaTickStart);
   void *pIntegrator = reinterpret_cast<void *>(gameModuleBase + kRvaIntegrator);
