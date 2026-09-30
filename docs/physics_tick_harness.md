@@ -1,6 +1,6 @@
 # Physics Tick Harness (instrumentação opt-in)
 
-O harness vive em **`dr2hook_core.dll`** (inicializado em `Core_Initialize`); a proxy **`dxgi.dll`** só carrega o core.
+O harness vive em **`dr2hook_core.dll`** (inicializado em `Core_Initialize`); a proxy **`dxgi.dll`** só carrega o core. Desligado por padrão; não altera o comportamento do jogo quando desabilitado.
 
 ## Ativação (spec: desligado por padrão)
 
@@ -123,6 +123,10 @@ Tipos e convenções inferidas (`__fastcall`, `DynamicsCarImpl*` em RCX): `inclu
 ## Prólogo e instalação
 
 Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`. Hooks obrigatórios (tick start, integrator, commit, **frame loop H1/H2**) abortam `TryInstall` se o prólogo falhar.
+
+### Win64 ABI (BUG 2)
+
+Os detours expostos ao MinHook são **thunks em assembly** (`physics_harness_detour_x64.S`): guardam **RCX/RDX/R8/R9** e **XMM0–XMM3** antes do logging C++, chamam o trampoline original com o mesmo estado de argumentos (preservando **`dt` em XMM1** no tick start / integrator), e depois do retorno restauram **RAX** e **XMM0** antes de devolver ao caller do jogo.
 
 ## API
 

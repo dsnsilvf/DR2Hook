@@ -151,6 +151,13 @@ foreach(dr2_target dxgi dr2hook_core)
     set_target_properties(${dr2_target} PROPERTIES PREFIX "")
 endforeach()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    enable_language(ASM)
+    target_sources(dr2hook_core PRIVATE src/core/physics_harness_detour_x64.S)
+    set_source_files_properties(src/core/physics_harness_detour_x64.S
+        PROPERTIES LANGUAGE ASM)
+endif()
+
 target_compile_definitions(dr2hook_core PRIVATE DR2HOOK_CORE_MODULE)
 
 if((WIN32 OR MSVC) AND MINGW)
