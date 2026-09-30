@@ -39,6 +39,10 @@ The game loads `dxgi.dll` on startup. Calls are forwarded to the real `dxgi.dll`
 
 Step-by-step notes for Windows and Linux / Steam Deck are in [docs/INSTALL.md](docs/INSTALL.md).
 
+## Physics tick harness (opt-in)
+
+For reverse-engineering and instrumentation only: hooks on the EGO physics tick path, CSV logging of rig/container samples, and optional queued writes on the physics thread (never from `Present`). It is **off by default**; enable with `DR2HOOK_PHYSICS_HARNESS=1` or `dr2hook_physics_harness.ini`. See [docs/physics_tick_harness.md](docs/physics_tick_harness.md).
+
 ## Build
 
 Requirements: CMake 3.20 or newer, and either MinGW-w64 (Linux cross-compile) or Visual Studio 2022 (MSVC, x64, C++20).
