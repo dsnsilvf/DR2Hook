@@ -16,6 +16,9 @@ inline constexpr uintptr_t kRvaFrameLoop = 0xDBCA20;
 inline constexpr uintptr_t kRvaPhysicsStep = 0xDBC500;
 inline constexpr uintptr_t kRvaPreTick = 0x749A30;
 inline constexpr uintptr_t kRvaEndStep = 0x7511E0;
+inline constexpr uintptr_t kRvaIntegratorReturnSite = 0x73E314;
+inline constexpr uintptr_t kRvaCommitLogAuxA = 0x73A070;
+inline constexpr uintptr_t kRvaCommitLogAuxB = 0x73B620;
 
 inline constexpr uintptr_t kVaIntegrator = kImageBase + kRvaIntegrator;       // 0x140746150
 inline constexpr uintptr_t kVaTickStart = kImageBase + kRvaTickStart;         // 0x14074b8f0
@@ -26,6 +29,12 @@ inline constexpr uintptr_t kVaFrameLoop = kImageBase + kRvaFrameLoop;         //
 inline constexpr uintptr_t kVaPhysicsStep = kImageBase + kRvaPhysicsStep;   // 0x140dbc500
 inline constexpr uintptr_t kVaPreTick = kImageBase + kRvaPreTick;             // 0x140749a30
 inline constexpr uintptr_t kVaEndStep = kImageBase + kRvaEndStep;             // 0x1407511e0
+inline constexpr uintptr_t kVaIntegratorReturnSite =
+    kImageBase + kRvaIntegratorReturnSite; // 0x14073e314
+inline constexpr uintptr_t kVaCommitLogAuxA =
+    kImageBase + kRvaCommitLogAuxA; // 0x14073a070
+inline constexpr uintptr_t kVaCommitLogAuxB =
+    kImageBase + kRvaCommitLogAuxB; // 0x14073b620
 
 // Spec parte 5 — API nativa experimental (DynamicsCarImpl* em RCX)
 inline constexpr uintptr_t kRvaSetTransform = 0x74AD80;

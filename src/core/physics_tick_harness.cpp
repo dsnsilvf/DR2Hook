@@ -35,10 +35,6 @@ namespace {
 
 using namespace physics_harness;
 
-constexpr uintptr_t kRvaCommitAuxA = 0x73A070;
-constexpr uintptr_t kRvaCommitAuxB = 0x73B620;
-constexpr uintptr_t kRvaIntegratorReturnSite = 0x73E314;
-
 // Spec parte 3 — amostras CSV (16 bytes float vec4 por offset)
 constexpr uint32_t kRigVec4OffsetsPart3[] = {
     0x170, 0x180, 0x200, 0x210, 0x2b0, 0x2c0, 0x2d0, 0x2e0, 0x320, 0x330};
@@ -58,7 +54,12 @@ uintptr_t s_gameBase = 0;
 
 std::atomic<uint64_t> s_tickCounter{0};
 std::atomic<uint64_t> s_stepCounter{0};
-std::atomic<uint64_t> s_boundaryFireCounts[16] = {};
+std::atomic<uint64_t> s_boundaryFireCounts[20] = {};
+
+std::atomic<uint64_t> s_practiceKeysTick{0};
+std::atomic<bool> s_practiceKeyF5{false};
+std::atomic<bool> s_practiceKeyF6{false};
+std::atomic<bool> s_practiceKeyF7{false};
 
 std::mutex s_csvMutex;
 std::ofstream s_csvStream;
@@ -191,17 +192,53 @@ std::string BoundaryName(PhysicsHarnessBoundary boundary) {
     return "H5_RETURN";
   case PhysicsHarnessBoundary::H6_IntegratorReturnFilter:
     return "H6";
-  case PhysicsHarnessBoundary::Log_CommitAuxA:
-    return "LOG_COMMIT_A";
-  case PhysicsHarnessBoundary::Log_CommitAuxB:
-    return "LOG_COMMIT_B";
+  case PhysicsHarnessBoundary::Log_Commit_74D190:
+    return "LOG_COMMIT_74D190";
+  case PhysicsHarnessBoundary::Log_Commit_73A070:
+    return "LOG_COMMIT_73A070";
+  case PhysicsHarnessBoundary::Log_Commit_73B620:
+    return "LOG_COMMIT_73B620";
   }
   return "UNKNOWN";
 }
 
+void CapturePracticeModKeysForCurrentTick() {
+  const uint64_t tick = s_tickCounter.load(std::memory_order_relaxed);
+#if defined(DR2HOOK_PHYSICS_HARNESS_TESTING)
+  s_practiceKeysTick.store(tick, std::memory_order_relaxed);
+#elif defined(_WIN32)
+  s_practiceKeyF5.store((GetAsyncKeyState(VK_F5) & 0x8000) != 0,
+                        std::memory_order_relaxed);
+  s_practiceKeyF6.store((GetAsyncKeyState(VK_F6) & 0x8000) != 0,
+                        std::memory_order_relaxed);
+  s_practiceKeyF7.store((GetAsyncKeyState(VK_F7) & 0x8000) != 0,
+                        std::memory_order_relaxed);
+  s_practiceKeysTick.store(tick, std::memory_order_relaxed);
+#else
+  s_practiceKeyF5.store(false, std::memory_order_relaxed);
+  s_practiceKeyF6.store(false, std::memory_order_relaxed);
+  s_practiceKeyF7.store(false, std::memory_order_relaxed);
+  s_practiceKeysTick.store(tick, std::memory_order_relaxed);
+#endif
+}
+
+void AppendPracticeKeyColumnsToCsv() {
+  const uint64_t tick = s_tickCounter.load(std::memory_order_relaxed);
+  bool f5 = false;
+  bool f6 = false;
+  bool f7 = false;
+  if (s_practiceKeysTick.load(std::memory_order_relaxed) == tick) {
+    f5 = s_practiceKeyF5.load(std::memory_order_relaxed);
+    f6 = s_practiceKeyF6.load(std::memory_order_relaxed);
+    f7 = s_practiceKeyF7.load(std::memory_order_relaxed);
+  }
+  s_csvStream << ',' << (f5 ? 1 : 0) << ',' << (f6 ? 1 : 0) << ','
+              << (f7 ? 1 : 0);
+}
+
 void BumpBoundaryFire(PhysicsHarnessBoundary boundary) {
   const auto idx = static_cast<size_t>(boundary);
-  if (idx < 16) {
+  if (idx < 20) {
     s_boundaryFireCounts[idx].fetch_add(1, std::memory_order_relaxed);
   }
 }
@@ -299,7 +336,7 @@ void WriteCsvHeaderIfNeeded() {
   if (s_csvHeaderWritten || !s_csvStream.is_open()) {
     return;
   }
-  s_csvStream << "tick,step,boundary,thread_id,container,rig";
+  s_csvStream << "tick,step,boundary,thread_id,container,rig,key_f5,key_f6,key_f7";
   for (uint32_t off : kRigVec4OffsetsPart3) {
     char label[32];
     std::snprintf(label, sizeof(label), "0x%X", off);
@@ -340,6 +377,7 @@ void LogBoundarySample(PhysicsHarnessBoundary boundary) {
               << s_stepCounter.load(std::memory_order_relaxed) << ','
               << BoundaryName(boundary) << ',' << threadId << ",0x" << std::hex
               << container << ",0x" << rig << std::dec;
+  AppendPracticeKeyColumnsToCsv();
 
   for (uint32_t off : kRigVec4OffsetsPart3) {
     float values[4] = {};
@@ -479,6 +517,7 @@ void OnBoundary(PhysicsHarnessBoundary boundary, bool allowWritePoints) {
 void __fastcall DetourTickStart(void *a1, void *a2, void *a3, void *a4) {
   // Contador monotônico de tick (spec parte 3): incrementa uma vez por tick start.
   s_tickCounter.fetch_add(1, std::memory_order_relaxed);
+  CapturePracticeModKeysForCurrentTick();
   // B1 — antes do tick start @ 0x14074b8f0
   OnBoundary(PhysicsHarnessBoundary::B1_TickStart, true);
   if (g_origTickStart != nullptr) {
@@ -492,16 +531,17 @@ void __fastcall DetourIntegrator(void *a1, void *a2, void *a3, void *a4) {
   if (g_origIntegrator != nullptr) {
     g_origIntegrator(a1, a2, a3, a4);
   }
-  // M2 — depois do integrator
-  OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, true);
+  // M2 — depois do integrator (amostra CSV; writes enfileirados em H6 filtrado).
+  OnBoundary(PhysicsHarnessBoundary::M2_AfterIntegrator, false);
 
-#if defined(_WIN32) && !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
+#if !defined(DR2HOOK_PHYSICS_HARNESS_NO_HOOKS)
   void *ret = nullptr;
 #if defined(_MSC_VER)
   ret = _ReturnAddress();
 #elif defined(__GNUC__)
   ret = __builtin_return_address(0);
 #endif
+  // Spec correction 3: retorno 0x14073e314 → boundary H6 (write point separado).
   if (ret == reinterpret_cast<void *>(s_gameBase + kRvaIntegratorReturnSite)) {
     OnBoundary(PhysicsHarnessBoundary::H6_IntegratorReturnFilter, true);
   }
@@ -509,12 +549,12 @@ void __fastcall DetourIntegrator(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourCommit(void *a1, void *a2, void *a3, void *a4) {
-  // M3 — antes do Commit @ 0x14074d190
+  // Commit @ 0x14074d190 — log-only opcional + M3/B2 (writes).
+  OnBoundary(PhysicsHarnessBoundary::Log_Commit_74D190, false);
   OnBoundary(PhysicsHarnessBoundary::M3_BeforeCommit, true);
   if (g_origCommit != nullptr) {
     g_origCommit(a1, a2, a3, a4);
   }
-  // B2 — depois do Commit
   OnBoundary(PhysicsHarnessBoundary::B2_AfterCommit, true);
 }
 
@@ -556,14 +596,14 @@ void __fastcall DetourEndStep(void *a1, void *a2, void *a3, void *a4) {
 }
 
 void __fastcall DetourCommitAuxA(void *a1, void *a2, void *a3, void *a4) {
-  OnBoundary(PhysicsHarnessBoundary::Log_CommitAuxA, false);
+  OnBoundary(PhysicsHarnessBoundary::Log_Commit_73A070, false);
   if (g_origCommitAuxA != nullptr) {
     g_origCommitAuxA(a1, a2, a3, a4);
   }
 }
 
 void __fastcall DetourCommitAuxB(void *a1, void *a2, void *a3, void *a4) {
-  OnBoundary(PhysicsHarnessBoundary::Log_CommitAuxB, false);
+  OnBoundary(PhysicsHarnessBoundary::Log_Commit_73B620, false);
   if (g_origCommitAuxB != nullptr) {
     g_origCommitAuxB(a1, a2, a3, a4);
   }
@@ -633,7 +673,7 @@ void LogReferenceAddresses(uintptr_t gameBase) {
 DWORD WINAPI SelfTestThread(LPVOID) {
   Sleep(3000);
   Logger::Info("PhysicsTickHarness: self-test concluido (sem writes).");
-  for (size_t i = 0; i < 16; ++i) {
+  for (size_t i = 0; i < 20; ++i) {
     const uint64_t count =
         s_boundaryFireCounts[i].load(std::memory_order_relaxed);
     if (count == 0) {
@@ -792,12 +832,12 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
                          reinterpret_cast<void *>(&DetourEndStep), &g_origEndStep,
                          kEndStep, kPrologueLength, false);
 
-  void *pAuxA = reinterpret_cast<void *>(gameModuleBase + kRvaCommitAuxA);
-  void *pAuxB = reinterpret_cast<void *>(gameModuleBase + kRvaCommitAuxB);
-  (void)InstallHookSite("commit_aux_a", pAuxA,
+  void *pAuxA = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxA);
+  void *pAuxB = reinterpret_cast<void *>(gameModuleBase + kRvaCommitLogAuxB);
+  (void)InstallHookSite("commit_log_73a070", pAuxA,
                          reinterpret_cast<void *>(&DetourCommitAuxA),
                          &g_origCommitAuxA, kCommitAuxA, kPrologueLength, false);
-  (void)InstallHookSite("commit_aux_b", pAuxB,
+  (void)InstallHookSite("commit_log_73b620", pAuxB,
                          reinterpret_cast<void *>(&DetourCommitAuxB),
                          &g_origCommitAuxB, kCommitAuxB, kPrologueLength, false);
 
@@ -822,8 +862,8 @@ void PhysicsTickHarness::Shutdown() {
         reinterpret_cast<void *>(s_gameBase + kRvaPhysicsStep),
         reinterpret_cast<void *>(s_gameBase + kRvaPreTick),
         reinterpret_cast<void *>(s_gameBase + kRvaEndStep),
-        reinterpret_cast<void *>(s_gameBase + kRvaCommitAuxA),
-        reinterpret_cast<void *>(s_gameBase + kRvaCommitAuxB),
+        reinterpret_cast<void *>(s_gameBase + kRvaCommitLogAuxA),
+        reinterpret_cast<void *>(s_gameBase + kRvaCommitLogAuxB),
     };
     for (void *target : targets) {
       if (target != nullptr) {
@@ -968,6 +1008,14 @@ void PhysicsTickHarness::TestingSetInstrumentationAndWrites(bool instrumentation
 void PhysicsTickHarness::TestingClearScheduledWrite() {
   std::lock_guard<std::mutex> lock(s_writeQueueMutex);
   s_scheduledWrite = ScheduledWrite{};
+}
+
+void PhysicsTickHarness::TestingSetPracticeKeysForTick(uint64_t tick, bool f5,
+                                                       bool f6, bool f7) {
+  s_practiceKeysTick.store(tick, std::memory_order_relaxed);
+  s_practiceKeyF5.store(f5, std::memory_order_relaxed);
+  s_practiceKeyF6.store(f6, std::memory_order_relaxed);
+  s_practiceKeyF7.store(f7, std::memory_order_relaxed);
 }
 
 #endif

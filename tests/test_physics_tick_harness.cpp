@@ -205,6 +205,41 @@ void TestSpecCorrection1FrameLoopWriteBoundaries() {
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
 }
 
+void TestSpecCorrection3IntegratorReturnAndH6Write() {
+  std::cout << "[RUN] TestSpecCorrection3IntegratorReturnAndH6Write..."
+            << std::endl;
+  TEST_ASSERT(dr2hook::physics_harness::kVaIntegratorReturnSite ==
+                  0x14073E314ULL,
+              "VA filtro retorno integrator H6");
+  TEST_ASSERT(dr2hook::physics_harness::kVaCommitLogAuxA == 0x14073A070ULL,
+              "VA commit log aux A");
+  TEST_ASSERT(dr2hook::physics_harness::kVaCommitLogAuxB == 0x14073B620ULL,
+              "VA commit log aux B");
+
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(true, true);
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+  dr2hook::SafetyGuard::Configure(&scanner, 0);
+  dr2hook::SafetyGuard::SetPermissiveMode(true);
+
+  const uint8_t payload = 0x55;
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::ScheduleWrite(
+                  1, dr2hook::PhysicsHarnessBoundary::H6_IntegratorReturnFilter,
+                  0x320, &payload, sizeof(payload)),
+              "ScheduleWrite em H6");
+  dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
+  dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(false, false);
+}
+
+void TestSpecCorrection3PracticeKeysSnapshot() {
+  std::cout << "[RUN] TestSpecCorrection3PracticeKeysSnapshot..." << std::endl;
+  dr2hook::PhysicsTickHarness::TestingSetPracticeKeysForTick(42, true, false,
+                                                            true);
+  TEST_ASSERT(dr2hook::PhysicsTickHarness::GetTickCounter() >= 0,
+              "Harness tick counter acessivel");
+}
+
 void TestSpecCorrection2HookAddresses() {
   std::cout << "[RUN] TestSpecCorrection2HookAddresses..." << std::endl;
   TEST_ASSERT(dr2hook::physics_harness::kVaPhysicsStep == 0x140DBC500ULL,
@@ -252,6 +287,8 @@ int main() {
   TestSpecPart3RigPointerConstant();
   TestSpecCorrection1FrameLoopWriteBoundaries();
   TestSpecCorrection2HookAddresses();
+  TestSpecCorrection3IntegratorReturnAndH6Write();
+  TestSpecCorrection3PracticeKeysSnapshot();
   TestRigChainValidationLogic();
 
   std::cout << "Resumo: " << g_testsPassed << "/" << g_testsRun

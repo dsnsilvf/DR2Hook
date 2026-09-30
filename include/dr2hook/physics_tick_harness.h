@@ -22,11 +22,12 @@ enum class PhysicsHarnessBoundary : uint8_t {
   H5_EndStep_Entry = 11,
   H5_EndStep_Return = 12,
   H6_IntegratorReturnFilter = 13,
-  Log_CommitAuxA = 14,
-  Log_CommitAuxB = 15,
+  Log_Commit_74D190 = 14,
+  Log_Commit_73A070 = 15,
+  Log_Commit_73B620 = 16,
 };
 
-static_assert(static_cast<uint8_t>(PhysicsHarnessBoundary::Log_CommitAuxB) < 16,
+static_assert(static_cast<uint8_t>(PhysicsHarnessBoundary::Log_Commit_73B620) < 20,
               "s_boundaryFireCounts size in physics_tick_harness.cpp");
 
 enum class PhysicsNativeCallKind : uint8_t {
@@ -67,6 +68,8 @@ public:
   static void TestingSetExperimentalNative(bool enabled);
   static void TestingClearScheduledWrite();
   static void TestingClearScheduledNative();
+  static void TestingSetPracticeKeysForTick(uint64_t tick, bool f5, bool f6,
+                                            bool f7);
 #endif
 };
 

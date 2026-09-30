@@ -41,13 +41,14 @@ Instalação **obrigatória** com tick start, integrator e commit: falha de pró
 
 ### Pontos B1 / M1–M3 / B2
 
-| ID | Momento | Endereço |
-| :--- | :--- | :--- |
-| **B1** | Antes do corpo de tick start | `0x14074b8f0` |
-| **M1** | Antes do integrator | `0x140746150` |
-| **M2** | Depois do integrator (pós-trampoline) | `0x140746150` |
-| **M3** | Antes do Commit | `0x14074d190` |
-| **B2** | Depois do Commit (pós-trampoline) | `0x14074d190` |
+| ID | Momento | Endereço | Writes |
+| :--- | :--- | :--- | :--- |
+| **B1** | Antes do corpo de tick start | `0x14074b8f0` | Sim |
+| **M1** | Antes do integrator | `0x140746150` | Sim |
+| **M2** | Depois do integrator (pós-trampoline) | `0x140746150` | Não (só CSV) |
+| **H6** | Retorno integrator filtrado (`return == 0x14073e314`) | `0x140746150` | Sim |
+| **M3** | Antes do Commit | `0x14074d190` | Sim |
+| **B2** | Depois do Commit (pós-trampoline) | `0x14074d190` | Sim |
 
 ## Spec parte 3 — logging CSV
 
@@ -57,7 +58,17 @@ Instalação **obrigatória** com tick start, integrator e commit: falha de pró
 - **Filtro:** só regista se a cadeia `car → container → rig` do jogador for válida (`+0x12c0 == rig`, `+0x12d0 == 4`).
 - **Cadeia:** `[exe + 0x1681ce8]` → `car`; `car + 0x30` → `container`; `container + 0x08` → `rig`.
 
-Cabeçalho: `tick,step,boundary,thread_id,container,rig`, depois colunas `vec4` / `scalar` da tabela abaixo.
+Cabeçalho: `tick,step,boundary,thread_id,container,rig,key_f5,key_f6,key_f7`, depois colunas `vec4` / `scalar` da tabela abaixo.
+
+- **Teclas F5/F6/F7 (spec correction 3):** amostradas uma vez por tick em **B1** (`GetAsyncKeyState`); colunas `key_f5`, `key_f6`, `key_f7` são `0`/`1` (mods de prática que gravam estado do carro).
+
+### Spec correction 3 — H6, commit log hooks, teclas
+
+| Item | Detalhe |
+| :--- | :--- |
+| **H6** | No detour do integrator `@ 0x140746150`, se o endereço de retorno for **`0x14073e314`**, dispara boundary **H6** com fila de writes/native (ponto separado de M2, que só regista CSV). |
+| **LOG_COMMIT_74D190** | Entrada do hook obrigatório em `@ 0x14074d190` — só log (M3/B2 mantêm writes). |
+| **LOG_COMMIT_73A070 / LOG_COMMIT_73B620** | Hooks **opcionais** só log em `@ 0x14073a070` e `@ 0x14073b620`. |
 
 ### Hooks H3–H5 (spec correction 2)
 
@@ -82,7 +93,7 @@ Cabeçalho (campos fixos): ver acima; offsets de amostragem do rig:
 
 - **API:** `ScheduleWrite(tick, boundary, rigOffset, bytes, len)` — uma escrita na fila.
 - **Gating:** flag `writes` **e** `SafetyGuard::CanWriteState()` (agendamento e execução). `SetPermissiveMode(true)` em `main.cpp` inalterado.
-- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`. Boundaries com fila: B1, M1–M3, B2, **H1**, **H2**, H5_ENTRY, H5_RETURN, …
+- **Execução:** só nos detours de física (`ExecuteScheduledWriteIfDue`), nunca no `Present`. Boundaries com fila: B1, M1, M3, B2, **H6**, **H1**, **H2**, H5_ENTRY, H5_RETURN, …
 - **Log:** `before=` / `after=` em hex no `dr2hook.log`.
 
 ## Spec parte 5 — API nativa experimental
