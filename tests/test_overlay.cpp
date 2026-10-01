@@ -322,6 +322,8 @@ void TestTabbedUIRenderingAndTelemetry() {
   float maxRpm = 5500.0f;
   float gears = 5.0f;
 
+  mockMem.SetValue(mockRig + 0x2b0, linVel);
+  mockMem.SetValue(mockRig + 0x2c0, angVel);
   mockMem.SetValue(mockRig + 0x2d0, pos);
   mockMem.SetValue(mockRig + 0x2e0, quat);
   mockMem.SetValue(mockRig + 0x320, linVel);
