@@ -78,8 +78,8 @@ void TestBug1CalibratedPrologueHexPinned() {
               "integrator hex");
   TEST_ASSERT(PrologueMatchesHex(kCommit, "488bc4488958184889702055"),
               "commit hex");
-  TEST_ASSERT(PrologueMatchesHex(kFrameLoop, "488bc4574881ecb000000033"),
-              "frame_loop hex");
+  TEST_ASSERT(PrologueMatchesHex(kPostPhysicsTask, "488bc4574881ecb000000033"),
+              "post_physics_task hex");
   TEST_ASSERT(PrologueMatchesHex(kPhysicsStep, "488bc44889501041554883ec"),
               "physics_step hex");
   TEST_ASSERT(PrologueMatchesHex(kPreTick, "488bc4488958104889781855"),
@@ -236,8 +236,8 @@ void TestSpecPart3RigPointerConstant() {
 
 void TestSpecCorrection1FrameLoopWriteBoundaries() {
   std::cout << "[RUN] TestSpecCorrection1FrameLoopWriteBoundaries..." << std::endl;
-  TEST_ASSERT(dr2hook::physics_harness::kVaFrameLoop == 0x140DBCA20ULL,
-              "VA frame loop H1/H2");
+  TEST_ASSERT(dr2hook::physics_harness::kVaPostPhysicsTask == 0x140DBCA20ULL,
+              "VA post_physics_task H1/H2");
   dr2hook::PhysicsTickHarness::TestingClearScheduledWrite();
   dr2hook::PhysicsTickHarness::TestingSetInstrumentationAndWrites(true, true);
   dr2hook::MockMemoryAccessor mock;

@@ -111,7 +111,7 @@ using PhysicsCall = void (*)();
 PhysicsCall g_origTickStart = nullptr;
 PhysicsCall g_origIntegrator = nullptr;
 PhysicsCall g_origCommit = nullptr;
-PhysicsCall g_origFrameLoop = nullptr;
+PhysicsCall g_origPostPhysicsTask = nullptr;
 PhysicsCall g_origPhysicsStep = nullptr;
 PhysicsCall g_origPreTick = nullptr;
 PhysicsCall g_origEndStep = nullptr;
@@ -777,7 +777,7 @@ bool EvaluateSelfTestPassCriteria() {
       integratorHook = true;
     } else if (std::strcmp(rec.name, "commit") == 0) {
       commitHook = true;
-    } else if (std::strcmp(rec.name, "frame_loop") == 0) {
+    } else if (std::strcmp(rec.name, "post_physics_task") == 0) {
       frameLoopHook = true;
     }
   }
@@ -945,8 +945,9 @@ extern "C" DetourOps g_ops_integrator = {HarnessBeforeIntegrator, HarnessAfterIn
                                          reinterpret_cast<void **>(&g_origIntegrator)};
 extern "C" DetourOps g_ops_commit = {HarnessBeforeCommitEntry, HarnessAfterB2,
                                      reinterpret_cast<void **>(&g_origCommit)};
-extern "C" DetourOps g_ops_frame_loop = {HarnessBeforeH2, HarnessAfterH1,
-                                         reinterpret_cast<void **>(&g_origFrameLoop)};
+extern "C" DetourOps g_ops_post_physics_task = {HarnessBeforeH2, HarnessAfterH1,
+                                         reinterpret_cast<void **>(
+                                             &g_origPostPhysicsTask)};
 extern "C" DetourOps g_ops_physics_step = {HarnessBeforeH3Entry, HarnessAfterH3Return,
                                            reinterpret_cast<void **>(&g_origPhysicsStep)};
 extern "C" DetourOps g_ops_pretick = {HarnessBeforeH4Entry, HarnessAfterH4Return,
@@ -1027,8 +1028,8 @@ void LogReferenceAddresses(uintptr_t gameBase) {
                fmt(gameBase, kRvaPerTickCaller, kVaPerTickCaller));
   Logger::Info("PhysicsTickHarness: SetPose " +
                fmt(gameBase, kRvaSetPose, kVaSetPose));
-  Logger::Info("PhysicsTickHarness: frame loop " +
-               fmt(gameBase, kRvaFrameLoop, kVaFrameLoop));
+  Logger::Info("PhysicsTickHarness: post_physics_task " +
+               fmt(gameBase, kRvaPostPhysicsTask, kVaPostPhysicsTask));
   Logger::Info("PhysicsTickHarness: physics step (H3) " +
                fmt(gameBase, kRvaPhysicsStep, kVaPhysicsStep));
   Logger::Info("PhysicsTickHarness: pretick (H4) " +
@@ -1040,7 +1041,7 @@ void LogReferenceAddresses(uintptr_t gameBase) {
   Logger::Info("PhysicsTickHarness: H6 return filter " +
                fmt(gameBase, kRvaIntegratorReturnSite, kVaIntegratorReturnSite));
   Logger::Info(
-      "PhysicsTickHarness: hooks obrigatorios B2/M/H6 + H1/H2 frame_loop @ 0x"
+      "PhysicsTickHarness: hooks obrigatorios B2/M/H6 + H1/H2 post_physics_task @ 0x"
       "140dbca20");
 }
 
@@ -1165,7 +1166,8 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
   void *pTickStart = reinterpret_cast<void *>(gameModuleBase + kRvaTickStart);
   void *pIntegrator = reinterpret_cast<void *>(gameModuleBase + kRvaIntegrator);
   void *pCommit = reinterpret_cast<void *>(gameModuleBase + kRvaCommit);
-  void *pFrameLoop = reinterpret_cast<void *>(gameModuleBase + kRvaFrameLoop);
+  void *pPostPhysicsTask =
+      reinterpret_cast<void *>(gameModuleBase + kRvaPostPhysicsTask);
   void *pPhysicsStep =
       reinterpret_cast<void *>(gameModuleBase + kRvaPhysicsStep);
   void *pPreTick = reinterpret_cast<void *>(gameModuleBase + kRvaPreTick);
@@ -1194,11 +1196,12 @@ bool PhysicsTickHarness::TryInstall(uintptr_t gameModuleBase) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
-  if (!InstallHookSite("frame_loop", pFrameLoop,
+  if (!InstallHookSite("post_physics_task", pPostPhysicsTask,
                        reinterpret_cast<void *>(
-                           dr2hook::physics_harness_abi::PhysicsHarness_DetourFrameLoop),
-                       reinterpret_cast<void **>(&g_origFrameLoop), kFrameLoop,
-                       kPrologueLength, true)) {
+                           dr2hook::physics_harness_abi::
+                               PhysicsHarness_DetourPostPhysicsTask),
+                       reinterpret_cast<void **>(&g_origPostPhysicsTask),
+                       kPostPhysicsTask, kPrologueLength, true)) {
     PhysicsTickHarness::Shutdown();
     return false;
   }
@@ -1253,7 +1256,7 @@ void PhysicsTickHarness::Shutdown() {
         reinterpret_cast<void *>(s_gameBase + kRvaTickStart),
         reinterpret_cast<void *>(s_gameBase + kRvaIntegrator),
         reinterpret_cast<void *>(s_gameBase + kRvaCommit),
-        reinterpret_cast<void *>(s_gameBase + kRvaFrameLoop),
+        reinterpret_cast<void *>(s_gameBase + kRvaPostPhysicsTask),
         reinterpret_cast<void *>(s_gameBase + kRvaPhysicsStep),
         reinterpret_cast<void *>(s_gameBase + kRvaPreTick),
         reinterpret_cast<void *>(s_gameBase + kRvaEndStep),
@@ -1449,7 +1452,7 @@ void PhysicsTickHarness::TestingSeedRequiredSelfTestHooks() {
   s_hookInstallRecords[0] = {"B2 (tick_start)", true};
   s_hookInstallRecords[1] = {"M2 (0x1407395fa) / H6 (0x14073e314)", true};
   s_hookInstallRecords[2] = {"commit", true};
-  s_hookInstallRecords[3] = {"frame_loop", true};
+  s_hookInstallRecords[3] = {"post_physics_task", true};
 }
 
 void PhysicsTickHarness::TestingExecuteScheduledWriteIfDue(
