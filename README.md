@@ -1,59 +1,74 @@
-# DR2 ModLoader
+# DR2Hook
 
-A mod loader and hook framework for **DiRT Rally 2.0**. It is meant for offline practice, telemetry, and community mods: save a point on a long stage, put the car back there, and repeat the corner without restarting the whole special.
-
-Press **Insert** in-game to open the overlay. The interface is in English.
+**DR2Hook** is a reverse-engineering and instrumentation project for **DiRT Rally 2.0** (EGO Engine, x64, DirectX 11). It maps vehicle physics, tick boundaries, and UI data with evidence-graded notes, optional physics-tick hooks, and offline capture tools. On top of that work sits a **mod loader**: Lua mods, an in-game overlay, practice checkpoints, and a native pause-menu integration branded **DR2 ModLoader v0.1.0** in the UI.
 
 This project is not affiliated with Codemasters or Electronic Arts.
 
-## Practice Mode
+## Reverse engineering (primary focus)
 
-Rally stages are long. A corner you want to drill can sit ten minutes into the stage. Practice Mode stores the car and puts it back.
+Findings are split by subsystem and keep the original confidence labels (`CONFIRMED`, `PROBABLE`, `HYPOTHESIS`, `REFUTED`, and Portuguese variants where the source used them).
+
+| Resource | What it is |
+| --- | --- |
+| [docs/reverse_engineering/README.md](docs/reverse_engineering/README.md) | Index: PhysicsRig pointer chain, wheels, suspension, engine, gearbox, telemetry UDP, UI data, and related topics |
+| [docs/reverse_engineering/investigations/INV-01/HANDOFF.md](docs/reverse_engineering/investigations/INV-01/HANDOFF.md) | **INV-01** — car-state investigation: origin block on the rig, tick order, native state API candidates, harness status, validation gates |
+| [docs/reverse_engineering/investigations/INV-01/kb/](docs/reverse_engineering/investigations/INV-01/kb/) | Graded knowledge base (`confirmed-facts`, `hypotheses`, `open-questions`, `history`, `glossary`) |
+| [docs/physics_tick_harness.md](docs/physics_tick_harness.md) | Opt-in hooks on the EGO physics tick path, CSV logging, queued writes, experimental native calls |
+| [docs/BLACKBOX.md](docs/BLACKBOX.md) | **`scripts/dr2rec`** — offline session recorder and analyzer (read-only; no game writes, no RaceNet) |
+
+Runtime reads used by the overlay and `Player` APIs are implemented in `src/core/player.cpp` against the documented rig offsets. After changing only native logic, rebuild `dr2hook_core.dll`, replace it next to `dirtrally2.exe`, and press **F8** — the DXGI proxy and network hooks stay loaded.
+
+## Mod loader (built on the RE work)
+
+Press **Insert** in-game to open the Dear ImGui overlay (English UI). You can also open it from the pause menu entry **DR2 ModLoader** when hooks match the expected game build (see [docs/reverse_engineering/menu.md](docs/reverse_engineering/menu.md)).
+
+### Practice checkpoints
+
+Long rally stages make corner repetition painful. Checkpoints capture pose and velocity and restore them without restarting the stage.
 
 | Key | Action |
 | --- | --- |
-| **F5** | Save a checkpoint: position, orientation, linear velocity, and angular velocity. |
-| **F6** | Restore **Normal**. The car returns to the saved pose, speeds are cleared, and the suspension is settled so it starts stable. |
-| **F7** | Restore **With Momentum**. Position and orientation come back, and so do the linear and angular velocity from the moment you saved. |
-| **F8** | Reload `dr2hook_core.dll` from disk. The game stays open. The in-memory checkpoint is cleared. |
+| **F5** | Save checkpoint (position, orientation, linear and angular velocity). |
+| **F6** | Restore using the overlay’s selected mode (**Normal** or **With Momentum**). |
+| **F7** | Restore **With Momentum** (linear and angular velocity from the save). |
+| **F8** | Reload `dr2hook_core.dll` from disk. The game stays open; the in-memory C++ checkpoint is cleared and Lua restarts (`onInit` runs again). |
 
-The same controls are on the **Practice Mode** tab of the overlay.
+The **Practice Mode** tab and the shipped mod `mods/practice_mode/` expose the same shortcuts. The overlay tab uses the C++ `SavestateManager`. The mod keeps its own Lua checkpoint via `Player.getState` / `Player.setState` and adds options under **Pause → DR2 Hook → Mods** (`Menu` API).
 
-Writes only run in offline practice sessions: DirtFish, offline time trial, and custom offline championships. See [Fair play](#fair-play) at the end of this file.
+**Normal** restore writes rig pose and zeros linear/angular velocity at the documented velocity offsets (`+0x320` / `+0x330`). **With Momentum** keeps the saved velocities. This is not a full native “reset vehicle” pipeline; stability depends on the physics solver.
 
-## Overlay
+### Overlay tabs
 
-**Insert** toggles the menu.
-
-- **Diagnostics** — engine and drivetrain (live RPM from the crank, gear, redline, speed), position, linear and angular velocity, suspension contact on all four wheels, and whether the player, container, and physics rig pointers are live.
-- **Mods** — scripts loaded from `mods/`. **Reload Scripts** restarts Lua only. **Reload Native Core (F8)** replaces `dr2hook_core.dll`.
-- **Practice Mode** — save, restore, and choose Normal or With Momentum.
+- **Diagnostics** — RPM (crank rad/s at `+0x13d8`), gear (`+0x1448`), redline, speed, position, linear and angular velocity, per-wheel suspension compression and ground contact, and whether player / container / physics-rig pointers resolve.
+- **Mods** — Lua mods under `mods/`. **Reload Scripts** restarts Lua only. **Reload Native Core (F8)** reloads `dr2hook_core.dll`.
+- **Practice Mode** — save, restore, and choose Normal vs With Momentum (C++ checkpoint).
 
 ## Install
 
-Build `dxgi.dll` and `dr2hook_core.dll` (see below) and copy both, together with the `mods/` folder, into the game directory:
+Build or download `dxgi.dll` and `dr2hook_core.dll` (see [Build](#build)), then copy both plus the `mods/` folder into the game directory:
 
 `[SteamLibrary]/steamapps/common/DiRT Rally 2.0/`
 
-The game loads `dxgi.dll` on startup. Calls are forwarded to the real `dxgi.dll` in `System32`. That proxy then loads `dr2hook_core.dll` from the same folder. No external injector is required.
+The game loads `dxgi.dll` at startup. The proxy forwards to the real `dxgi.dll` in `System32`, then loads `dr2hook_core.dll` from the same folder. No external injector is required.
 
-Step-by-step notes for Windows and Linux / Steam Deck are in [docs/INSTALL.md](docs/INSTALL.md).
+Step-by-step notes for Windows and Linux / Steam Deck: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Physics tick harness (opt-in)
 
-For reverse-engineering and instrumentation only: hooks on the EGO physics tick path, CSV logging of rig samples, optional queued **memory writes**, and optional **experimental native API** calls (`SetTransform`, `SetLinVel`, `SetAngVel`, `Commit` at the spec VAs). Everything is **off by default**.
+Reverse-engineering and instrumentation only. Hooks on the EGO physics tick path, CSV logging of rig samples, optional queued **memory writes**, and optional **experimental native API** calls (`SetTransform`, `SetLinVel`, `SetAngVel`, `Commit` at spec VAs). Everything is **off by default**.
 
 | Enable | Env / INI |
 | --- | --- |
 | Instrumentation + CSV | `DR2HOOK_PHYSICS_HARNESS=1` or `instrumentation=1` |
 | Queued rig writes | `DR2HOOK_PHYSICS_HARNESS_WRITES=1` or `writes=1` |
 | Experimental native calls | `DR2HOOK_PHYSICS_HARNESS_EXPERIMENTAL_NATIVE=1` or `experimental_native=1` |
+| Self-test (no real writes) | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` or `self_test=1` |
 
-Native calls require instrumentation, the experimental flag, and `SafetyGuard::CanWriteState()`. They run only on a chosen physics boundary (never on `Present`). Details: [docs/physics_tick_harness.md](docs/physics_tick_harness.md).
+Native calls require instrumentation, the experimental flag, and `SafetyGuard::CanWriteState()`. They run only on chosen physics boundaries (never on `Present`). Details: [docs/physics_tick_harness.md](docs/physics_tick_harness.md).
 
 ## Build
 
-Requirements: CMake 3.20 or newer, and either MinGW-w64 (Linux cross-compile) or Visual Studio 2022 (MSVC, x64, C++20).
+Requirements: CMake 3.20+, and either MinGW-w64 (Linux cross-compile) or Visual Studio 2022 (MSVC, x64, C++20).
 
 Linux, full check (unit tests, then the release package):
 
@@ -77,42 +92,38 @@ cmake .. -A x64
 cmake --build . --config Release --target dxgi --target dr2hook_core
 ```
 
+## Vehicle black box (`dr2rec`)
+
+`scripts/dr2rec` records a local session and analyzes it afterward. The capture stores raw bytes; field names stay limited to what is already confirmed. It does not write game memory and does not contact RaceNet. Manual: [docs/BLACKBOX.md](docs/BLACKBOX.md).
+
 ## Writing a mod
 
-Mods are Lua 5.4 scripts under `mods/<name>/`, with a `mod.json` manifest. The shipped example is `mods/practice_mode/`.
+Mods are Lua 5.4 scripts under `mods/<name>/` with a `mod.json` manifest. The shipped example is `mods/practice_mode/`.
+
+Supported lifecycle hooks today: `onInit`, `onTick(dt)`, and `onKeyDown(keyCode)` (see [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md)). `onStageStart` is registered in the loader but **not dispatched from gameplay yet** (only unit tests call it).
+
+Lua bindings: `Player` (`getPosition`, `setPosition`, `getVelocity`, `setVelocity`, `getState`, `setState`), `Safety.isRestrictedMode()`, `UI.notify`, and `Menu` (native pause submenu). There is **no** `Player.getVehicleTelemetry()` in Lua; engine RPM and gear appear in the **Diagnostics** overlay via native code.
 
 ```lua
 function onInit()
     print("[MyMod] ready")
 end
 
-function onStageStart(stage)
-    print("Stage: " .. stage.name)
-end
-
 function onTick(dt)
-    -- once per rendered frame
+    -- once per rendered frame (Present)
 end
 
 function onKeyDown(keyCode)
-    -- WndProc hook; 0x74 is F5
+    if keyCode == 0x74 then -- F5
+        local saved = Player.getState()
+        Player.setState(saved, "normal")
+    end
 end
-
-local telem = Player.getVehicleTelemetry()
--- telem.rpm, telem.gear, telem.speedKmh, telem.torque, telem.throttle
-
-local saved = Player.getState()
-Player.setState(saved, "normal")     -- stopped, suspension settled
-Player.setState(saved, "momentum")   -- keeps linear and angular velocity
 ```
 
-`Player.setPosition`, `Player.setVelocity`, and `Player.setState` are checked in native C++ before any write. If the session is not a known offline practice mode, or if the session cannot be read, the write is rejected.
+`Player.setPosition`, `Player.setVelocity`, and `Player.setState` call `SafetyGuard::CanWriteState()` before writing. The guard can restrict writes by session mode when a session address is configured and permissive mode is off; **v0.1.0 currently starts the core with permissive mode enabled**, so restrictions are not enforced in-game until that wiring is finished.
 
-The full API is in [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md). Pointer maps and offsets are in [docs/reverse_engineering/README.md](docs/reverse_engineering/README.md).
-
-## Vehicle black box
-
-`scripts/dr2rec` records a local session and analyzes it afterwards. The capture stores raw bytes. Naming stays on fields that are already confirmed. It does not write game memory and it does not touch RaceNet. The manual is [docs/BLACKBOX.md](docs/BLACKBOX.md).
+Full API reference: [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md). Pointer maps and offsets: [docs/reverse_engineering/README.md](docs/reverse_engineering/README.md).
 
 ## How it is put together
 
@@ -125,44 +136,45 @@ dirtrally2.exe
 | Path | Role |
 | --- | --- |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
-| `src/core/hooks.cpp` | DirectX 11 `Present`, window procedure, and Winsock hooks. These stay resident |
+| `src/core/hooks.cpp` | DirectX 11 `Present`, window procedure, and Winsock hooks (resident in proxy) |
 | `src/core/host.cpp` | Loads `dr2hook_core.dll` and reloads it on F8 |
 | `src/core/core_module.cpp` | Reloadable entry: frame, input, init, shutdown |
-| `src/core/safety.cpp` | Fail-closed session check |
-| `src/core/player.cpp` | Vehicle telemetry and checkpoint restore |
+| `src/core/safety.cpp` | Session write gate (fail-closed when configured) |
+| `src/core/player.cpp` | Vehicle telemetry reads and checkpoint restore |
+| `src/core/physics_tick_harness.cpp` | Opt-in physics instrumentation |
 | `src/script/` | Lua runtime and mod loading |
 | `src/ui/overlay.cpp` | ImGui overlay |
-| `docs/` | Install guide, modding guide, reverse-engineering notes, architecture decisions |
+| `docs/` | Install, modding, reverse engineering, harness, architecture notes |
 
-`F8` (or **Reload Native Core** on the Mods tab) shuts the core down, unloads it, and loads a fresh copy. Replace `dr2hook_core.dll` next to `dirtrally2.exe` and press `F8`. The host copies that file to `dr2hook_core.N.dll` before loading it, so the build can overwrite `dr2hook_core.dll` while the game is running. The in-memory checkpoint is cleared, and Lua starts over (`onInit` runs again). `F8` is consumed by the proxy and does not reach mods.
+**F8** (or **Reload Native Core** on the Mods tab) shuts the core down, unloads it, and loads a fresh copy. Replace `dr2hook_core.dll` next to `dirtrally2.exe` and press **F8**. The host copies that file to `dr2hook_core.N.dll` before loading so the build can overwrite `dr2hook_core.dll` while the game is running. The C++ checkpoint is cleared and Lua starts over. **F8** is handled in the proxy path and is not delivered to mods.
 
-Changes to `dxgi.dll` itself still need a restart. The proxy, MinHook, `Present`, `WndProc`, and `NetworkGuard` stay mapped.
+Changes to `dxgi.dll` still require a game restart. The proxy, MinHook, `Present`, `WndProc`, and `NetworkGuard` stay mapped.
 
 ## Status
 
-- Proxy DLL with dynamic forward to `System32` (no `.def` dependency)
-- Reloadable `dr2hook_core.dll` (`F8`) for overlay, telemetry, savestate, and Lua
+- Evidence-graded RE docs, INV-01 investigation tree, and `dr2rec` capture tooling
+- Opt-in physics tick harness (default off)
+- Proxy DLL with dynamic forward to `System32`
+- Reloadable `dr2hook_core.dll` (**F8**) for overlay, telemetry, savestate, and Lua
 - `Present` and `WndProc` hooks, ImGui overlay
-- Fail-closed safety gate and mandatory network refusal
-- Lua 5.4 sandbox with `Player`, `Safety`, and `UI` bindings
-- Practice Mode: Normal and With Momentum
-- Automated test suite, release check, and docs
+- `NetworkGuard` mandatory network refusal while the proxy is loaded
+- Lua 5.4 sandbox with `Player`, `Safety`, `UI`, and `Menu` bindings
+- Practice checkpoints (Normal / With Momentum) via C++ savestate and shipped Lua mod
+- Automated tests, release scripts, and documentation
 
 ## Fair play
 
-This loader is for offline practice, telemetry, and mods. It is not a tool for leaderboards, daily or weekly challenges, clubs, or any ranked RaceNet session. Using it to alter a competitive result is out of scope, and the loader is built so that path does not work.
-
-Two checks enforce that, and both are documented here on purpose. Nothing in this project pretends to be a normal online client, spoofs a server, or hides the fact that the hooks are installed.
+DR2Hook is aimed at offline practice, telemetry research, and community mods — not leaderboard or RaceNet competition.
 
 **Network.** While `dxgi.dll` is loaded, `NetworkGuard` hooks `ws2_32.dll` and refuses remote traffic in the open:
 
-- `getaddrinfo` / `GetAddrInfoW` for any name other than localhost returns “name not found”. The refused name is written to the log.
-- `connect` to any address outside `127.0.0.0/8` and IPv6 loopback returns `WSAECONNREFUSED` (10061). The game sees a refused connection. The call is not dropped silently and the destination is not rewritten.
-- Localhost is left alone, so local tools (SimHub, motion rigs, telemetry on `127.0.0.1`) still work.
+- `getaddrinfo` / `GetAddrInfoW` for any name other than localhost returns “name not found” (logged).
+- `connect` outside `127.0.0.0/8` and IPv6 loopback returns `WSAECONNREFUSED` (10061).
+- Localhost is left alone for local tools (SimHub, motion rigs, telemetry on `127.0.0.1`).
 
-There is no menu option and no script API to turn this off. Online play returns only after you exit the game and remove `dxgi.dll` and `dr2hook_core.dll`.
+There is no menu or script API to disable this. Online play returns only after you exit and remove `dxgi.dll` and `dr2hook_core.dll`.
 
-**Memory writes.** `SafetyGuard` re-checks the session on every write. Position, velocity, and full-state restores are allowed only in DirtFish, offline time trial, and custom offline championships. An unknown mode, a failed read, or a missing pointer is treated as “not allowed”.
+**Memory writes.** `SafetyGuard` is designed to allow position, velocity, and full-state restores only in DirtFish, offline time trial, and custom offline championships when session detection is active and permissive mode is off. Unknown mode, failed read, or missing pointer is treated as not allowed. See the mod-loader note above for current v0.1.0 behavior.
 
 ## License
 
