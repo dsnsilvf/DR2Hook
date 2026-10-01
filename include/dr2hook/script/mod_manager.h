@@ -23,6 +23,8 @@ struct ModInstance {
   int refOnInit = LUA_NOREF;
   int refOnTick = LUA_NOREF;
   int refOnKeyDown = LUA_NOREF;
+  int refOnStageLoad = LUA_NOREF;
+  int refOnCountdown = LUA_NOREF;
   int refOnStageStart = LUA_NOREF;
   int refOnRenderUI = LUA_NOREF;
 };
@@ -47,7 +49,11 @@ public:
   static void ReloadMods(const std::string &modsDirectory = "mods");
   static void DispatchTick(double deltaTime);
   static void DispatchKeyDown(UINT vkCode);
-  static void DispatchStageStart(const std::string &stageName);
+  // Ciclo de vida da especial (eventos do jogo via proxy).
+  static void DispatchStageLoad(const std::string &stageName);
+  static void DispatchCountdown(int light);
+  static void DispatchStageStart(const std::string &stageName,
+                                 bool restart = false);
   static void DispatchRenderUI(ModInstance &mod);
   static const std::vector<ModInstance> &GetLoadedMods();
 

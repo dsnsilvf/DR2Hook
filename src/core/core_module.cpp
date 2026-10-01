@@ -37,6 +37,30 @@ bool ConsumeReloadModsRequest() {
   return consume != nullptr && consume() != 0;
 }
 
+// Eventos de especial enfileirados pela proxy (hooks rodam fora da thread de
+// render); o Lua so e chamado daqui.
+void DispatchStageEvents() {
+  static const auto consume =
+      HostExport<Dr2HostStageConsumeEventFn>("Dr2Host_StageConsumeEvent");
+  dr2hook::Dr2StageEvent event{};
+  while (consume != nullptr && consume(&event) != 0) {
+    event.name[sizeof(event.name) - 1] = '\0';
+    switch (event.kind) {
+    case dr2hook::kDr2StageLoad:
+      dr2hook::ModManager::DispatchStageLoad(event.name);
+      break;
+    case dr2hook::kDr2StageCountdown:
+      dr2hook::ModManager::DispatchCountdown(event.value);
+      break;
+    case dr2hook::kDr2StageStart:
+      dr2hook::ModManager::DispatchStageStart(event.name, event.value != 0);
+      break;
+    default:
+      break;
+    }
+  }
+}
+
 // Cliques da tela nativa de mod vão para o Lua; o menu só é republicado
 // quando uma opção ou a lista de mods muda.
 void SyncNativeMenu() {
@@ -167,6 +191,7 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
       dr2hook::Player::ResolveVehicleAddress(
           reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     }
+    DispatchStageEvents();
     dr2hook::ModManager::DispatchTick(deltaTime);
 
     if (ConsumePauseMenuRequest()) {

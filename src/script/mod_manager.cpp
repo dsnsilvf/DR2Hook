@@ -113,9 +113,12 @@ void ModManager::Shutdown() {
         luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnKeyDown);
         mod.refOnKeyDown = LUA_NOREF;
       }
-      if (mod.refOnStageStart != LUA_NOREF) {
-        luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnStageStart);
-        mod.refOnStageStart = LUA_NOREF;
+      for (int *ref : {&mod.refOnStageLoad, &mod.refOnCountdown,
+                       &mod.refOnStageStart}) {
+        if (*ref != LUA_NOREF) {
+          luaL_unref(L, LUA_REGISTRYINDEX, *ref);
+          *ref = LUA_NOREF;
+        }
       }
       if (mod.refOnRenderUI != LUA_NOREF) {
         luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnRenderUI);
@@ -208,6 +211,8 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnInit = LUA_NOREF;
   mod.refOnTick = LUA_NOREF;
   mod.refOnKeyDown = LUA_NOREF;
+  mod.refOnStageLoad = LUA_NOREF;
+  mod.refOnCountdown = LUA_NOREF;
   mod.refOnStageStart = LUA_NOREF;
   mod.refOnRenderUI = LUA_NOREF;
 
@@ -267,6 +272,8 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnInit = cacheCallback("onInit");
   mod.refOnTick = cacheCallback("onTick");
   mod.refOnKeyDown = cacheCallback("onKeyDown");
+  mod.refOnStageLoad = cacheCallback("onStageLoad");
+  mod.refOnCountdown = cacheCallback("onCountdown");
   mod.refOnStageStart = cacheCallback("onStageStart");
   mod.refOnRenderUI = cacheCallback("onRenderUI");
 
@@ -341,7 +348,50 @@ void ModManager::DispatchKeyDown(UINT vkCode) {
   }
 }
 
-void ModManager::DispatchStageStart(const std::string &stageName) {
+void ModManager::DispatchStageLoad(const std::string &stageName) {
+  if (!s_initialized) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+
+  lua_State *L = LuaEngine::GetState();
+  if (L == nullptr) {
+    return;
+  }
+
+  for (auto &mod : s_mods) {
+    if (mod.enabled && mod.refOnStageLoad != LUA_NOREF) {
+      lua_createtable(L, 0, 1);
+      lua_pushstring(L, stageName.c_str());
+      lua_setfield(L, -2, "name");
+      CallModCallback(mod, mod.refOnStageLoad, 1, 0);
+    }
+  }
+}
+
+void ModManager::DispatchCountdown(int light) {
+  if (!s_initialized) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+
+  lua_State *L = LuaEngine::GetState();
+  if (L == nullptr) {
+    return;
+  }
+
+  for (auto &mod : s_mods) {
+    if (mod.enabled && mod.refOnCountdown != LUA_NOREF) {
+      lua_pushinteger(L, static_cast<lua_Integer>(light));
+      CallModCallback(mod, mod.refOnCountdown, 1, 0);
+    }
+  }
+}
+
+void ModManager::DispatchStageStart(const std::string &stageName,
+                                    bool restart) {
   if (!s_initialized) {
     return;
   }
@@ -355,9 +405,11 @@ void ModManager::DispatchStageStart(const std::string &stageName) {
 
   for (auto &mod : s_mods) {
     if (mod.enabled && mod.refOnStageStart != LUA_NOREF) {
-      lua_createtable(L, 0, 1);
+      lua_createtable(L, 0, 2);
       lua_pushstring(L, stageName.c_str());
       lua_setfield(L, -2, "name");
+      lua_pushboolean(L, restart ? 1 : 0);
+      lua_setfield(L, -2, "restart");
       CallModCallback(mod, mod.refOnStageStart, 1, 0);
     }
   }

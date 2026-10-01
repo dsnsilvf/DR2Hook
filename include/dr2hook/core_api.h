@@ -43,6 +43,20 @@ struct Dr2MenuMod {
   int optionCount;
 };
 
+// Ciclo de vida da especial, enfileirado pela proxy (hooks no jogo) e
+// consumido pelo core a cada frame.
+enum Dr2StageEventKind : int {
+  kDr2StageLoad = 0,      // abriu locations/<local>__<pista>.nefs
+  kDr2StageCountdown = 1, // "startlightsstart": uma luz por segundo, value = 1..5
+  kDr2StageStart = 2,     // "racestart": jogador no controle; value = 1 em reinicio
+};
+
+struct Dr2StageEvent {
+  int kind;
+  int value;
+  char name[64]; // pista, ex.: "new_zealand_rally_01"
+};
+
 } // namespace dr2hook
 
 // Exports da dxgi.dll que o core chama por GetProcAddress. `value` do evento é
@@ -51,3 +65,4 @@ using Dr2HostMenuPublishFn = void (*)(const dr2hook::Dr2MenuMod *mods,
                                       int count);
 using Dr2HostMenuConsumeEventFn = int (*)(int *modIndex, int *optionIndex,
                                           int *value);
+using Dr2HostStageConsumeEventFn = int (*)(dr2hook::Dr2StageEvent *event);

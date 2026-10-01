@@ -80,6 +80,9 @@ function onInit()
 end
 
 function onStageStart(stage)
+    if stage.restart then
+        return
+    end
     if Menu.get("clear_on_stage_start") then
         savedState = nil
     end

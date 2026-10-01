@@ -67,6 +67,9 @@ add_library(dxgi SHARED
     src/core/host.cpp
     src/core/hooks.cpp
     src/core/logger.cpp
+    src/core/auto_stage.cpp
+    src/core/load_trace.cpp
+    src/core/race_events.cpp
     src/core/pause_menu.cpp
     src/core/native_screen.cpp
     src/core/ui_data.cpp
@@ -401,6 +404,30 @@ endif()
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_physics_tick_harness PRIVATE m)
+endif()
+
+add_executable(test_auto_stage
+    tests/test_auto_stage.cpp
+    src/core/auto_stage.cpp
+    src/core/logger.cpp
+)
+
+target_include_directories(test_auto_stage PRIVATE
+    include
+    src
+    vendor/minhook/include
+)
+
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_auto_stage PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
+endif()
+
+if(WIN32 OR MSVC)
+    target_compile_definitions(test_auto_stage PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+    )
 endif()
 
 # Alvo customizado para geração do pacote de release (Fase 6)

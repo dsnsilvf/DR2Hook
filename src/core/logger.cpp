@@ -57,7 +57,7 @@ std::string Logger::GetTimestamp() {
                   1000;
 
   std::tm tm_buf{};
-#if defined(_MSC_VER)
+#if defined(_WIN32)
   localtime_s(&tm_buf, &now_time_t);
 #else
   localtime_r(&now_time_t, &tm_buf);

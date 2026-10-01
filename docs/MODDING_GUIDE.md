@@ -89,15 +89,33 @@ O DR2Hook invoca funções globais específicas no seu script `main.lua` caso es
   end
   ```
 
-### `onStageStart(stage)`
-- **Quando é chamado:** Disparado ao iniciar ou reiniciar uma especial ou pista de treino.
+### `onStageLoad(stage)`
+- **Quando é chamado:** No início do carregamento de uma especial, quando o jogo abre o pacote da localidade (`locations/<local>__<pista>.nefs`). Reiniciar a especial não recarrega e não chama este callback.
 - **Parâmetros:**
-  - `stage` (table): Tabela contendo informações da especial, incluindo o campo `name` (string).
+  - `stage` (table): campo `name` (string) com a pista, ex.: `"new_zealand_rally_01"`. A rota ainda não é identificada.
+- **Assinatura:** `function onStageLoad(stage)`
+
+### `onCountdown(light)`
+- **Quando é chamado:** Uma vez por luz da contagem de largada, com um segundo entre elas.
+- **Parâmetros:**
+  - `light` (integer): número da luz, de `1` a `5`. A largada (`onStageStart`) vem um segundo depois da quinta.
+- **Assinatura:** `function onCountdown(light)`
+
+### `onStageStart(stage)`
+- **Quando é chamado:** Na largada, quando o jogador assume o controle do carro (evento `racestart` do jogo). Também na largada depois de reiniciar a especial.
+- **Parâmetros:**
+  - `stage` (table):
+    - `name` (string): pista, igual a `onStageLoad`.
+    - `restart` (boolean): `true` quando é a largada de um reinício da mesma especial, sem novo carregamento.
 - **Assinatura:** `function onStageStart(stage)`
 - **Exemplo:**
   ```lua
   function onStageStart(stage)
-      print("[MeuMod] Nova especial iniciada: " .. tostring(stage.name))
+      if stage.restart then
+          print("[MeuMod] Especial reiniciada: " .. stage.name)
+      else
+          print("[MeuMod] Nova especial: " .. stage.name)
+      end
   end
   ```
 

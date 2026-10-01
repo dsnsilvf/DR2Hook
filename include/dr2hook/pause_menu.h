@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include <cstdint>
 
 namespace dr2hook {
 
