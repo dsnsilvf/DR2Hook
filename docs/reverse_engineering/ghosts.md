@@ -112,7 +112,7 @@ Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Prac
 - Controladores de carro fantasma: 5, de 0x100 bytes, contíguos; `+0x00` veículo, `+0x08` dono passado a `EvaluateGhostState`, `+0x28` slot, `+0x48` saída, `+0x58` tempo, `+0x60..+0x63` flags. Atualizador ~`0x140518400`: sai se `+0x63 == 0`; `+0x62` liga a chamada a `0x1409da680` a cada frame; `+0x61` dispara o reset `0x140512700`.
 - Cópia: `CopyGhostLapData(dest, fonte, false)` (`0x1409cfd30`, aloca com o alocador do jogo via `0x1409cd610`) num slot livre + todos os tempos deslocados de k × espaçamento.
 - O jogo cria só 2 veículos de fantasma (`car 2`, `car 3`; `car 1` = jogador). O controlador do `car 3` é avaliado, mas fica com `+0x62 = 0` e o carro não é desenhado. **Ligar `controlador+0x62 = 1` faz a cópia aparecer** (validado com o jogo recém-aberto). O jogo zera essa flag no Reiniciar; o mod religa a cada frame. `veículo+0x140` (ponteiro de volta, segundo o Gemini) não importa: fica 0 nos dois carros.
-- `0x1409da680` mede a distância ao jogador e grava em `veículo+0x94` (`0x14099db20(veículo, v, 3, 0)`) um fator que vai de 1,0 (longe) a 0,5 (perto): é o esmaecimento por proximidade, não a transparência.
+- `0x1409da680` mede a distância ao jogador e grava em `veículo+0x94` (`0x14099db20(veículo, v, 3, 0)`) um fator que vai de 1,0 (longe) a 0,5 (perto): é o esmaecimento por proximidade. Pode estar ligado à "aura" de §6.4.
 - O jogo reorganiza os slots na largada, e uma versão anterior chegou a deixar o fantasma original deslocado 1 s. Desde `27697b3`, uma cópia é reconhecida pela volta (contagem de posições + 1ª posição), a fonte é a que começa mais cedo e o tempo original é restaurado se ela aparecer deslocada. Ainda falta confirmar no jogo que a cópia volta em vários Reiniciar seguidos.
 
 ### 6.3 Máximo de fantasmas
@@ -121,17 +121,35 @@ Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Prac
 - 2 carros fantasma: no criador de veículos `0x140a882f9`, `mov eax, 2` em `0x140a8834f` e `mov r12d, 2` em `0x140a884d1` (conferido nos bytes).
 - Para 3 ou mais: subir esses limites (até 5) e garantir os descritores de instância de render dos carros novos. Não testado.
 
-### 6.4 Transparência (não resolvido)
+### 6.4 Transparência (achada em 2026-10-02, falta virar código)
 
-Descartado:
-- **Pular `0x14095fe90`** (troca dos 23 materiais pelos `*_ghost`, chamada por `GhostCarPlugin::Init` `0x140b94650` em `0x140b948c5`): roda **uma vez por execução do jogo**, na abertura, antes de qualquer especial (não roda ao carregar a especial nem no Reiniciar). Pulada desde a abertura, o fantasma continua transparente. A opção *Solid ghost car* hoje só faz isso.
-- **`veículo+0xbc = 0`**: o campo é o tipo do carro (0 = carro físico, como o jogador; 3 = fantasma, técnica `Instanced3`), gravado em `0x140a8847f` e `0x140b9840d`. Com 0 ao vivo o fantasma ganhou colisão: na largada (a física só começa ali) bateu no jogador, dano terminal e peças voando. Não serve para sólido; talvez para um "rival físico".
-- **`xrayEffectParameter`** (`GhostCarValues+0x19a10`, `GhostCarValues = [0x14159d9e0+0xf8]`, valor `0; 1,843; 1,775; 1`), ligado aos materiais por `0x1409a2ee0` via `0x14090a030`: há uma única cópia na memória, e zerar ao vivo não mudou nada visível.
+**Onde está:** a transparência é calculada **dentro do shader normal do carro**, a partir de um float4 por instância chamado `GhostCarValues`. Por isso trocar materiais, mudar o passe ou mexer no tipo do carro não mudava nada.
 
-Próximos testes:
-1. Forçar a submissão opaca: NOP no `jne 0x14098687d` em `0x1409867cf` (rotina `0x140986320`), que com `veículo+0xbc != 0` desliga o desenho opaco (`[rsp+0x68] = 0`). Não mexe no tipo do carro nem na física.
-2. Se o carro ficar opaco mas ainda misturado, olhar o blend state do passe `ghost_car_transparent` e o `GhostedTransparencyManager` (`0x140056a60`).
-3. Pular também `0x1409a2ee0` na abertura (o x-ray pode ser aplicado só quando o shader é montado).
+- No `shaderpack/dx11/shaderpack.pssg` (em `game_1.dat`, extraído com `tools/egodata`), o RDEF dos shaders de carro tem `GhostCarValues` em `$Globals+512`, float4, marcado como usado (ao lado de `MudValues`, `CarbonFiberColour` etc.). Os nomes `ghost_car_transparent`/`car_matt_ghost` não aparecem no pacote.
+- No executável, o construtor do objeto de valores dos carros (`[0x14159d9e0+0xf8]`, a doc chamava de "`GhostCarValues`") monta em `0x14094571f` o descritor do parâmetro: `+0x1a0b8` = nome `"GhostCarValues"` (`0x1413916e0`), `+0x1a0c0` = ponteiro para o armazenamento em `+0x1a0d0` (vtable `0x141394690`). Em `+0x1a0d0+0x20` fica uma lista com **um ponteiro por carro** (3 na sessão: jogador + 2 fantasmas).
+- Cada entrada (heap; endereço muda a cada execução):
+
+  | offset | conteúdo | jogador | fantasma A | fantasma B |
+  |---|---|---|---|---|
+  | `+0x00` | float4 `GhostCarValues` | `1; 0; 1; 0` | `0,396; 0; 1; 1` | `0,220; 0; 1; 1` |
+  | `+0x10` | posição do carro (x, y, z) | | | |
+  | `+0x20` | `0,5; 0; 0,5; …` | | | |
+
+  Leitura: `x` = opacidade, `w` = 1 marca "é fantasma".
+- **Validado no jogo:** forçar `x = 1,0` (regravando a cada 2 ms via `/proc/<pid>/mem`) deixou **os dois fantasmas sólidos**, sem precisar Reiniciar. Um fantasma ficou só com `x = 1`, o outro com `x = 1` e `w = 0`; o usuário não notou diferença entre os dois, então `w` não parece ser necessário.
+- **Pendente ("aura"):** o jogo tem um esmaecimento por proximidade. Perto do fantasma ele fica muito transparente; ao se afastar, vai até a transparência mínima, mas ainda meio opaco. Com `x` forçado o carro aparece opaco, mas o efeito dessa zona ainda aparece ao entrar ou sair dela. Investigar:
+  - `0x1409da680` grava em `veículo+0x94`, via `0x14099db20(veículo, v, 3, 0)`, um fator de 1,0 a 0,5 (§6.2). Ver se esse fator ou o mesmo caminho escreve `GhostCarValues.x` ou outro canal (`y`, ou a entrada `+0x20`).
+  - Achar quem escreve `entrada+0x00` a cada frame (breakpoint de escrita, ou varrer stores de float perto de `0x1409da680`/`0x14099db20`) e fazer o hook ali, em vez de regravar.
+  - Para o mod: na opção *Solid ghost car*, gravar `x = 1` nas entradas dos fantasmas a cada frame (reconhecer o jogador por `w == 0`), ou fazer o hook em quem escreve.
+
+Descartado (não muda a transparência):
+- **Pular `0x14095fe90`** (troca dos 23 materiais pelos `*_ghost`, chamada por `GhostCarPlugin::Init` `0x140b94650` em `0x140b948c5`): roda uma vez por execução, na abertura. A opção *Solid ghost car* atual só faz isso, então hoje ela não tem efeito visível.
+- **`veículo+0xbc = 0`** (tipo do carro: 0 = físico, 3 = fantasma; gravado em `0x140a8847f` e `0x140b9840d`): ao vivo dá colisão com o jogador na largada. Talvez sirva para um "rival físico".
+- **`xrayEffectParameter`** (`[0x14159d9e0+0xf8]+0x19a10`, `0; 1,843; 1,775; 1`): `0x1409a2ee0` liga esse parâmetro aos 23 shaders **normais** (lista `+0x19940`; os `*_ghost` ficam em `+0x19968`, marcados por `0x1409a0be0` com `+0x195`, os normais com `+0x194`). Zerar ao vivo não mudou nada; provavelmente é o efeito de ver o fantasma através de obstáculos.
+- **NOP no `jne` em `0x1409867cf`:** a rotina `0x140986320` monta a pintura (`%s_main_d.tga`, `%s_glass_d.tga`…) e só escolhe um byte passado a `0x14094f520` (1 no jogador, 0 nos outros). Sem efeito, mesmo recarregando a especial.
+- **Modo de render por tipo** (`0x1409a9a34`): calcula modo 0 (tipo 0), 2 (tipo 2) ou 1 (outros) e chama `0x140db9230(objRender, modo)`, que grava `+0xd48` e mexe em máscaras (só o modo 2 difere). NOP do `jne` em `0x1409a9a3c` (todo veículo em modo 0): sem efeito.
+- Passes `ghost_car_depth`/`ghost_car_alpha_tested`/`ghost_car_transparent`: IDs calculados por `0x1403ab930` no construtor base de estágio de render `0x1409cc4e0` (campos `+0x1080/+0x1088/+0x1090`, junto de `opaque_blend` `+0x1058` etc.). Não foi preciso seguir.
+- `GhostedTransparencyManager`: instância em `[jogo+0x2968]`; `0x14050af10` liga/desliga (`+0x2a`) conforme `[[0x1416951f8]+0x3600]`; o update `0x140505530` só zera `+0x29/+0x2a`. Tarefa registrada como `"ghosted transparency"` em `0x14052b929`. Não parece ligado ao fantasma de contrarrelógio.
 
 ### 6.5 Formato e ferramentas
 
