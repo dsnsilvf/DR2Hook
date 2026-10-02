@@ -24,7 +24,7 @@ Nome de string no executável não é variável localizada.
 - [Telemetry](telemetry.md) — pacote UDP nativo e o que o parser não identifica
 - [Network Guard](network_guard.md) — isolamento Winsock do mod loader
 - [Executable](executable.md) — binário, seções PE e compilador
-- [Menu](menu.md) — `StatePauseScreen`, chave `pause_menu` e o item DR2 ModLoader
+- [Menu](menu.md) — `StatePauseScreen`, chave `pause_menu` e o item DR2 Hook
 - [UI Data](ui_data.md) — telas, estados e fluxo em `game_1.dat` (NeFS e XML binário), e a ferramenta `tools/egodata`
 - [UI Tabs](ui_tabs.md) — `SBTabGroup`, estados com abas, lista com rolagem, combos e a API do data store
 - [UI Limits](ui_limits.md) — limites e capacidades da UI nativa: objetos, posições, behaviours, hot buttons, texto, diálogos e testes pendentes
