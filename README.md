@@ -115,7 +115,7 @@ Engine RPM and gear are not exposed to Lua yet; they are only in the **Diagnosti
 
 The same actions, plus a restore-mode choice and a notifications toggle, are under **Pause → DR2 Hook → Mods → Practice Mode**. The mod keeps its own checkpoint in Lua through `Player.getState` / `Player.setState`.
 
-Restoring writes the rig pose and velocities at the documented offsets (`+0x320` / `+0x330`). It is not the game's own "reset vehicle" path, so stability depends on the physics solver. INV-01 is investigating whether these are the right fields.
+Restoring writes the rig pose and velocities at the offsets used since the first version (`+0x320` / `+0x330`). **Known limitation:** INV-01 has since marked `+0x320` as a velocity field `REFUTED` (it is a one-tick-delayed copy; the origin state block is at `+0x2b0..+0x2e0`), so velocity restore, and therefore **With Momentum**, may not behave as described. Moving the restore to the origin block is planned in INV-01 and is not validated in-game yet. It is also not the game's own "reset vehicle" path.
 
 ## Install
 
