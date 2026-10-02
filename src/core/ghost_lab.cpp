@@ -144,6 +144,16 @@ constexpr size_t kPositionChannel = 1;
 constexpr size_t kSampleTime = 0x08;
 constexpr size_t kSamplePosition = 0x10;
 
+// Controlador de carro fantasma (0x100 bytes; atualizador ~0x140518400):
+// +0x00 veiculo, +0x08 dono passado a EvaluateGhostState, +0x28 slot,
+// +0x62 calcula a transparencia por proximidade (0x1409da680).
+constexpr size_t kControllerVehicle = 0x00;
+constexpr size_t kControllerOwner = 0x08;
+constexpr size_t kControllerSlot = 0x28;
+constexpr size_t kControllerFade = 0x62;
+// Veiculo ("car N", 0x9b0 bytes): +0x140 aponta de volta para o controlador.
+constexpr size_t kVehicleController = 0x140;
+
 using EvaluateFn = int (*)(uint8_t *owner, void *time, void *arg, uint8_t *out);
 using MakeGhostMaterialsFn = void (*)(void *self, void *model);
 using CopyLapFn = void (*)(uint8_t *dest, const uint8_t *src, bool realloc);
@@ -300,11 +310,29 @@ void CapturePath(const uint8_t *slot) {
   Logger::Info(msg);
 }
 
+// O jogo cria 2 carros fantasma, mas so liga o do 1o fantasma: o carro do
+// controlador seguinte nao aponta de volta (veiculo+0x140 = 1) e fica sem
+// +0x62, e nunca e desenhado. Ligando os dois, a copia aparece (testado em
+// 2026-10-02 com o car 3).
+void LinkCloneVehicle(uint8_t *owner) {
+  uint8_t *controller = owner - kControllerOwner;
+  const uint8_t *slot = Read<const uint8_t *>(controller, kControllerSlot);
+  if (std::find(g_cloned.begin(), g_cloned.end(), slot) == g_cloned.end()) return;
+  uint8_t *vehicle = Read<uint8_t *>(controller, kControllerVehicle);
+  if (vehicle == nullptr) return;
+  if (Read<uint64_t>(vehicle, kVehicleController) == 1) {
+    std::memcpy(vehicle + kVehicleController, &controller, sizeof(controller));
+    Logger::Info("GhostLab: carro da copia ligado ao controlador.");
+  }
+  controller[kControllerFade] = 1;
+}
+
 int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   InFlight guard;
   const int pending = g_cloneCount.exchange(-1);
   if (pending >= 0) ApplyClones(pending, g_cloneStepMs.load());
 
+  LinkCloneVehicle(owner);
   const int result = g_originalEvaluate(owner, time, arg, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
 
