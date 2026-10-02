@@ -75,7 +75,12 @@ inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
 // Disabled: sem ação e "Coming soon". Não usa IBDataEnabled: a navegação por
 // teclado pula itens desabilitados e, sem outro bloco ativo na direção, o
 // cursor não anda (a seta para baixo travava a partir de MODS).
+// Todo bloco mantém o IBSelectableSimple: a grade só para em itens com um
+// behaviour IB* (nenhuma das 82 grades do jogo tem item sem). Info e Disabled
+// disparam kMainMenuIdleEvent, que não tem link no fluxo e por isso não faz
+// nada.
 enum class TileState { Action, Info, Disabled };
+inline constexpr char kMainMenuIdleEvent[] = "dr2hook_idle";
 struct MainMenuTile {
   const char *item;        // id do Item do modelo (posição fixa na cena)
   const char *titleKey;

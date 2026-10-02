@@ -613,7 +613,14 @@ void TestRealFiles() {
                       }) != nullptr &&
                       Find(*page, [](const Node &n) {
                         return n.name == "SBHotButtonScreenEvent";
-                      }) == nullptr,
+                      }) == nullptr &&
+                      std::all_of(page->children[0].children.begin(),
+                                  page->children[0].children.end(),
+                                  [](const Node &tile) {
+                                    return Find(tile, [](const Node &n) {
+                                             return n.name == "IBSelectableSimple";
+                                           }) != nullptr;
+                                  }),
                   "aba do menu principal: 8 blocos, MODS e PRACTICE ativos, em breve sem acao e navegaveis");
     }
     if (ok && std::string(name) == "flow") {

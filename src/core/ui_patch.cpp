@@ -457,11 +457,9 @@ bool BuildMainMenuPage(const Node &templateScreen, Node &out) {
     if (def.texture != nullptr) {
       texture->SetAttribute("texture", def.texture);
     }
-    if (def.state == TileState::Action) {
-      tile.Child("IBSelectableSimple")->SetAttribute("select_value", def.event);
-    } else {
-      tile.RemoveChild("IBSelectableSimple");
-    }
+    tile.Child("IBSelectableSimple")
+        ->SetAttribute("select_value",
+                       def.state == TileState::Action ? def.event : kMainMenuIdleEvent);
     kept.push_back(std::move(tile));
   }
   items->children = std::move(kept);
