@@ -194,4 +194,4 @@ No menu or script can turn this off. To play online again, exit the game and rem
 
 ## License
 
-MIT.
+[PolyForm Noncommercial 1.0.0](LICENSE). Anyone can use, copy, modify, and share DR2Hook for free. Selling it, or using it in a commercial product or service, is not allowed. This license makes the project source-available rather than OSI-approved open source. The bundled Lua in `vendor/lua/` keeps its own MIT license.
