@@ -12,7 +12,17 @@ Verificado:
 
 Hipótese (Gemini): depois do magic, tamanho/CRC (4 bytes), versão (1 byte, ≤ 7) e máscara de canais em varint LEB128; serializador em `0x1409d7f00`.
 
-Em andamento: um segundo despacho do Gemini procura a rotina de cifra e a chave para decifrar as cópias dos saves.
+### Cifra e contêiner (resolvido em 2026-10-02)
+
+Verificado (derivação reimplementada do zero em `tools/dr2save.py`; decifra os 21 arquivos copiados):
+- **AES-256-ECB, sem IV**, chave **fixa** (igual para qualquer conta): `91d84b7138a2cc4dadc022db4ebd1edd6c3454746acb235b618b404170b86e71`.
+- Derivação, na inicialização do jogo (`0x140527140..0x1405271ce`): `0x14009f4d0("rp17", 3)` (FNV-1a de `"rp1"`), `xor 0x37` e `* 0x1000193` completam o FNV-1a de `"rp17"` = `0x7dc96bc7`. `0x14080f360(cifra, 0x7dc96bc7, 2)` semeia um MT19937 (init LCG 69069, semente `| 1`, `0x140859b80`), gera 64 dígitos hex com `rand % 15` (nunca sai `F`) e passa a string a `0x140815510(cifra, 2 = 256 bits, hex)`, que converte os pares em 32 bytes e expande a chave (14 rodadas, `0x140805f10`).
+- Objeto de cifra: 0x250 bytes, construtor `0x1407fbe00` (vtable `0x1412ca1f8`); `+0x240` = CPU tem AES-NI (`cpuid` ecx bit 25); `+0x30` escolhe decifrar (0) ou cifrar (1) em `0x1407fbd40`, com rotinas AES-NI (`0x140806xxx`) ou T-tables (Te0 em `0x1412c68d0`, rotinas `0x14080b290..0x14080bd90`). Guardado em `[sistema+0x1c08]` e entregue a `0x140cc3910` (objeto de 0x370 bytes, bloco 0x10).
+- Contêiner decifrado: cabeçalho de 24 bytes `u32 versão = 4`, `u32 tamanho do cabeçalho = 24`, `u32 compressão = 2` (zlib), `u32 0`, `u64 tamanho descomprimido` (bate exatamente nos 18 contêineres), depois zlib. O payload é serialização EGO (começa com `37 dd bb 4e`).
+- Fantasmas (`#ENDFX-N`): dentro do payload, a partir do byte 137, há um segundo stream zlib cujo conteúdo começa com **`GHST`** (21–98 KB).
+- `#QKRHMYXE` (fantasmas, perfil e backup) não são contêineres: decifram para o texto `Save System 2 Demo - Display Name` seguido de bytes binários. `#GTSRB.UEL` é contêiner (1240 bytes, sem `GHST`). O perfil descomprime para 2 658 560 bytes.
+
+Relatório bruto: `investigations/gemini/ghost-cipher.md`.
 
 ## 2. Sistemas no executável
 
@@ -41,9 +51,10 @@ Hipóteses (Gemini; endereços vistos por ele no binário/dump, não testados em
 1. **Ler o fantasma a cada frame** (hook em `0x1409ce4d0`): posição/velocidade/rotação → **diferença ao vivo para o melhor tempo** no Practice Mode (à frente/atrás em metros e segundos). Mais valioso e mais seguro (só leitura).
 2. **Injetar volta própria** (ex.: gravada a partir de um checkpoint) como fantasma, via `CopyGhostLapData` ou os buffers do slot, sem passar pelo arquivo cifrado. Provável.
 3. **Vários fantasmas**: acrescentar slots ao mapa; falta saber como instanciar o modelo visual de cada slot extra. Hipótese a testar.
-4. Com a cifra resolvida: exportar/importar fantasmas (`GHST`) e convertê-los.
+4. Exportar/importar fantasmas (`GHST`) e convertê-los: a cifra está resolvida (§1, `tools/dr2save.py`); falta o formato do `GHST` e recifrar.
 
 ## 5. Arquivos de apoio
 
+- `tools/dr2save.py`: decifra os saves (contêiner e `GHST`).
 - `tools/pssg.py`: parser PSSG escrito pelo Gemini (usado no texto rico; ver `ui_tabs.md`).
 - `investigations/gemini/ghost-runtime.md`, `investigations/gemini/pssg-ui-text.md`: relatórios brutos.
