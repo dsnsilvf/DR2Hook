@@ -578,6 +578,7 @@ void TestPracticeModeNativeMenu() {
               "opcoes do mod de pratica, na ordem declarada");
   TEST_ASSERT(entries.size() == mods.size() &&
                   entries[practice].options[4].description.rfind("{v}How every start works", 0) == 0 &&
+                  entries[practice].options[4].description.find("{s:_22_din_bold}Normal:{s:_22_roboto_cnd}") != std::string::npos &&
                   !entries[practice].options[0].description.empty(),
               "Menu.describe preenche a descricao do painel");
   TEST_ASSERT(entries.size() == mods.size() &&

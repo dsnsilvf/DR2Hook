@@ -608,6 +608,40 @@ static int Lua_Menu_set(lua_State *L) {
 
 // Menu.describe(id, text): descrição da opção no painel da direita da tela
 // nativa. Sem ela, o painel mostra o nome da opção e a descrição do mod.
+// Texto do painel da direita (tela nativa, nó de texto rico): `*negrito*` ou
+// `**negrito**` viram {s:_22_din_bold}...{s:_22_roboto_cnd} (estilos de
+// frontend/configs/text_styles.xml; _22_roboto_cnd é a base do painel) e
+// `\*` é um asterisco. Texto que já começa com {v} passa sem conversão.
+static std::string DescriptionMarkup(const std::string &source) {
+  static constexpr char kBold[] = "{s:_22_din_bold}";
+  static constexpr char kNormal[] = "{s:_22_roboto_cnd}";
+  if (source.rfind("{v}", 0) == 0) {
+    return source;
+  }
+  std::string out;
+  bool bold = false, styled = false;
+  for (size_t i = 0; i < source.size(); ++i) {
+    const char c = source[i];
+    if (c == '\\' && i + 1 < source.size() && source[i + 1] == '*') {
+      out += '*';
+      ++i;
+    } else if (c == '*') {
+      if (i + 1 < source.size() && source[i + 1] == '*') {
+        ++i; // ** igual a *
+      }
+      out += bold ? kNormal : kBold;
+      bold = !bold;
+      styled = true;
+    } else {
+      out += c;
+    }
+  }
+  if (bold) {
+    out += kNormal; // * sem par: fecha no fim
+  }
+  return styled ? "{v}" + out : out;
+}
+
 static int Lua_Menu_describe(lua_State *L) {
   ModOption *option =
       ModMenu::Find(ModMenu::CurrentMod(), luaL_checkstring(L, 1));
@@ -626,7 +660,7 @@ static int Lua_Menu_describe(lua_State *L) {
     }
     text += *c;
   }
-  option->description = std::move(text);
+  option->description = DescriptionMarkup(text);
   ModMenu::MarkDirty();
   return 0;
 }
