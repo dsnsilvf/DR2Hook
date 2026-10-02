@@ -327,9 +327,9 @@ void TestPatchChain() {
   TEST_ASSERT(ui_patch::PatchStates(states, error), error);
   for (const ui_patch::ScreenDef &def : ui_patch::kScreens) {
     const Node *state = Find(states, [&](const Node &n) {
-      return Is(n, "StateScreenFECore", "screen_name", def.name);
+      return Is(n, "StateScreenFECore", "id", def.stateId);
     });
-    TEST_ASSERT(state != nullptr && *state->Attribute("id") == def.stateId,
+    TEST_ASSERT(state != nullptr && *state->Attribute("screen_name") == def.name,
                 std::string("estado com id fixo: ") + def.name);
     TEST_ASSERT(std::stoul(def.stateId) == def.stateIdValue,
                 std::string("id em texto e em numero: ") + def.name);
@@ -597,15 +597,24 @@ void TestRealFiles() {
       const Node *page = Find(root, [](const Node &n) {
         return Is(n, "Screen", "id", ui_patch::kMainMenuPage.name);
       });
+      const size_t tiles = sizeof(ui_patch::kMainMenuTiles) / sizeof(ui_patch::kMainMenuTiles[0]);
       TEST_ASSERT(page != nullptr && page->children.size() == 2 &&
-                      page->children[0].children.size() == 1 &&
+                      page->children[0].children.size() == tiles &&
                       Find(*page, [](const Node &n) {
-                        return Is(n, "IBSelectableSimple", "select_value", ui_patch::kPauseEvent);
+                        return Is(n, "IBSelectableSimple", "select_value",
+                                  ui_patch::kMainMenuModsEvent);
+                      }) != nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return n.name == "IBDataEnabled";
+                      }) == nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return Is(n, "IBSelectableSimple", "select_value",
+                                  ui_patch::kMainMenuPracticeEvent);
                       }) != nullptr &&
                       Find(*page, [](const Node &n) {
                         return n.name == "SBHotButtonScreenEvent";
                       }) == nullptr,
-                  "aba do menu principal: um bloco que abre o DR2 Hook");
+                  "aba do menu principal: 8 blocos, MODS e PRACTICE ativos, em breve sem acao e navegaveis");
     }
     if (ok && std::string(name) == "flow") {
       const Node *mainMenu = Find(root, [](const Node &n) {
@@ -614,8 +623,20 @@ void TestRealFiles() {
       TEST_ASSERT(mainMenu != nullptr &&
                       Find(*mainMenu, [](const Node &n) {
                         return Is(n, "link", "id", ui_patch::kPauseEvent);
+                      }) != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kMainMenuPracticeEvent);
+                      }) != nullptr &&
+                      Find(root, [](const Node &n) {
+                        return Is(n, "node", "state", ui_patch::kModDirect.stateId);
+                      }) != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kMainMenuModsEvent);
+                      }) != nullptr &&
+                      Find(root, [](const Node &n) {
+                        return Is(n, "node", "state", ui_patch::kHubMods.stateId);
                       }) != nullptr,
-                  "menu principal ligado ao hub");
+                  "menu principal ligado ao hub e ao mod interno");
     }
     if (out != nullptr) {
       const std::vector<uint8_t> patched = dr2hook::bxml::Encode(root);

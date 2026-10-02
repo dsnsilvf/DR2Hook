@@ -118,11 +118,11 @@ Menu.describe("restore_mode",
 Menu.describe("clear_on_stage_start",
     "Forgets the checkpoint when a new stage starts. Restarting the same stage keeps it.")
 Menu.describe("race_start",
-    "How every start works, restarts included.\n\n"
-    .. "Normal: hold the handbrake and wait for the 5 lights.\n"
-    .. "No countdown: hold the handbrake and go at once.\n"
-    .. "Automatic: go as soon as the car is on the line.\n"
-    .. "On throttle: go when you press the throttle.")
+    "{v}How every start works, restarts included.\n\n"
+    .. "{s:_22_din_bold}Normal: {s:_22_roboto_cnd}hold the handbrake and wait for the 5 lights.\n"
+    .. "{s:_22_din_bold}No countdown: {s:_22_roboto_cnd}hold the handbrake and go at once.\n"
+    .. "{s:_22_din_bold}Automatic: {s:_22_roboto_cnd}go as soon as the car is on the line.\n"
+    .. "{s:_22_din_bold}On throttle: {s:_22_roboto_cnd}go when you press the throttle.")
 Menu.describe("indestructible_tyres", "Coming soon: tyres that never wear or puncture.")
 Menu.describe("indestructible_car", "Coming soon: no damage to the car.")
 Menu.describe("notifications", "Shows on-screen messages for checkpoints and race start options.")

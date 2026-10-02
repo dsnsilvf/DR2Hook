@@ -54,6 +54,8 @@ constexpr uint8_t kTabSetupBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56,
                                       0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
 constexpr uintptr_t kTabControllerOffset = 0x128;
 constexpr uintptr_t kMainMenuCodesOffset = 0x2a0;
+constexpr uintptr_t kMainMenuSavedTabOffset = 0x288;     // u32
+constexpr uintptr_t kMainMenuSavedTabValidOffset = 0x291; // u8
 constexpr char kMainMenuMarkerTab[] = "options_extras";
 // Código de options_extras: a aba nossa é tratada como página de opções.
 constexpr uint32_t kMainMenuTabCode = 2;
@@ -522,8 +524,26 @@ void PopulateMod(void *store, const DsPath &root, bool hashOk) {
 void DetourEnterData(void *state) {
   g_originalEnterData(state);
   const uint32_t id = Field<uint32_t>(state, kStateIdOffset);
-  if (id != up::kHub.stateIdValue && id != up::kMod.stateIdValue) {
+  if (id != up::kHub.stateIdValue && id != up::kMod.stateIdValue &&
+      id != up::kModDirect.stateIdValue && id != up::kHubMods.stateIdValue) {
     return;
+  }
+  if (id == up::kHubMods.stateIdValue) {
+    g_returnTab.store(up::kModsTab); // bloco MODS do menu principal
+  }
+  // Aberto direto do menu principal: o mod interno, não o último do hub.
+  if (id == up::kModDirect.stateIdValue) {
+    int builtin = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_menuMutex);
+      for (size_t i = 0; i < g_menu.size(); ++i) {
+        if (g_menu[i].name == up::kBuiltinModName) {
+          builtin = static_cast<int>(i);
+          break;
+        }
+      }
+    }
+    g_selectedMod.store(builtin);
   }
   void *store = Field<void *>(state, kStateStoreOffset);
   if (!g_ds.ready || store == nullptr) {
@@ -532,9 +552,9 @@ void DetourEnterData(void *state) {
   const auto *root =
       reinterpret_cast<const DsPath *>(static_cast<const uint8_t *>(state) +
                                        kStateRootOffset);
-  if (id == up::kHub.stateIdValue) {
+  if (id == up::kHub.stateIdValue || id == up::kHubMods.stateIdValue) {
     PopulateHub(store, *root);
-  } else {
+  } else { // kMod e kModDirect: a mesma tela
     PopulateMod(store, *root, RootHashMatches(state, up::kMod.name));
   }
 }
@@ -633,10 +653,28 @@ bool MenuText(const std::string &key, std::string &text) {
                : std::to_string(g_menu.size()) +
                      (g_menu.size() == 1 ? " mod loaded." : " mods loaded.") +
                      " Select a mod to open its options.";
-  } else if (key == up::kMainMenuPage.titleKey) {
-    text = "DR2 HOOK";
-  } else if (key == up::kMainMenuPage.subtitleKey) {
-    text = "Mods, Practice Mode and tools";
+  } else if (key == "lng_dr2hook_mm_mods_title") {
+    text = "MODS";
+  } else if (key == "lng_dr2hook_mm_mods_subtitle") {
+    text = g_menu.empty() ? "No mods loaded"
+                          : std::to_string(g_menu.size()) +
+                                (g_menu.size() == 1 ? " mod loaded" : " mods loaded");
+  } else if (key == "lng_dr2hook_mm_mp_title") {
+    text = "MULTIPLAYER";
+  } else if (key == "lng_dr2hook_mm_world_title") {
+    text = "WORLD EDITOR";
+  } else if (key == "lng_dr2hook_mm_vehicle_title") {
+    text = "VEHICLE EDITOR";
+  } else if (key == "lng_dr2hook_mm_soon") {
+    text = "Coming soon";
+  } else if (key == "lng_dr2hook_mm_overlay_title") {
+    text = "OVERLAY - SOON";
+  } else if (key == "lng_dr2hook_mm_reload_title") {
+    text = "RELOAD MODS - SOON";
+  } else if (key == "lng_dr2hook_mm_practice_title") {
+    text = "PRACTICE MODE";
+  } else if (key == "lng_dr2hook_mm_about_title") {
+    text = std::string("DR2 HOOK v") + DR2HOOK_VERSION + " - DSNSILVF";
   } else if (key == up::kModPage.titleKey) {
     text = "OPTIONS";
   } else if (key == up::kModPage.breadcrumbKey) {
@@ -717,8 +755,17 @@ void DetourTabSetup(void *controller, TabVector *tabs, uint32_t index,
                                                 kTabControllerOffset + kMainMenuCodesOffset);
     if (codes->data != nullptr && codes->count == tabs->count &&
         codes->count < codes->capacity) {
+      const uint32_t ours = static_cast<uint32_t>(tabs->count);
       tabs->data[tabs->count++] = {up::kMainMenuPage.name, up::kMainMenuPage.tabLabel, 1};
       codes->data[codes->count++] = kMainMenuTabCode;
+      // A aba salva (+0x288, válida com +0x291) é limitada pelo jogo às abas
+      // dele, contadas antes da nossa: voltando do DR2 Hook ela caía em
+      // options_extras.
+      const auto *state = static_cast<const uint8_t *>(controller) - kTabControllerOffset;
+      if (state[kMainMenuSavedTabValidOffset] != 0 &&
+          Field<uint32_t>(state, kMainMenuSavedTabOffset) == ours) {
+        index = ours;
+      }
     } else {
       Log("menu principal sem espaco para a aba DR2 Hook");
     }

@@ -31,7 +31,13 @@ struct ScreenDef {
 // Enter do estado; as páginas vêm de tabs.info[i].screen.
 inline constexpr ScreenDef kHub{"dr2hook_hub", "1146224640", 0x44520000u};
 inline constexpr ScreenDef kMod{"dr2hook_mod", "1146224641", 0x44520001u};
-inline constexpr ScreenDef kScreens[] = {kHub, kMod};
+// Mesma tela de opções do mod, aberta direto do menu principal: ao entrar, a
+// DLL escolhe o mod interno (kBuiltinModName) em vez do selecionado no hub.
+inline constexpr ScreenDef kModDirect{"dr2hook_mod", "1146224642", 0x44520002u};
+// Hub aberto pelo bloco MODS do menu principal: já entra na aba Mods.
+inline constexpr ScreenDef kHubMods{"dr2hook_hub", "1146224643", 0x44520003u};
+inline constexpr ScreenDef kScreens[] = {kHub, kMod, kModDirect, kHubMods};
+inline constexpr char kBuiltinModName[] = "Practice Mode";
 
 // Textos de uma tela smart_screen: título e painel de descrição à direita.
 struct PageDef {
@@ -61,21 +67,55 @@ inline constexpr unsigned kModsTab = 1;
 inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
                                   nullptr, nullptr, "lng_dr2hook_crumb_mod"};
 
-// Aba "DR2 Hook" do menu principal: página com um bloco, copiada da grade de
-// options_extras. A aba entra em tabs.info pelo hook do Setup do TabController
-// (native_screen.cpp); o bloco dispara kPauseEvent, ligado ao hub no nó do
-// menu principal (jump_id kMainMenuJumpId).
+// Aba "DR2 Hook" do menu principal: página copiada da grade de options_extras
+// com os blocos abaixo. A aba entra em tabs.info pelo hook do Setup do
+// TabController (native_screen.cpp); os eventos caem no nó do menu principal
+// (jump_id kMainMenuJumpId), que ganha os links para o hub e para o mod
+// interno.
+// Disabled: sem ação e "Coming soon". Não usa IBDataEnabled: a navegação por
+// teclado pula itens desabilitados e, sem outro bloco ativo na direção, o
+// cursor não anda (a seta para baixo travava a partir de MODS).
+enum class TileState { Action, Info, Disabled };
+struct MainMenuTile {
+  const char *item;        // id do Item do modelo (posição fixa na cena)
+  const char *titleKey;
+  const char *subtitleKey; // nulo nos blocos pequenos (não têm subtítulo)
+  const char *texture;     // marca d'água; nulo mantém a do modelo
+  TileState state;
+  const char *event;       // só em Action
+};
+inline constexpr char kMainMenuPracticeEvent[] = "dr2hook_practice";
+inline constexpr char kMainMenuModsEvent[] = "dr2hook_mods";
+inline constexpr MainMenuTile kMainMenuTiles[] = {
+    {"preferences", "lng_dr2hook_mm_mods_title", "lng_dr2hook_mm_mods_subtitle", nullptr,
+     TileState::Action, kMainMenuModsEvent},
+    {"input", "lng_dr2hook_mm_mp_title", "lng_dr2hook_mm_soon", "tile_watermark_join",
+     TileState::Disabled, nullptr},
+    {"profile", "lng_dr2hook_mm_overlay_title", nullptr, nullptr, TileState::Disabled, nullptr},
+    {"racenet", "lng_dr2hook_mm_reload_title", nullptr, nullptr, TileState::Disabled, nullptr},
+    {"graphics", "lng_dr2hook_mm_world_title", "lng_dr2hook_mm_soon",
+     "tile_watermark_rally_lead", TileState::Disabled, nullptr},
+    {"audio", "lng_dr2hook_mm_vehicle_title", "lng_dr2hook_mm_soon",
+     "tile_watermark_performance", TileState::Disabled, nullptr},
+    // Ícone original da posição: os de bloco grande ficam cortados no pequeno.
+    {"legal", "lng_dr2hook_mm_practice_title", nullptr, nullptr, TileState::Action,
+     kMainMenuPracticeEvent},
+    {"credits", "lng_dr2hook_mm_about_title", nullptr, nullptr, TileState::Info, nullptr},
+};
+// Navegação da grade: a mesma do SBGridItemFlow de options_extras (3 colunas x
+// 4 linhas; `[id]` é a célula a mais de um bloco grande). Precisa das 12
+// células; com menos, as linhas desalinham e a seta para baixo não anda.
+inline constexpr char kMainMenuGrid[] =
+    "preferences input profile [preferences] [input] racenet "
+    "graphics audio legal [graphics] [audio] credits";
 struct MainMenuPageDef {
   const char *name;
   const char *templateScreen;
-  const char *tile;      // id do Item mantido do modelo
-  const char *titleKey;
-  const char *subtitleKey;
+  const char *titleKey;  // bloco do hub (compatibilidade com testes/docs)
   const char *tabLabel;  // texto já pronto em tabs.info[i].label
 };
-inline constexpr MainMenuPageDef kMainMenuPage{
-    "dr2hook_mm", "options_extras", "preferences", "lng_dr2hook_mm_title",
-    "lng_dr2hook_mm_subtitle", "DR2 Hook"};
+inline constexpr MainMenuPageDef kMainMenuPage{"dr2hook_mm", "options_extras",
+                                               "lng_dr2hook_mm_title", "DR2 Hook"};
 inline constexpr char kMainMenuJumpId[] = "main_menu_hub";
 // Link do nó do menu principal cujo alvo indica onde pôr os nós hub/mod.
 inline constexpr char kMainMenuAnchorLink[] = "game_settings";

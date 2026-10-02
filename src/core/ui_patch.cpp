@@ -314,6 +314,7 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
     Path path;
     std::string id;
     std::string optionsTarget;
+    bool mainMenu = false;
   };
   std::vector<Origin> origins;
   std::map<std::string, Path> parentOf;
@@ -345,7 +346,7 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
       }
     }
     if (target != nullptr) {
-      origins.push_back({path, *id, *target});
+      origins.push_back({path, *id, *target, mainMenu});
     }
   });
   if (stateInUse) {
@@ -391,38 +392,80 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
     Node &siblings = At(patched, parent->second);
     siblings.children.push_back(std::move(hub));
     siblings.children.push_back(std::move(mod));
+
+    // Menu principal: o mod interno abre direto, e MODS abre o hub na aba
+    // Mods (estado próprio; mesmos links do hub).
+    if (origin.mainMenu) {
+      const std::string directId = FreshId(used);
+      const std::string modsHubId = FreshId(used);
+      if (directId.empty() || modsHubId.empty()) {
+        error = "sem id de no livre";
+        return false;
+      }
+      Node direct = MakeNode("node", {{"id", directId}, {"state", kModDirect.stateId}});
+      direct.children.push_back(BackLink(origin.id));
+      Node modsHub = MakeNode("node", {{"id", modsHubId}, {"state", kHubMods.stateId}});
+      for (size_t i = 0; i < kListSlots; ++i) {
+        modsHub.children.push_back(MakeNode(
+            "link", {{"id", kNavModPrefix + std::to_string(i)}, {"target", modId}}));
+      }
+      modsHub.children.push_back(BackLink(origin.id));
+      Node &menu = At(patched, origin.path);
+      menu.children.push_back(
+          MakeNode("link", {{"id", kMainMenuPracticeEvent}, {"target", directId}}));
+      menu.children.push_back(
+          MakeNode("link", {{"id", kMainMenuModsEvent}, {"target", modsHubId}}));
+      Node &parentNode = At(patched, parent->second);
+      parentNode.children.push_back(std::move(direct));
+      parentNode.children.push_back(std::move(modsHub));
+    }
   }
   root = std::move(patched);
   linkedNodes = origins.size();
   return true;
 }
 
-// Cópia de options_extras com só o bloco kMainMenuPage.tile, textos e evento
+// Cópia de options_extras só com os blocos de kMainMenuTiles, textos e eventos
 // nossos. Falso se o modelo não tiver o layout esperado.
 bool BuildMainMenuPage(const Node &templateScreen, Node &out) {
   out = templateScreen;
   out.SetAttribute("id", kMainMenuPage.name);
   Node *items = out.Child("items");
   Node *behaviours = out.Child("behaviours");
-  Node *tile = items != nullptr ? FindChild(*items, "Item", "id", kMainMenuPage.tile)
-                                : nullptr;
   Node *flow = behaviours != nullptr ? behaviours->Child("SBGridItemFlow") : nullptr;
-  if (tile == nullptr || flow == nullptr) {
+  if (items == nullptr || flow == nullptr) {
     return false;
   }
-  Node *title = FindChild(*tile, "BTextStatic", "glyph", "text_title");
-  Node *subtitle = FindChild(*tile, "BTextStatic", "glyph", "text_subtitle");
-  Node *select = tile->Child("IBSelectableSimple");
-  if (title == nullptr || subtitle == nullptr || select == nullptr) {
-    return false;
+  std::vector<Node> kept;
+  for (const MainMenuTile &def : kMainMenuTiles) {
+    Node *source = FindChild(*items, "Item", "id", def.item);
+    if (source == nullptr) {
+      return false;
+    }
+    Node tile = *source;
+    Node *title = FindChild(tile, "BTextStatic", "glyph", "text_title");
+    Node *subtitle = FindChild(tile, "BTextStatic", "glyph", "text_subtitle");
+    Node *texture = tile.Child("BTextureStatic");
+    if (title == nullptr || texture == nullptr || tile.Child("IBSelectableSimple") == nullptr ||
+        (def.subtitleKey != nullptr && subtitle == nullptr)) {
+      return false;
+    }
+    title->SetAttribute("string", def.titleKey);
+    if (subtitle != nullptr && def.subtitleKey != nullptr) {
+      subtitle->SetAttribute("string", def.subtitleKey);
+    }
+    if (def.texture != nullptr) {
+      texture->SetAttribute("texture", def.texture);
+    }
+    if (def.state == TileState::Action) {
+      tile.Child("IBSelectableSimple")->SetAttribute("select_value", def.event);
+    } else {
+      tile.RemoveChild("IBSelectableSimple");
+    }
+    kept.push_back(std::move(tile));
   }
-  title->SetAttribute("string", kMainMenuPage.titleKey);
-  subtitle->SetAttribute("string", kMainMenuPage.subtitleKey);
-  select->SetAttribute("select_value", kPauseEvent);
-  Node kept = *tile;
-  items->children.clear();
-  items->children.push_back(std::move(kept));
-  flow->text = std::string("\r\n          ") + kMainMenuPage.tile + "\r\n        ";
+  items->children = std::move(kept);
+  flow->text = std::string("\r\n          ") + kMainMenuGrid + "\r\n        ";
   // O atalho de "trial upsell" é da tela original.
   behaviours->RemoveChild("SBHotButtonScreenEvent");
   return true;
