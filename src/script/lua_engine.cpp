@@ -1,4 +1,5 @@
 #include "dr2hook/script/lua_engine.h"
+#include "dr2hook/cutscene_probe.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/script/mod_menu.h"
 #include "dr2hook/player.h"
@@ -466,6 +467,23 @@ static int Lua_Safety_isRestrictedMode(lua_State *L) {
 }
 
 // ---------------------------------------------------------------------------
+// Bindings nativos para Race (largada; hooks em CutsceneProbe)
+// ---------------------------------------------------------------------------
+// Race.setStartMode("normal" | "no_countdown" | "automatic" | "on_throttle")
+static int Lua_Race_setStartMode(lua_State *L) {
+  const char *mode = luaL_checkstring(L, 1);
+  if (!CutsceneProbe::SetStartMode(mode)) {
+    return luaL_error(L, "Race.setStartMode: modo invalido '%s'", mode);
+  }
+#if defined(_WIN32)
+  lua_pushboolean(L, 1);
+#else
+  lua_pushboolean(L, 0); // sem jogo, sem hook
+#endif
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Bindings nativos para UI
 // ---------------------------------------------------------------------------
 static int Lua_UI_notify(lua_State *L) {
@@ -673,6 +691,12 @@ void LuaEngine::RegisterBindings() {
   lua_pushcfunction(s_L, Lua_Safety_isRestrictedMode);
   lua_setfield(s_L, -2, "isRestrictedMode");
   lua_setglobal(s_L, "Safety");
+
+  // Tabela Race
+  lua_createtable(s_L, 0, 1);
+  lua_pushcfunction(s_L, Lua_Race_setStartMode);
+  lua_setfield(s_L, -2, "setStartMode");
+  lua_setglobal(s_L, "Race");
 
   // Tabela UI
   lua_createtable(s_L, 0, 1);

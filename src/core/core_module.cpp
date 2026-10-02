@@ -1,4 +1,5 @@
 #include "dr2hook/core_api.h"
+#include "dr2hook/cutscene_probe.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
 #include "dr2hook/physics_tick_harness.h"
@@ -133,6 +134,9 @@ int Core_Initialize(int truncateLog) {
       dr2hook::Logger::Error("Falha ao inicializar ModManager.");
     }
 
+    dr2hook::CutsceneProbe::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
       const uintptr_t gameBase = reinterpret_cast<uintptr_t>(
@@ -154,6 +158,7 @@ void Core_Shutdown() {
   try {
     dr2hook::OverlayManager::Shutdown();
     dr2hook::PhysicsTickHarness::Shutdown();
+    dr2hook::CutsceneProbe::Shutdown();
     dr2hook::SavestateManager::Shutdown();
     dr2hook::ModManager::Shutdown();
     dr2hook::Logger::Info("DR2Hook Core descarregado.");

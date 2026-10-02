@@ -29,6 +29,7 @@ constexpr uint8_t kRaceEventPrologue[] = {
 
 using RaceEventFn = void (*)(void *session, const char *name);
 
+
 constexpr size_t kMaxQueuedEvents = 32;
 // O jogo abre o .nefs da localidade duas vezes seguidas por carregamento.
 constexpr ULONGLONG kLoadDedupMs = 2000;
@@ -76,29 +77,39 @@ void DetourRaceEvent(void *session, const char *name) {
   g_originalRaceEvent(session, name);
 }
 
+bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
+          void **original, void **target, const char *name) {
+  const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+  void *fn = reinterpret_cast<void *>(base + rva);
+  if (base == 0 || std::memcmp(fn, prologue, size) != 0) {
+    Logger::Warn(std::string("RaceEvent: prologo de ") + name +
+                 " diferente do esperado; hook abortado.");
+    return false;
+  }
+  if (MH_CreateHook(fn, detour, original) != MH_OK) {
+    Logger::Error(std::string("RaceEvent: falha ao criar hook de ") + name);
+    return false;
+  }
+  if (MH_EnableHook(fn) != MH_OK) {
+    MH_RemoveHook(fn);
+    Logger::Error(std::string("RaceEvent: falha ao habilitar hook de ") + name);
+    return false;
+  }
+  *target = fn;
+  return true;
+}
+
 } // namespace
 
 bool InstallRaceEventsHook() {
-  const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
-  void *target = reinterpret_cast<void *>(base + kRaceEventRva);
-  if (base == 0 ||
-      std::memcmp(target, kRaceEventPrologue, sizeof(kRaceEventPrologue)) != 0) {
-    Logger::Warn("RaceEvent: prologo diferente do esperado; hook abortado.");
-    return false;
-  }
-  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourRaceEvent),
-                    reinterpret_cast<void **>(&g_originalRaceEvent)) != MH_OK) {
-    Logger::Error("RaceEvent: falha ao criar hook.");
-    return false;
-  }
-  if (MH_EnableHook(target) != MH_OK) {
-    MH_RemoveHook(target);
-    Logger::Error("RaceEvent: falha ao habilitar hook.");
-    return false;
-  }
-  g_target = target;
-  Logger::Info("RaceEvent: hook de RaceSession::OnNamedEvent ativo.");
-  return true;
+  const bool events =
+      Hook(kRaceEventRva, kRaceEventPrologue, sizeof(kRaceEventPrologue),
+           reinterpret_cast<void *>(&DetourRaceEvent),
+           reinterpret_cast<void **>(&g_originalRaceEvent), &g_target,
+           "RaceSession::OnNamedEvent");
+  Logger::Info(std::string("RaceEvent: hook de OnNamedEvent ") +
+               (events ? "ativo." : "FALHOU."));
+  return events;
 }
 
 void NotifyStageLoad(const char *nefsFileName) {
@@ -122,10 +133,12 @@ void NotifyStageLoad(const char *nefsFileName) {
 }
 
 void UninstallRaceEventsHook() {
-  if (g_target == nullptr) return;
-  MH_DisableHook(g_target);
-  MH_RemoveHook(g_target);
-  g_target = nullptr;
+  for (void **target : {&g_target}) {
+    if (*target == nullptr) continue;
+    MH_DisableHook(*target);
+    MH_RemoveHook(*target);
+    *target = nullptr;
+  }
 }
 
 } // namespace dr2hook

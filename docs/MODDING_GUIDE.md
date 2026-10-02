@@ -165,6 +165,14 @@ Permite inspecionar o status das travas de Fair Play antes de realizar qualquer 
 | :--- | :--- | :--- | :--- |
 | `Safety.isRestrictedMode()` | Nenhum | `boolean` | Retorna `true` se o jogo estiver em evento oficial/competitivo (RaceNet), ou `false` se estiver em modo livre/treino offline. |
 
+### Módulo `Race`
+- `Race.setStartMode(mode)`: como a largada acontece, inclusive nos reinícios. `mode` é uma string:
+  - `"normal"`: padrão do jogo (segurar o freio de mão e 5 luzes).
+  - `"no_countdown"`: segura o freio de mão e larga na hora, sem luzes nem a espera do tempo do rival.
+  - `"automatic"`: larga sozinho assim que o carro está na linha.
+  - `"on_throttle"`: larga ao pisar no acelerador.
+  Os hooks ficam no core (recarregados pelo F8, que volta o modo para `"normal"`); retorna `false` fora do Windows.
+
 ### Módulo `UI`
 Permite emitir mensagens e avisos visuais na tela através do sistema de notificações HUD do Dear ImGui.
 

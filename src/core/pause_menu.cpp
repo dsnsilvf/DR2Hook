@@ -182,6 +182,9 @@ bool DetourPredicate(void *condition) {
 }
 
 bool DetourDispatch(void *screen, const char *eventName) {
+  if (eventName != nullptr) {
+    HostLog((std::string("PauseMenu: evento '") + eventName + "'.").c_str());
+  }
   if (eventName != nullptr && g_hijacked.load(std::memory_order_relaxed) &&
       std::strcmp(eventName, kEventName) == 0) {
     RequestPauseMenuActivation();

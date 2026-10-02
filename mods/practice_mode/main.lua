@@ -56,6 +56,35 @@ local function selectedRestoreMode()
     return value == "Momentum" and "momentum" or "normal"
 end
 
+-- Largada no reinicio. Os nomes do menu dizem o que acontece; Race.* usa os
+-- ids internos. Reaplicada a cada especial, quando o modo da sessao ja e
+-- conhecido; `quiet` evita avisos fora da especial.
+local startModes = { "Normal", "No countdown", "Automatic", "On throttle" }
+local startModeIds = {
+    ["Normal"] = "normal",
+    ["No countdown"] = "no_countdown",
+    ["Automatic"] = "automatic",
+    ["On throttle"] = "on_throttle",
+}
+
+local function applyStartMode(label, quiet)
+    local mode = startModeIds[label] or "normal"
+    if mode ~= "normal" and Safety.isRestrictedMode() then
+        if not quiet then
+            notify("Race start options blocked in competitive modes!", 3.0)
+        end
+        mode = "normal"
+    end
+    if not Race.setStartMode(mode) and mode ~= "normal" and not quiet then
+        notify("Race start options unavailable (hook not loaded).", 3.0)
+    end
+end
+
+local function selectedStartMode()
+    local _, value = Menu.get("race_start")
+    return value
+end
+
 local function comingSoon(feature)
     return function(enabled)
         notify(feature .. (enabled and " enabled" or " disabled") .. " (coming soon)", 2.5)
@@ -69,6 +98,8 @@ Menu.button("restore_checkpoint", "Restore checkpoint", function()
 end)
 Menu.choice("restore_mode", "Restore mode", restoreModes, 1)
 Menu.toggle("clear_on_stage_start", "Clear checkpoint on new stage", true)
+Menu.choice("race_start", "Race start", startModes, 1,
+    function(_, value) applyStartMode(value, true) end)
 Menu.toggle("indestructible_tyres", "Indestructible tyres", false,
     comingSoon("Indestructible tyres"))
 Menu.toggle("indestructible_car", "Indestructible car", false,
@@ -76,7 +107,12 @@ Menu.toggle("indestructible_car", "Indestructible car", false,
 Menu.toggle("notifications", "Notifications", true)
 
 function onInit()
+    applyStartMode(selectedStartMode(), true)
     print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")
+end
+
+function onStageLoad(stage)
+    applyStartMode(selectedStartMode(), false)
 end
 
 function onStageStart(stage)
