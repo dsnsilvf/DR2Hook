@@ -184,13 +184,53 @@ No menu or script can turn this off. To play online again, exit the game and rem
 
 ## Status (v0.1.0)
 
-- Evidence-graded RE docs, INV-01 investigation, `dr2rec` and `egodata` tools
-- Opt-in physics tick harness (off by default)
-- DXGI proxy with reloadable core (**F8**)
-- ImGui overlay and native pause-menu screens
-- Lua 5.4 mods with `Player`, `Safety`, `UI`, and `Menu`
-- Practice Mode example mod
-- `NetworkGuard` always on; `SafetyGuard` session check not yet enforced
+Validated on Linux with Proton, against one `dirtrally2.exe` build (`c119f509…3442`). Windows native and other game builds are untested.
+
+### ✅ Working
+
+| Area | What works |
+| --- | --- |
+| Research | Evidence-graded RE docs, INV-01 investigation, `dr2rec` and `egodata` tools |
+| Loader | DXGI proxy that loads `dr2hook_core.dll`; hot reload with **F8** |
+| Overlay | Dear ImGui overlay on **Insert**: Diagnostics tab and one tab per mod |
+| Native menu | **DR2 Hook** pause-menu entry that opens a game-native screen, with a Mods page |
+| Lua mods | Lua 5.4 with `onInit`, `onTick`, `onKeyDown`, and `Player`, `Safety`, `UI`, `Menu` |
+| Network | `NetworkGuard` always on: non-local traffic is refused, localhost still works |
+| Example mod | Practice Mode: save a checkpoint (F5) and restore the **position and orientation** (F6) |
+
+### ⚠️ Not working yet
+
+| Area | Problem |
+| --- | --- |
+| Practice Mode | **Velocity restore is unreliable.** INV-01 `REFUTED` `+0x320` as a velocity field, so **With Momentum** (F7) may not carry the real speed, and **Normal** may not zero it correctly. |
+| Practice Mode | "Clear checkpoint on new stage" does nothing: `onStageStart` is never called from gameplay. |
+| Practice Mode | "Indestructible tyres" and "Indestructible car" are placeholders. |
+| Safety | `SafetyGuard` offline-only check is **not enforced**; the core starts in permissive mode. |
+| Lua API | RPM and gear are not exposed to Lua; they appear only in the Diagnostics overlay. |
+| Compatibility | Only one game build and only Linux/Proton were tested. |
+| Research harness | Physics tick harness is off by default and its in-game self-test (gate G3) has not run yet. |
+
+## Roadmap
+
+### Near term (concrete work)
+
+- Run the harness gate G3, then the INV-01 write experiments.
+- Move the Practice Mode restore to the origin state block (`+0x2b0..+0x2e0`) and validate it in-game.
+- Dispatch `onStageStart` from gameplay.
+- Enforce `SafetyGuard` with a real offline/online signal (proposed INV-02).
+- Expose engine RPM and gear to Lua.
+
+### Ideas under study (speculation, no promises)
+
+These are ambitions. Nobody knows yet whether they are possible, and nothing here is started. They are listed so the research has a direction, not as planned features.
+
+| Idea | What it would mean | What is unknown |
+| --- | --- | --- |
+| **Multiplayer** | Some way to drive together online. | Whether it is feasible at all. The game's physics runs on a fixed 60 Hz tick, which may help, but state sync is untested. Also, `NetworkGuard` blocks the network by design to keep RaceNet out. Any multiplayer would have to stay separate from RaceNet and the official leaderboards. |
+| **Map editor** | Create or change stages. | How stage and track data are stored and loaded, and whether the game accepts changed data. |
+| **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | The model, physics, and setup formats, and how the game registers a car. |
+
+Groundwork that may help: `egodata` already reads the game's archives and binary XML, and the native menu already works by patching the game's UI data at load. Whether that carries over to cars or maps is not known.
 
 ## License
 
