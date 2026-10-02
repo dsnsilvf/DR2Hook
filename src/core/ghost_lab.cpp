@@ -170,10 +170,22 @@ struct InFlight {
 
 // -1 = nada pendente.
 std::atomic<int> g_cloneCount{-1};
-// Slots preenchidos por ApplyClones (so na thread do jogo; os ponteiros
-// antigos so sao comparados, nunca lidos).
-std::vector<uint8_t *> g_cloned;
 std::atomic<int> g_cloneStepMs{0};
+
+// Uma volta e reconhecida pelo conteudo, nao pelo slot: o jogo reorganiza
+// os slots na largada e o F8 apaga o estado do core. Copias = mesma volta
+// com os tempos deslocados. So na thread do jogo.
+struct LapKey {
+  uint32_t samples = 0;
+  float x = 0.f, y = 0.f, z = 0.f; // 1a posicao
+  bool operator==(const LapKey &o) const {
+    return samples == o.samples && x == o.x && y == o.y && z == o.z;
+  }
+};
+bool g_lapKnown = false;
+LapKey g_lapKey;
+uint32_t g_lapStart = 0;           // tempo original da 1a posicao (ms)
+const uint8_t *g_source = nullptr; // so comparado, nunca lido
 
 template <typename T> T Read(const uint8_t *base, size_t offset) {
   T value;
@@ -210,17 +222,74 @@ std::vector<uint8_t *> CollectSlots() {
   return slots;
 }
 
-void ApplyClones(int count, int stepMs) {
-  const std::vector<uint8_t *> slots = CollectSlots();
-  uint8_t *source = nullptr;
-  size_t sourceIndex = 0;
-  for (size_t i = 0; i < slots.size(); ++i) {
-    if (Read<uint32_t>(slots[i], kSlotState) == 2) {
-      source = slots[i];
-      sourceIndex = i;
-      break;
+bool IsReady(const uint8_t *slot) { return Read<uint32_t>(slot, kSlotState) == 2; }
+
+bool KeyOf(const uint8_t *slot, LapKey &key, uint32_t &start) {
+  const Channel &ch = kChannels[kPositionChannel];
+  const uint8_t *data = Read<const uint8_t *>(slot, ch.data);
+  key.samples = Read<uint32_t>(slot, ch.count);
+  if (!IsReady(slot) || data == nullptr || key.samples == 0) return false;
+  std::memcpy(&key.x, data + kSamplePosition, sizeof(float) * 3);
+  start = Read<uint32_t>(data, kSampleTime);
+  return true;
+}
+
+void ShiftTimes(uint8_t *slot, int64_t deltaMs) {
+  for (const Channel &ch : kChannels) {
+    const uint32_t n = Read<uint32_t>(slot, ch.count);
+    uint8_t *data = Read<uint8_t *>(slot, ch.data);
+    if (data == nullptr) continue;
+    for (uint32_t j = 0; j < n; ++j) {
+      const int64_t t = Read<uint32_t>(data, j * ch.stride + kSampleTime) + deltaMs;
+      const uint32_t value = static_cast<uint32_t>(std::max<int64_t>(0, t));
+      std::memcpy(data + j * ch.stride + kSampleTime, &value, sizeof(value));
     }
   }
+}
+
+// Fonte = a volta do 1o slot pronto, no slot em que ela comeca mais cedo.
+// Se ate a fonte ficou deslocada, volta ao tempo original.
+uint8_t *ResolveSource(const std::vector<uint8_t *> &slots) {
+  LapKey key{};
+  uint32_t start = 0;
+  uint8_t *source = nullptr;
+  for (uint8_t *slot : slots) {
+    LapKey k{};
+    uint32_t t = 0;
+    if (!KeyOf(slot, k, t)) continue;
+    if (source == nullptr) {
+      key = k;
+    } else if (!(k == key) || t >= start) {
+      continue;
+    }
+    source = slot;
+    start = t;
+  }
+  if (source == nullptr) return nullptr;
+  if (g_lapKnown && key == g_lapKey) {
+    if (start != g_lapStart) {
+      ShiftTimes(source, static_cast<int64_t>(g_lapStart) - start);
+      Logger::Info("GhostLab: fantasma original estava deslocado; tempo restaurado.");
+    }
+  } else {
+    g_lapKnown = true;
+    g_lapKey = key;
+    g_lapStart = start;
+  }
+  g_source = source;
+  return source;
+}
+
+bool IsClone(const uint8_t *slot) {
+  if (!g_lapKnown || slot == g_source) return false;
+  LapKey k{};
+  uint32_t t = 0;
+  return KeyOf(slot, k, t) && k == g_lapKey;
+}
+
+void ApplyClones(int count, int stepMs) {
+  const std::vector<uint8_t *> slots = CollectSlots();
+  uint8_t *source = ResolveSource(slots);
   if (source == nullptr) {
     Logger::Warn("GhostLab: nenhum slot com fantasma pronto para clonar.");
     return;
@@ -231,19 +300,15 @@ void ApplyClones(int count, int stepMs) {
     Logger::Warn("GhostLab: prologo de CopyGhostLapData diferente; clones abortados.");
     return;
   }
-  // So mexe em slots vazios ou clonados por nos: fantasmas escolhidos no
+  // So mexe em slots vazios ou em copias: fantasmas diferentes escolhidos no
   // proprio jogo ficam como estao.
-  auto ours = [](const uint8_t *slot) {
-    return std::find(g_cloned.begin(), g_cloned.end(), slot) != g_cloned.end();
-  };
-  std::vector<uint8_t *> cloned;
   int made = 0;
-  for (size_t i = sourceIndex + 1; i < slots.size(); ++i) {
-    uint8_t *dest = slots[i];
-    const bool mine = ours(dest);
-    if (!mine && Read<uint32_t>(dest, kSlotState) == 2) continue;
+  for (uint8_t *dest : slots) {
+    if (dest == source) continue;
+    const bool clone = IsClone(dest);
+    if (!clone && IsReady(dest)) continue;
     if (made >= count) {
-      if (mine) {
+      if (clone) {
         const uint32_t idle = 0;
         std::memcpy(dest + kSlotState, &idle, sizeof(idle));
       }
@@ -251,24 +316,12 @@ void ApplyClones(int count, int stepMs) {
     }
     ++made;
     copyLap(dest, source, false);
-    const uint32_t shift = static_cast<uint32_t>(made * stepMs);
-    for (const Channel &ch : kChannels) {
-      const uint32_t n = Read<uint32_t>(dest, ch.count);
-      uint8_t *data = Read<uint8_t *>(dest, ch.data);
-      if (data == nullptr) continue;
-      for (uint32_t j = 0; j < n; ++j) {
-        uint32_t t = Read<uint32_t>(data, j * ch.stride + kSampleTime) + shift;
-        std::memcpy(data + j * ch.stride + kSampleTime, &t, sizeof(t));
-      }
-    }
-    cloned.push_back(dest);
+    ShiftTimes(dest, static_cast<int64_t>(made) * stepMs);
   }
-  g_cloned.swap(cloned);
   char msg[160];
   std::snprintf(msg, sizeof(msg),
-                "GhostLab: %d clone(s) a cada %.1f s (slots no gerenciador: %zu, "
-                "fonte no %zu).",
-                made, stepMs / 1000.0, slots.size(), sourceIndex);
+                "GhostLab: %d copia(s) a cada %.1f s (slots no gerenciador: %zu).",
+                made, stepMs / 1000.0, slots.size());
   Logger::Info(msg);
 }
 
@@ -314,7 +367,7 @@ void CapturePath(const uint8_t *slot) {
 void LinkCloneVehicle(uint8_t *owner) {
   uint8_t *controller = owner - kControllerOwner;
   const uint8_t *slot = Read<const uint8_t *>(controller, kControllerSlot);
-  if (std::find(g_cloned.begin(), g_cloned.end(), slot) == g_cloned.end()) return;
+  if (controller[kControllerDraw] != 0 || !IsClone(slot)) return;
   if (Read<uint8_t *>(controller, kControllerVehicle) == nullptr) return;
   controller[kControllerDraw] = 1;
 }
@@ -328,14 +381,14 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   const int result = g_originalEvaluate(owner, time, arg, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
 
-  // O primeiro slot pronto do mapa e a referencia (os clones vem depois).
+  // A referencia e a fonte das copias (ou o 1o slot pronto, sem copias).
   const uint8_t *slot = Read<const uint8_t *>(owner, kOwnerSlot);
   const std::vector<uint8_t *> slots = CollectSlots();
   const uint8_t *reference = nullptr;
   int ready = 0;
   for (uint8_t *s : slots) {
-    if (Read<uint32_t>(s, kSlotState) != 2) continue;
-    if (reference == nullptr) reference = s;
+    if (!IsReady(s)) continue;
+    if (reference == nullptr || s == g_source) reference = s;
     ++ready;
   }
   if (slot != reference) return result;
