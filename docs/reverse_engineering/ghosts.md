@@ -83,10 +83,11 @@ Hipóteses (Gemini; endereços vistos por ele no binário/dump, não testados em
 
 ## 4. O que dá para fazer (avaliação)
 
-1. **Ler o fantasma a cada frame** (hook em `0x1409ce4d0`): posição/velocidade/rotação → **diferença ao vivo para o melhor tempo** no Practice Mode (à frente/atrás em metros e segundos). Mais valioso e mais seguro (só leitura).
-2. **Injetar volta própria** (ex.: gravada a partir de um checkpoint) como fantasma, via `CopyGhostLapData` ou os buffers do slot, sem passar pelo arquivo cifrado. Provável.
-3. **Vários fantasmas**: acrescentar slots ao mapa; falta saber como instanciar o modelo visual de cada slot extra. Hipótese a testar.
-4. Exportar/importar fantasmas (`GHST`) e convertê-los: cifra e formato resolvidos (§1, `tools/dr2save.py`, `tools/dr2ghost.py`); falta recifrar e reempacotar o contêiner EGO.
+1. **Diferença ao vivo para o fantasma**: FEITO e validado no jogo (§6, `GhostLab`).
+2. **Injetar volta própria** (ex.: gravada a partir de um checkpoint) via `CopyGhostLapData` ou os buffers do slot. O caminho está provado pelas cópias (§6); falta a fonte da volta.
+3. **Vários fantasmas**: 2 na tela validados (original + 1 cópia). Mais que 2 exige subir o limite de carros fantasma (§6.3).
+4. **Fantasma sólido**: ainda não; três tentativas descartadas, próximo teste em §6.4.
+5. Exportar/importar fantasmas (`GHST`): cifra e formato resolvidos (§1, `tools/dr2save.py`, `tools/dr2ghost.py`); falta recifrar e reempacotar o contêiner EGO.
 
 ## 5. Arquivos de apoio
 
@@ -94,3 +95,45 @@ Hipóteses (Gemini; endereços vistos por ele no binário/dump, não testados em
 - `tools/dr2ghost.py`: lê o `GHST` (cabeçalho, metadados, canais) e exporta a trajetória em CSV.
 - `tools/pssg.py`: parser PSSG escrito pelo Gemini (usado no texto rico; ver `ui_tabs.md`).
 - `investigations/gemini/ghost-runtime.md`, `investigations/gemini/pssg-ui-text.md`: relatórios brutos.
+
+## 6. GhostLab: testes no jogo (2026-10-02, tarde)
+
+Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Practice Mode (*Live gap to ghost*, *Extra ghost copies*, *Ghost copy spacing*, *Ghost head start*, *Solid ghost car*) e Lua `Ghost.status/clone/setOpaque/setTimeOffset/setHud`. Branch `feat/ghost-live`. Relatórios brutos do Gemini usados aqui (fora do git): `captures/gemini/ghost_visual/REPORT.md` e `captures/gemini/ghost_transparency/REPORT.md`, ambos com erros pontuais corrigidos abaixo.
+
+### 6.1 Diferença ao vivo (validado)
+
+- Hook em `EvaluateGhostState` (`0x1409ce4d0`, thread do jogo): no fantasma de referência copia o trajeto do slot (canal de posição) e guarda a posição avaliada.
+- A cada frame, jogador e fantasma são projetados no trajeto (segmento mais próximo, busca perto do último índice e no todo se ficar a > 30 m). Diferença = tempo do fantasma − tempo em que ele passou onde o jogador está; metros = distância acumulada no trajeto.
+- HUD no overlay (topo central): vermelho = atrás, verde = à frente. Some na pausa (o jogo não avalia fantasmas pausado).
+
+### 6.2 Cópias e o 2º carro (validado)
+
+- Gerenciador global `[0x141695228]`; slots no `std::map` em `+0x18`/`+0x20` (§3).
+- Controladores de carro fantasma: 5, de 0x100 bytes, contíguos; `+0x00` veículo, `+0x08` dono passado a `EvaluateGhostState`, `+0x28` slot, `+0x48` saída, `+0x58` tempo, `+0x60..+0x63` flags. Atualizador ~`0x140518400`: sai se `+0x63 == 0`; `+0x62` liga a chamada a `0x1409da680` a cada frame; `+0x61` dispara o reset `0x140512700`.
+- Cópia: `CopyGhostLapData(dest, fonte, false)` (`0x1409cfd30`, aloca com o alocador do jogo via `0x1409cd610`) num slot livre + todos os tempos deslocados de k × espaçamento.
+- O jogo cria só 2 veículos de fantasma (`car 2`, `car 3`; `car 1` = jogador). O controlador do `car 3` é avaliado, mas fica com `+0x62 = 0` e o carro não é desenhado. **Ligar `controlador+0x62 = 1` faz a cópia aparecer** (validado com o jogo recém-aberto). O jogo zera essa flag no Reiniciar; o mod religa a cada frame. `veículo+0x140` (ponteiro de volta, segundo o Gemini) não importa: fica 0 nos dois carros.
+- `0x1409da680` mede a distância ao jogador e grava em `veículo+0x94` (`0x14099db20(veículo, v, 3, 0)`) um fator que vai de 1,0 (longe) a 0,5 (perto): é o esmaecimento por proximidade, não a transparência.
+- O jogo reorganiza os slots na largada, e uma versão anterior chegou a deixar o fantasma original deslocado 1 s. Desde `27697b3`, uma cópia é reconhecida pela volta (contagem de posições + 1ª posição), a fonte é a que começa mais cedo e o tempo original é restaurado se ela aparecer deslocada. Ainda falta confirmar no jogo que a cópia volta em vários Reiniciar seguidos.
+
+### 6.3 Máximo de fantasmas
+
+- 5 slots/controladores: `mov r13d, 5` em `0x1405ba800` (função `0x1405ba200`).
+- 2 carros fantasma: no criador de veículos `0x140a882f9`, `mov eax, 2` em `0x140a8834f` e `mov r12d, 2` em `0x140a884d1` (conferido nos bytes).
+- Para 3 ou mais: subir esses limites (até 5) e garantir os descritores de instância de render dos carros novos. Não testado.
+
+### 6.4 Transparência (não resolvido)
+
+Descartado:
+- **Pular `0x14095fe90`** (troca dos 23 materiais pelos `*_ghost`, chamada por `GhostCarPlugin::Init` `0x140b94650` em `0x140b948c5`): roda **uma vez por execução do jogo**, na abertura, antes de qualquer especial (não roda ao carregar a especial nem no Reiniciar). Pulada desde a abertura, o fantasma continua transparente. A opção *Solid ghost car* hoje só faz isso.
+- **`veículo+0xbc = 0`**: o campo é o tipo do carro (0 = carro físico, como o jogador; 3 = fantasma, técnica `Instanced3`), gravado em `0x140a8847f` e `0x140b9840d`. Com 0 ao vivo o fantasma ganhou colisão: na largada (a física só começa ali) bateu no jogador, dano terminal e peças voando. Não serve para sólido; talvez para um "rival físico".
+- **`xrayEffectParameter`** (`GhostCarValues+0x19a10`, `GhostCarValues = [0x14159d9e0+0xf8]`, valor `0; 1,843; 1,775; 1`), ligado aos materiais por `0x1409a2ee0` via `0x14090a030`: há uma única cópia na memória, e zerar ao vivo não mudou nada visível.
+
+Próximos testes:
+1. Forçar a submissão opaca: NOP no `jne 0x14098687d` em `0x1409867cf` (rotina `0x140986320`), que com `veículo+0xbc != 0` desliga o desenho opaco (`[rsp+0x68] = 0`). Não mexe no tipo do carro nem na física.
+2. Se o carro ficar opaco mas ainda misturado, olhar o blend state do passe `ghost_car_transparent` e o `GhostedTransparencyManager` (`0x140056a60`).
+3. Pular também `0x1409a2ee0` na abertura (o x-ray pode ser aplicado só quando o shader é montado).
+
+### 6.5 Formato e ferramentas
+
+- `tools/dr2ghost.py` lê o `GHST` (de um save cifrado ou de um `.ghst`) e exporta a trajetória em CSV (§1).
+- Leitura e escrita ao vivo durante os testes: `/proc/<pid>/mem` (o heap muda a cada execução; partir do global `[0x141695228]`).
