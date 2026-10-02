@@ -94,6 +94,7 @@ add_library(dr2hook_core SHARED
     src/core/physics_tick_harness.cpp
     src/core/cutscene_probe.cpp
     src/core/ghost_lab.cpp
+    src/core/net_dialog.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp

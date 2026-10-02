@@ -3,6 +3,7 @@
 #include "dr2hook/ghost_lab.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
+#include "dr2hook/net_dialog.h"
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
@@ -140,6 +141,8 @@ int Core_Initialize(int truncateLog) {
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::GhostLab::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::NetDialog::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
 
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
@@ -164,6 +167,7 @@ void Core_Shutdown() {
     dr2hook::PhysicsTickHarness::Shutdown();
     dr2hook::CutsceneProbe::Shutdown();
     dr2hook::GhostLab::Shutdown();
+    dr2hook::NetDialog::Shutdown();
     dr2hook::SavestateManager::Shutdown();
     dr2hook::ModManager::Shutdown();
     dr2hook::Logger::Info("DR2Hook Core descarregado.");
