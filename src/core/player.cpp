@@ -112,16 +112,16 @@ bool Player::ResolveVehicleAddress(uintptr_t gameBase) {
   return true;
 }
 
-bool Player::CaptureState(CarState &outState) {
+bool Player::CaptureState(CarState &outState, bool quiet) {
   if (s_scanner == nullptr || s_vehicleAddress == 0) {
-    Logger::Warn(
+    if (!quiet) Logger::Warn(
         "Player::CaptureState: scanner ou vehicleAddress nao configurado.");
     return false;
   }
 
   IMemoryAccessor *accessor = s_scanner->GetAccessor();
   if (accessor == nullptr || !accessor->IsValidAddress(s_vehicleAddress)) {
-    Logger::Warn("Player::CaptureState: accessor nulo ou endereco invalido.");
+    if (!quiet) Logger::Warn("Player::CaptureState: accessor nulo ou endereco invalido.");
     return false;
   }
 
@@ -174,7 +174,7 @@ bool Player::CaptureState(CarState &outState) {
 
   // Fallback para teste unitario com mock direto compacto
   if (!accessor->Read(s_vehicleAddress, &outState, sizeof(CarState))) {
-    Logger::Warn("Player::CaptureState: falha na leitura de CarState.");
+    if (!quiet) Logger::Warn("Player::CaptureState: falha na leitura de CarState.");
     return false;
   }
 

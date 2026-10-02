@@ -428,7 +428,7 @@ void GhostLab::Update() {
     return;
   }
   CarState car{};
-  if (!Player::CaptureState(car)) {
+  if (!Player::CaptureState(car, true)) {
     g_status = status;
     return;
   }
