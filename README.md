@@ -154,7 +154,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | --- | --- |
 | `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
 | `docs/` | Install, modding guide, harness, black box, architecture notes |
-| `docs/demands/` | Speculative ideas (multiplayer, map editor, vehicle editor) |
+| `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
 | `tools/dr2rec/`, `tools/egodata/` | Offline research tools (Python) |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
 | `src/core/hooks.cpp` | `Present`, window procedure, and Winsock hooks (resident in proxy) |
@@ -230,6 +230,7 @@ These are ambitions. Nobody knows yet whether they are possible, and nothing her
 | **Multiplayer through live ghosts** | Other players' cars drawn as ghosts, updated over the network, and maybe made solid up close. | [live-ghosts-multiplayer.md](docs/demands/live-ghosts-multiplayer.md) |
 | **Map editor** | Create or change stages. | [map-editor.md](docs/demands/map-editor.md) |
 | **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | [vehicle-editor.md](docs/demands/vehicle-editor.md) |
+| **Level editor and modeling** | Build level content and make 3D models. Scope not decided yet. | [level-editor-and-modeling.md](docs/demands/level-editor-and-modeling.md) |
 
 `NetworkGuard` blocks the network by design, so any multiplayer would need a separate, narrow exception that never reaches RaceNet or the official leaderboards.
 
