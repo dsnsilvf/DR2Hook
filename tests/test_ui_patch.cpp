@@ -7,6 +7,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -622,6 +623,18 @@ void TestRealFiles() {
                                            }) != nullptr;
                                   }),
                   "aba do menu principal: 8 blocos, MODS e PRACTICE ativos, em breve sem acao e navegaveis");
+      // O leitor da grade só liga cima/baixo entre linhas separadas por '\n'.
+      const Node *grid = page != nullptr ? Find(*page, [](const Node &n) {
+        return n.name == "SBGridItemFlow";
+      }) : nullptr;
+      size_t rows = 0;
+      if (grid != nullptr) {
+        std::istringstream lines(grid->text.value_or(""));
+        for (std::string line; std::getline(lines, line);) {
+          rows += line.find_first_not_of(" \t\r") != std::string::npos;
+        }
+      }
+      TEST_ASSERT(rows == 4, "grade da aba do menu principal com 4 linhas");
     }
     if (ok && std::string(name) == "flow") {
       const Node *mainMenu = Find(root, [](const Node &n) {

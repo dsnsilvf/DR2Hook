@@ -75,10 +75,9 @@ inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
 // Disabled: sem ação e "Coming soon". Não usa IBDataEnabled: a navegação por
 // teclado pula itens desabilitados e, sem outro bloco ativo na direção, o
 // cursor não anda (a seta para baixo travava a partir de MODS).
-// Todo bloco mantém o IBSelectableSimple: a grade só para em itens com um
-// behaviour IB* (nenhuma das 82 grades do jogo tem item sem). Info e Disabled
-// disparam kMainMenuIdleEvent, que não tem link no fluxo e por isso não faz
-// nada.
+// Todo bloco mantém o IBSelectableSimple, como em todas as 82 grades do jogo
+// (nenhuma tem item sem behaviour IB*). Info e Disabled disparam
+// kMainMenuIdleEvent, que não tem link no fluxo e por isso não faz nada.
 enum class TileState { Action, Info, Disabled };
 inline constexpr char kMainMenuIdleEvent[] = "dr2hook_idle";
 struct MainMenuTile {
@@ -108,11 +107,15 @@ inline constexpr MainMenuTile kMainMenuTiles[] = {
     {"credits", "lng_dr2hook_mm_about_title", nullptr, nullptr, TileState::Info, nullptr},
 };
 // Navegação da grade: a mesma do SBGridItemFlow de options_extras (3 colunas x
-// 4 linhas; `[id]` é a célula a mais de um bloco grande). Precisa das 12
-// células; com menos, as linhas desalinham e a seta para baixo não anda.
+// 4 linhas; `[id]` é a célula a mais de um bloco grande). O leitor
+// (0x140d23443) só liga cima/baixo entre linhas separadas por '\n'; numa linha
+// só, a grade vira 1 x 12 e as setas verticais não andam. O XML gerado pelo
+// tools/egodata junta o espaço em branco: conferir nos bytes do screens.bin.
 inline constexpr char kMainMenuGrid[] =
-    "preferences input profile [preferences] [input] racenet "
-    "graphics audio legal [graphics] [audio] credits";
+    "preferences input profile\r\n"
+    "[preferences] [input] racenet\r\n"
+    "graphics audio legal\r\n"
+    "[graphics] [audio] credits";
 struct MainMenuPageDef {
   const char *name;
   const char *templateScreen;
