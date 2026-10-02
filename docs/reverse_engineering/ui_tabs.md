@@ -366,3 +366,12 @@ Validado no jogo na tela `dr2hook_mod` (Practice Mode).
 **Títulos.** Numa `smart_screen`, o título pequeno em vermelho acima (com `/ `) vem do `SBScreenTitle string_id`, e o grande vem do `BTextStatic` do `Item id="title"` (glyph `screen_header_text`). As telas do jogo usam a mesma chave nos dois; a DLL usa `lng_dr2hook_crumb_mod` (nome do mod) no `SBScreenTitle` e `lng_dr2hook_title_mod` ("OPTIONS") no cabeçalho.
 
 **ABI.** `Dr2MenuOption` ganhou `description` (texto do painel), e por isso `kCoreAbiVersion` passou a 2: um `dxgi.dll` antigo recusa o core novo e vice-versa.
+
+## Entrada no menu principal (investigação, 2026-10-01; ainda não implementado)
+
+Hoje o DR2 Hook só abre pela pausa: `PatchScreens` reaproveita o item `reset_view` do `pause_menu` (evento `dr2hook`) e `PatchFlow` acrescenta o link `dr2hook` → hub em todo nó do fluxo que tem link `options`.
+
+- Menu principal: tela `main_menu` (`object="main_menu"`, `SBTabGroup`; as abas vêm de `tabs.info`, preenchido pelo estado C++), nó do fluxo `102601274` (`jump_id="main_menu_hub"`, estado `StateScreenMainMenu` 1984269910). Esse nó **não tem** link `options`: trata cada bloco por um link próprio (`game_settings`, `input`, `profile`, `racenet_profile`, `graphics`, `audio`, `legal`, `credits`, …). Por isso o patch atual não chega nele.
+- Aba "Options & Extras": tela `options_extras` (`object="options_extras"`), grade de 8 blocos com posição fixa na cena (`tile_preferences`, `tile_input`, `tile_profile`, `tile_racenet`, `tile_graphics`, `tile_audio`, `tile_legal`, `tile_credits`) e `SBGridItemFlow` para a navegação. Cada bloco: título/subtítulo `BTextStatic`, marca d'água `BTextureStatic texture="tile_watermark_*"`, `IBSelectableSimple select_value=<evento>`.
+- Um bloco novo exigiria uma posição (`tile_*`) que a cena não tem. O caminho de menor risco, igual à pausa: **reaproveitar um bloco** (ex.: Credits ou Legal), trocando texto e evento para `dr2hook`, e estender `PatchFlow` para também ligar `dr2hook` → hub no nó com link `credits` (o `back` do hub volta para o menu principal).
+- Alternativa não explorada: acrescentar uma aba "DR2 Hook" ao `tabs.info` do `main_menu` no Enter do estado (a DLL já cria abas no próprio hub), com páginas que usam o menu principal como raiz de dados.
