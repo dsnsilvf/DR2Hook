@@ -150,6 +150,9 @@ struct Row {
   std::string visibilityPath;
   // Posição do combo (nós <kOptionDataPrefix>N.*); -1 é um botão.
   int comboSlot = -1;
+  // Grava o índice em foco em selected_index, como em
+  // profile_save_management; a DLL troca o painel da direita.
+  bool reportsFocus = false;
 };
 
 // Linha de smart_screen no formato de profile_save_management (botão) e de
@@ -183,6 +186,10 @@ Node RowItem(size_t index, const Row &row) {
                                    {{"out_data_path", "event"},
                                     {"select_value", row.event},
                                     {"help_text", "lng_select"}}));
+  if (row.reportsFocus) {
+    item.children.push_back(MakeNode(
+        "IBItemFlowIndex", {{"index", i}, {"index_data_path", "selected_index"}}));
+  }
   if (!row.visibilityPath.empty()) {
     item.children.push_back(MakeNode("BVisibilityControlData",
                                      {{"data_path", row.visibilityPath},
@@ -232,10 +239,23 @@ bool BuildPage(const Node &templateScreen, const PageDef &page,
   }
 
   titleText->SetAttribute("string", page.titleKey);
-  title->SetAttribute("string_id", page.titleKey);
+  title->SetAttribute("string_id",
+                      page.breadcrumbKey != nullptr ? page.breadcrumbKey : page.titleKey);
   audio->SetAttribute("screen_name", page.name);
-  infoTitle->SetAttribute("string", page.infoTitleKey);
-  infoText->SetAttribute("string", page.infoTextKey);
+  if (page.infoTitleKey != nullptr) {
+    infoTitle->SetAttribute("string", page.infoTitleKey);
+    infoText->SetAttribute("string", page.infoTextKey);
+  } else {
+    // Painel ligado a dados (sidebar.*), escrito pela DLL conforme o foco.
+    *infoTitle = MakeNode("BTextData", {{"glyph", "smart_contextual_info.text_title"},
+                                        {"data_path", "sidebar.title"},
+                                        {"format_id", "explicit"},
+                                        {"watch_data", "true"}});
+    *infoText = MakeNode("BTextData", {{"glyph", "smart_contextual_info.text"},
+                                       {"data_path", "sidebar.description"},
+                                       {"format_id", "explicit"},
+                                       {"watch_data", "true"}});
+  }
 
   Node header = *titleItem;
   items->children.clear();
@@ -437,7 +457,7 @@ bool PatchScreens(Node &root, std::string &error) {
     modRows.push_back(
         {kModKeyPrefix + index, false, kNavModPrefix + index, kModSlotPath + index, -1});
     optionRows.push_back({kOptionKeyPrefix + index, false, kOptionEventPrefix + index,
-                          kOptionSlotPath + index, static_cast<int>(i)});
+                          kOptionSlotPath + index, static_cast<int>(i), true});
   }
 
   const Node &pageTemplate = At(root, pagePath);

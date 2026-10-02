@@ -181,7 +181,7 @@ Permite emitir mensagens e avisos visuais na tela através do sistema de notific
 | `UI.notify(message, duration)` | `message` (string), `duration` (number opcional, padrão `3.0`) | `nil` | Exibe uma notificação toast semi-transparente no canto superior da tela pelo tempo indicado (em segundos). |
 
 ### Módulo `Menu`
-Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB troca de aba) > nome do mod**. As chamadas ficam no corpo do `main.lua`, fora dos callbacks. Cada mod tem até 24 opções, numa lista com rolagem, na ordem em que foram declaradas. Declarar de novo o mesmo `id` substitui a opção. Toggle e choice aparecem como `< valor >` e mudam com esquerda e direita. Botões rodam com A. O callback é chamado no quadro seguinte, na thread do `Present`.
+Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB troca de aba) > nome do mod**. A tela tem o título `OPTIONS` (com o nome do mod em vermelho acima), e o painel da direita acompanha a linha em foco. As chamadas ficam no corpo do `main.lua`, fora dos callbacks. Cada mod tem até 24 opções, numa lista com rolagem, na ordem em que foram declaradas. Declarar de novo o mesmo `id` substitui a opção. Toggle e choice aparecem como `< valor >` e mudam com esquerda e direita. Botões rodam com A. O callback é chamado no quadro seguinte, na thread do `Present`.
 
 | Função | Parâmetros | Retorno | Descrição |
 | :--- | :--- | :--- | :--- |
@@ -190,14 +190,18 @@ Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB tr
 | `Menu.button(id, label, onClick)` | `onClick()` obrigatório | `nil` | Só chama a função. Rótulo `label`. |
 | `Menu.get(id)` | `id` | toggle: `boolean`. choice: `index, value`. button ou id inexistente: `nil` | Valor atual. |
 | `Menu.set(id, value)` | toggle: `boolean`. choice: índice a partir de `1` | `nil` | Muda o valor sem chamar o callback. Erro se o id não existir ou o índice estiver fora da lista. Com a tela do mod aberta, o combo só mostra o valor novo quando a tela é reaberta. |
+| `Menu.describe(id, text)` | `id` de uma opção já declarada. `text` string | `nil` | Texto do painel da direita quando a linha está em foco. Opcional: sem ele, o painel mostra o nome da opção e a descrição do mod (`mod.json`). Erro se o id não existir. |
 
-Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` chamado fora de um mod (por exemplo, pelo console) geram erro de Lua. No carregamento, o mod é desativado como em qualquer outro erro de carga. Mod desativado aparece na lista como `nome (error)`, sem opções. Os valores não são salvos: voltam ao padrão quando os mods ou o core são recarregados.
+Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` chamado fora de um mod (por exemplo, pelo console) geram erro de Lua. No carregamento, o mod é desativado como em qualquer outro erro de carga. Mod desativado aparece na lista como `nome (error)`, sem opções. Os valores de toggle e choice são salvos em `mods/<pasta do mod>/settings.ini` (uma linha `id=valor`; toggle `on`/`off`, choice pelo texto do valor) sempre que o jogador muda uma opção no menu ou o mod chama `Menu.set`. Ao carregar o mod, depois do `main.lua` declarar as opções e antes do `onInit`, os valores salvos são aplicados **sem chamar os callbacks**: leia-os com `Menu.get` no `onInit`. Valores que não existem mais na lista e ids desconhecidos são ignorados. Apagar o arquivo volta tudo ao padrão.
+
+Nas descrições (`Menu.describe`), `\n` quebra a linha.
 
 ```lua
 Menu.toggle("indestructible_tyres", "Indestructible tyres", false, function(enabled)
     UI.notify("Tyres: " .. tostring(enabled), 2.0)
 end)
 Menu.choice("restore_mode", "Restore mode", {"Normal", "Momentum"}, 1)
+Menu.describe("restore_mode", "Normal: the car comes back stopped. Momentum: it keeps its speed.")
 
 function onKeyDown(keyCode)
     local index, value = Menu.get("restore_mode")

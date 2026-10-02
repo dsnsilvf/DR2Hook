@@ -108,7 +108,8 @@ void SyncNativeMenu() {
                            : dr2hook::kDr2MenuButton;
       options[i].push_back({option.label.c_str(), texts.data(),
                             static_cast<int>(texts.size()),
-                            static_cast<int>(option.ValueIndex()), kind});
+                            static_cast<int>(option.ValueIndex()), kind,
+                            option.description.c_str()});
     }
     mods[i] = {entries[i].name.c_str(), entries[i].description.c_str(),
                options[i].data(), static_cast<int>(options[i].size())};

@@ -6,7 +6,7 @@
 
 namespace dr2hook {
 
-inline constexpr unsigned int kCoreAbiVersion = 1;
+inline constexpr unsigned int kCoreAbiVersion = 2;
 
 // ABI estável entre a dxgi.dll residente e a dr2hook_core.dll recarregável.
 // Ponteiros crus só: cada DLL tem a própria libstdc++.
@@ -25,13 +25,15 @@ enum Dr2MenuOptionKind : int {
 };
 
 // Uma opção de mod na tela nativa. `values` são os textos do combo
-// ({"Off", "On"} no toggle; vazio no botão) e `index` o valor atual.
+// ({"Off", "On"} no toggle; vazio no botão), `index` o valor atual e
+// `description` o texto do painel da direita (vazio usa o do mod).
 struct Dr2MenuOption {
   const char *label;
   const char *const *values;
   int valueCount;
   int index;
   int kind;
+  const char *description;
 };
 
 // Um mod na tela nativa. A proxy copia tudo em Dr2Host_NativeMenuPublish; os

@@ -351,3 +351,18 @@ Status: tudo acima é especificação. Nada disso foi testado no jogo.
 ### Uso no DR2 Hook
 
 A estrutura recomendada acima está implementada em `src/core/ui_patch.cpp` (dados) e `src/core/native_screen.cpp` (slot `+0x80`, leitura dos combos, textos). Diferenças: os combos são `IBComboTextData` com a lista criada pela DLL, para que choices tenham qualquer número de valores; o painel da direita usa `BTextStatic` com chaves `lng_dr2hook_*`, respondidas pela busca de idioma, em vez de `BTextData`; as linhas não têm `IBItemFlowIndex`. Antes de chamar cada função do store, a DLL confere os bytes iniciais dela. Estado e pendências em [UI Data](ui_data.md#telas-do-dr2-hook).
+
+## Painel da direita por linha e títulos (2026-10-01)
+
+Validado no jogo na tela `dr2hook_mod` (Practice Mode).
+
+**Painel que acompanha o foco.** O jogo faz isso em `profile_save_management` e `input_bindings`:
+- cada `Item` da lista tem `<IBItemFlowIndex index="N" index_data_path="selected_index"/>`, que grava o índice da linha em foco em `ui.<tela>.selected_index` ao navegar (teclado e mouse);
+- o painel usa `<BTextData glyph="smart_contextual_info.text_title" data_path="sidebar.title" format_id="explicit|localise" watch_data="true"/>` e o mesmo com `smart_contextual_info.text` e `sidebar.description`. Com `watch_data`, o texto muda quando o nó do store muda.
+- **O `IBItemFlowIndex` não cria o nó**: só grava se `selected_index` já existir. Nas telas do jogo quem cria é o estado C++. Sem criar `selected_index` (inteiro) no Enter, o painel fica parado no primeiro texto (confirmado varrendo a memória: o hash de `ui.dr2hook_mod.selected_index` não existia no store, só `sidebar.title` e os combos).
+- Na DLL: `PopulateMod` cria `selected_index = 0` e o contêiner `sidebar`; `NativeScreenTick` (thread da UI, a cada 15 ms) lê `selected_index` pelo hash e, se mudou ou o menu mudou de versão, escreve `sidebar.title`/`sidebar.description` fora da trava do store (o `SetString` trava sozinho; o spinlock não é recursivo).
+- `format_id="explicit"` mostra o texto como veio; `\n` quebra a linha (confirmado no jogo). Um `\n` no começo de linha (linha vazia, `\n\n`) aparece como caractere desconhecido; o `Menu.describe` troca a linha vazia por um espaço e, por precaução, descarta `\r` (correção ainda não vista na tela).
+
+**Títulos.** Numa `smart_screen`, o título pequeno em vermelho acima (com `/ `) vem do `SBScreenTitle string_id`, e o grande vem do `BTextStatic` do `Item id="title"` (glyph `screen_header_text`). As telas do jogo usam a mesma chave nos dois; a DLL usa `lng_dr2hook_crumb_mod` (nome do mod) no `SBScreenTitle` e `lng_dr2hook_title_mod` ("OPTIONS") no cabeçalho.
+
+**ABI.** `Dr2MenuOption` ganhou `description` (texto do painel), e por isso `kCoreAbiVersion` passou a 2: um `dxgi.dll` antigo recusa o core novo e vice-versa.

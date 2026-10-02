@@ -17,6 +17,8 @@ struct ModOption {
   bool enabled = false;
   size_t index = 0;
   std::vector<std::string> values;
+  // Texto do painel da direita quando a linha está em foco (Menu.describe).
+  std::string description;
   int callbackRef = -2; // LUA_NOREF
 
   // "Indestructible tyres: Off", "Restore mode: Momentum" ou só o rótulo.

@@ -280,13 +280,32 @@ void CheckPage(const Node *screen, const ui_patch::PageDef &page, const char *da
   const Node *flow = Behaviour(*screen, "SBScrollableItemFlow");
   TEST_ASSERT(flow != nullptr && flow->text && *flow->text == ListText(rows),
               name + ": lista com um id por linha em CRLF");
-  TEST_ASSERT(Behaviour(*screen, "SBScreenTitle", "string_id", page.titleKey) != nullptr,
+  TEST_ASSERT(Behaviour(*screen, "SBScreenTitle", "string_id",
+                        page.breadcrumbKey != nullptr ? page.breadcrumbKey
+                                                      : page.titleKey) != nullptr,
               name + ": titulo pela chave propria");
   TEST_ASSERT(Behaviour(*screen, "SBAudioNotification", "screen_name", page.name) != nullptr,
               name + ": audio da propria tela");
-  TEST_ASSERT(Behaviour(*screen, "BTextStatic", "string", page.infoTitleKey) != nullptr &&
-                  Behaviour(*screen, "BTextStatic", "string", page.infoTextKey) != nullptr,
-              name + ": painel de descricao");
+  if (page.infoTitleKey != nullptr) {
+    TEST_ASSERT(Behaviour(*screen, "BTextStatic", "string", page.infoTitleKey) != nullptr &&
+                    Behaviour(*screen, "BTextStatic", "string", page.infoTextKey) != nullptr,
+                name + ": painel de descricao");
+  } else {
+    TEST_ASSERT(Behaviour(*screen, "BTextData", "data_path", "sidebar.title") != nullptr &&
+                    Behaviour(*screen, "BTextData", "data_path", "sidebar.description") != nullptr &&
+                    Behaviour(*screen, "BTextStatic", "glyph",
+                              "smart_contextual_info.text_title") == nullptr,
+                name + ": painel ligado a sidebar.* (muda com o foco)");
+    for (size_t i = 0; i < rows && i + 1 < items.children.size(); ++i) {
+      const Node &item = items.children[i + 1];
+      const std::string index = std::to_string(i);
+      TEST_ASSERT(Find(item, [&](const Node &n) {
+                    return Is(n, "IBItemFlowIndex", "index", index.c_str()) &&
+                           Is(n, "IBItemFlowIndex", "index_data_path", "selected_index");
+                  }),
+                  name + ": linha " + index + " grava o foco em selected_index");
+    }
+  }
   TEST_ASSERT(Behaviour(*screen, "SBHotButtonScreenEvent", "event_primary", "back") != nullptr,
               name + ": B volta pelo evento back");
 }
@@ -468,6 +487,9 @@ void TestEventPrefixes() {
               "chaves dinamicas com o prefixo da busca");
   for (const ui_patch::PageDef &page : {ui_patch::kMainPage, ui_patch::kModsPage, ui_patch::kModPage}) {
     for (const char *key : {page.titleKey, page.infoTitleKey, page.infoTextKey}) {
+      if (key == nullptr) {
+        continue; // painel ligado a dados
+      }
       TEST_ASSERT(std::string(key).rfind(ui_patch::kKeyPrefix, 0) == 0,
                   std::string("chave respondida pela DLL: ") + key);
     }

@@ -1,6 +1,7 @@
 #include "dr2hook/script/lua_engine.h"
 #include "dr2hook/cutscene_probe.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
@@ -601,6 +602,32 @@ static int Lua_Menu_set(lua_State *L) {
     option->index = static_cast<size_t>(index - 1);
   }
   ModMenu::MarkDirty();
+  ModManager::SaveModSettings(ModMenu::CurrentMod());
+  return 0;
+}
+
+// Menu.describe(id, text): descrição da opção no painel da direita da tela
+// nativa. Sem ela, o painel mostra o nome da opção e a descrição do mod.
+static int Lua_Menu_describe(lua_State *L) {
+  ModOption *option =
+      ModMenu::Find(ModMenu::CurrentMod(), luaL_checkstring(L, 1));
+  if (option == nullptr) {
+    return luaL_error(L, "Menu.describe: unknown option");
+  }
+  // O texto do jogo desenha um \n no começo de linha como caractere
+  // desconhecido: linha vazia vira um espaço. \r sai por precaução.
+  std::string text;
+  for (const char *c = luaL_optstring(L, 2, ""); *c != '\0'; ++c) {
+    if (*c == '\r') {
+      continue;
+    }
+    if (*c == '\n' && !text.empty() && text.back() == '\n') {
+      text += ' ';
+    }
+    text += *c;
+  }
+  option->description = std::move(text);
+  ModMenu::MarkDirty();
   return 0;
 }
 
@@ -705,7 +732,7 @@ void LuaEngine::RegisterBindings() {
   lua_setglobal(s_L, "UI");
 
   // Tabela Menu
-  lua_createtable(s_L, 0, 5);
+  lua_createtable(s_L, 0, 6);
   lua_pushcfunction(s_L, Lua_Menu_toggle);
   lua_setfield(s_L, -2, "toggle");
   lua_pushcfunction(s_L, Lua_Menu_choice);
@@ -716,6 +743,8 @@ void LuaEngine::RegisterBindings() {
   lua_setfield(s_L, -2, "get");
   lua_pushcfunction(s_L, Lua_Menu_set);
   lua_setfield(s_L, -2, "set");
+  lua_pushcfunction(s_L, Lua_Menu_describe);
+  lua_setfield(s_L, -2, "describe");
   lua_setglobal(s_L, "Menu");
 }
 

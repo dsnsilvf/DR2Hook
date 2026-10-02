@@ -40,6 +40,9 @@ struct PageDef {
   const char *infoTitleKey;
   const char *infoTextKey;
   const char *tabLabel;
+  // Título pequeno em vermelho acima do cabeçalho (SBScreenTitle); nulo usa
+  // titleKey, como nas telas do jogo.
+  const char *breadcrumbKey = nullptr;
 };
 
 // Páginas das abas, na ordem das abas. Usam data_parent_override do host, e
@@ -53,9 +56,10 @@ inline constexpr PageDef kModsPage{"dr2hook_page_mods", "lng_dr2hook_title_mods"
 inline constexpr PageDef kPages[] = {kMainPage, kModsPage};
 inline constexpr unsigned kModsTab = 1;
 
-inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod",
-                                  "lng_dr2hook_info_mod_title",
-                                  "lng_dr2hook_info_mod_text", nullptr};
+// Sem chaves de painel: o painel da tela de mod é ligado a sidebar.* e
+// muda com a linha em foco (native_screen.cpp).
+inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
+                                  nullptr, nullptr, "lng_dr2hook_crumb_mod"};
 
 // `dr2hook_do_*` não tem link no fluxo: a DLL trata e consome
 // (native_screen.cpp). `dr2hook_nav_*` e `back` são links do fluxo.

@@ -56,8 +56,15 @@ public:
                                  bool restart = false);
   static void DispatchRenderUI(ModInstance &mod);
   static const std::vector<ModInstance> &GetLoadedMods();
+  // Grava os valores atuais das opções do mod em <pasta do mod>/settings.ini.
+  // Chamado quando o usuário muda uma opção no menu ou o mod usa Menu.set.
+  static void SaveModSettings(const std::string &modId);
+  static constexpr const char *kSettingsFileName = "settings.ini";
 
 private:
+  // Lê settings.ini e aplica por id, sem chamar callbacks: roda depois do
+  // main.lua declarar as opções e antes do onInit.
+  static void LoadModSettings(const ModInstance &mod);
   static bool LoadModFromDirectory(const std::string &modDirPath);
   static void CallModCallback(ModInstance &mod, int funcRef, int nargs = 0,
                               int nresults = 0);

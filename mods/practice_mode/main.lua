@@ -106,6 +106,27 @@ Menu.toggle("indestructible_car", "Indestructible car", false,
     comingSoon("Indestructible car"))
 Menu.toggle("notifications", "Notifications", true)
 
+-- Texto do painel da direita para a linha em foco.
+Menu.describe("save_checkpoint",
+    "Saves the car's position, rotation and speed right now. Shortcut: F5.")
+Menu.describe("restore_checkpoint",
+    "Puts the car back at the saved checkpoint, using the restore mode below. "
+    .. "Shortcuts: F6 (normal) and F7 (with momentum).")
+Menu.describe("restore_mode",
+    "Normal: the car comes back stopped, with the suspension settled.\n"
+    .. "Momentum: it keeps the speed and spin it had when saved.")
+Menu.describe("clear_on_stage_start",
+    "Forgets the checkpoint when a new stage starts. Restarting the same stage keeps it.")
+Menu.describe("race_start",
+    "How every start works, restarts included.\n\n"
+    .. "Normal: hold the handbrake and wait for the 5 lights.\n"
+    .. "No countdown: hold the handbrake and go at once.\n"
+    .. "Automatic: go as soon as the car is on the line.\n"
+    .. "On throttle: go when you press the throttle.")
+Menu.describe("indestructible_tyres", "Coming soon: tyres that never wear or puncture.")
+Menu.describe("indestructible_car", "Coming soon: no damage to the car.")
+Menu.describe("notifications", "Shows on-screen messages for checkpoints and race start options.")
+
 function onInit()
     applyStartMode(selectedStartMode(), true)
     print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")

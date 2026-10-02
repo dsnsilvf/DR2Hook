@@ -103,9 +103,11 @@ struct MenuOption {
   std::vector<std::string> values;
   int index = 0;
   int kind = kDr2MenuButton;
+  std::string description;
   bool operator==(const MenuOption &other) const {
     return label == other.label && values == other.values &&
-           index == other.index && kind == other.kind;
+           index == other.index && kind == other.kind &&
+           description == other.description;
   }
 };
 
@@ -153,6 +155,14 @@ ComboWatch g_combos[up::kListSlots];
 int g_comboMod = -1;
 std::atomic<bool> g_combosActive{false};
 bool g_rootHashLogged = false;
+// Painel da direita da tela de mod (sidebar.title/description, BTextData).
+// Cada linha grava o índice em foco em selected_index (IBItemFlowIndex).
+DsPath g_sidebarPath{};
+bool g_sidebarReady = false;
+int g_sidebarIndex = -1;
+uint32_t g_sidebarVersion = 0;
+constexpr char kModHint[] =
+    "Use left and right to change a value, and A to run an action.";
 
 template <size_t N> bool StartsWith(const char *text, const char (&prefix)[N]) {
   return std::strncmp(text, prefix, N - 1) == 0;
@@ -356,6 +366,37 @@ bool RootHashMatches(const void *state, const char *screen) {
   return expected == actual;
 }
 
+// Título e texto do painel para a linha `option` do mod `mod`: a descrição da
+// opção, ou o nome dela com a descrição do mod. Fora das opções, o mod.
+void SidebarText(int mod, int option, std::string &title, std::string &text) {
+  std::lock_guard<std::mutex> lock(g_menuMutex);
+  if (mod < 0 || static_cast<size_t>(mod) >= g_menu.size()) {
+    title = "Mod";
+    text = kModHint;
+    return;
+  }
+  const MenuMod &entry = g_menu[mod];
+  const std::string modText =
+      entry.description.empty() ? kModHint : entry.description + " " + kModHint;
+  if (option < 0 || static_cast<size_t>(option) >= entry.options.size()) {
+    title = entry.name;
+    text = modText;
+    return;
+  }
+  const MenuOption &selected = entry.options[option];
+  title = selected.label;
+  text = selected.description.empty() ? modText : selected.description;
+}
+
+void WriteSidebar(void *store, int option) {
+  std::string title, text;
+  SidebarText(g_comboMod, option, title, text);
+  SetString(store, g_sidebarPath, "title", title.c_str());
+  SetString(store, g_sidebarPath, "description", text.c_str());
+  g_sidebarIndex = option;
+  g_sidebarVersion = g_menuVersion.load();
+}
+
 // Enter do hub: tabs.info[i].{screen,label}, tabs.current_index e a
 // visibilidade de reserva das linhas da lista de mods.
 void PopulateHub(void *store, const DsPath &root) {
@@ -431,6 +472,13 @@ void PopulateMod(void *store, const DsPath &root, bool hashOk) {
     watch.value = index;
     watch.hash = PathHash(std::string("ui.") + up::kMod.name + "." + name + ".index");
     ++created;
+  }
+  // IBItemFlowIndex só grava num nó que já existe (em profile_save_management
+  // quem cria é o estado do jogo); sem ele o painel não acompanha o foco.
+  SetInt(store, root, "selected_index", 0);
+  g_sidebarReady = Container(store, root, "sidebar", false, g_sidebarPath);
+  if (g_sidebarReady) {
+    WriteSidebar(store, 0);
   }
   g_combosActive.store(created == up::kListSlots && hashOk);
 }
@@ -550,12 +598,9 @@ bool MenuText(const std::string &key, std::string &text) {
                      (g_menu.size() == 1 ? " mod loaded." : " mods loaded.") +
                      " Select a mod to open its options.";
   } else if (key == up::kModPage.titleKey) {
+    text = "OPTIONS";
+  } else if (key == up::kModPage.breadcrumbKey) {
     text = mod != nullptr ? Upper(mod->name) : "MOD";
-  } else if (key == up::kModPage.infoTitleKey) {
-    text = mod != nullptr ? mod->name : "Mod";
-  } else if (key == up::kModPage.infoTextKey) {
-    text = mod != nullptr && !mod->description.empty() ? mod->description + " " : "";
-    text += "Use left and right to change a value, and A to run an action.";
   } else if (key.rfind(up::kModKeyPrefix, 0) == 0) {
     const int slot = SlotIndex(key.c_str() + sizeof(up::kModKeyPrefix) - 1);
     if (slot < 0) {
@@ -716,8 +761,17 @@ void NativeScreenTick() {
   }
   std::vector<std::pair<int, int32_t>> changed;
   bool gone = false;
+  int focused = g_sidebarIndex;
   {
     StoreLock lock(store);
+    static const uint64_t selectedHash =
+        PathHash(std::string("ui.") + up::kMod.name + ".selected_index");
+    if (const void *node = g_ds.find(store, selectedHash)) {
+      const uint8_t type = Field<uint8_t>(node, kNodeTypeOffset);
+      if (type == kNodeInt || type == kNodeIntAlt) {
+        focused = Field<int32_t>(node, kNodeValueOffset);
+      }
+    }
     for (size_t i = 0; i < up::kListSlots; ++i) {
       ComboWatch &watch = g_combos[i];
       if (!watch.active) {
@@ -742,11 +796,17 @@ void NativeScreenTick() {
   // A raiz ui.dr2hook_mod some quando o estado sai.
   if (gone) {
     g_combosActive.store(false);
+    g_sidebarReady = false;
     return;
   }
   for (const auto &[option, value] : changed) {
     QueueEvent(g_comboMod, option, value);
     Log("combo " + std::to_string(option) + " = " + std::to_string(value));
+  }
+  // Fora da trava do store: SetString trava sozinho (spinlock não recursivo).
+  if (g_sidebarReady &&
+      (focused != g_sidebarIndex || g_menuVersion.load() != g_sidebarVersion)) {
+    WriteSidebar(store, focused);
   }
 }
 
@@ -806,6 +866,7 @@ void Dr2Host_NativeMenuPublish(const dr2hook::Dr2MenuMod *mods, int count) {
       }
       option.index = source.index;
       option.kind = source.kind;
+      option.description = source.description != nullptr ? source.description : "";
       mod.options.push_back(std::move(option));
     }
     menu.push_back(std::move(mod));
