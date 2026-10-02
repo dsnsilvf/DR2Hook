@@ -154,6 +154,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | --- | --- |
 | `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
 | `docs/` | Install, modding guide, harness, black box, architecture notes |
+| `docs/demands/` | Speculative ideas (multiplayer, map editor, vehicle editor) |
 | `tools/dr2rec/`, `tools/egodata/` | Offline research tools (Python) |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
 | `src/core/hooks.cpp` | `Present`, window procedure, and Winsock hooks (resident in proxy) |
@@ -222,15 +223,15 @@ Validated on Linux with Proton, against one `dirtrally2.exe` build (`c119f509…
 
 ### Ideas under study (speculation, no promises)
 
-These are ambitions. Nobody knows yet whether they are possible, and nothing here is started. They are listed so the research has a direction, not as planned features.
+These are ambitions. Nobody knows yet whether they are possible, and nothing here is started. They live in [docs/demands](docs/demands/README.md), where each idea explains why it might be possible, what is unknown, and what the first safe experiment is.
 
-| Idea | What it would mean | What is unknown |
+| Idea | What it would mean | Document |
 | --- | --- | --- |
-| **Multiplayer** | Some way to drive together online. | Whether it is feasible at all. The game's physics runs on a fixed 60 Hz tick, which may help, but state sync is untested. Also, `NetworkGuard` blocks the network by design to keep RaceNet out. Any multiplayer would have to stay separate from RaceNet and the official leaderboards. |
-| **Map editor** | Create or change stages. | How stage and track data are stored and loaded, and whether the game accepts changed data. |
-| **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | The model, physics, and setup formats, and how the game registers a car. |
+| **Multiplayer through live ghosts** | Other players' cars drawn as ghosts, updated over the network, and maybe made solid up close. | [live-ghosts-multiplayer.md](docs/demands/live-ghosts-multiplayer.md) |
+| **Map editor** | Create or change stages. | [map-editor.md](docs/demands/map-editor.md) |
+| **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | [vehicle-editor.md](docs/demands/vehicle-editor.md) |
 
-Groundwork that may help: `egodata` already reads the game's archives and binary XML, and the native menu already works by patching the game's UI data at load. Whether that carries over to cars or maps is not known.
+`NetworkGuard` blocks the network by design, so any multiplayer would need a separate, narrow exception that never reaches RaceNet or the official leaderboards.
 
 ## License
 
