@@ -593,6 +593,30 @@ void TestRealFiles() {
     if (std::string(name) == "flow") ok = ui_patch::PatchFlow(root, linked, error);
     if (std::string(name) == "screens") ok = ui_patch::PatchScreens(root, error);
     TEST_ASSERT(ok, std::string(name) + ": " + error);
+    if (ok && std::string(name) == "screens") {
+      const Node *page = Find(root, [](const Node &n) {
+        return Is(n, "Screen", "id", ui_patch::kMainMenuPage.name);
+      });
+      TEST_ASSERT(page != nullptr && page->children.size() == 2 &&
+                      page->children[0].children.size() == 1 &&
+                      Find(*page, [](const Node &n) {
+                        return Is(n, "IBSelectableSimple", "select_value", ui_patch::kPauseEvent);
+                      }) != nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return n.name == "SBHotButtonScreenEvent";
+                      }) == nullptr,
+                  "aba do menu principal: um bloco que abre o DR2 Hook");
+    }
+    if (ok && std::string(name) == "flow") {
+      const Node *mainMenu = Find(root, [](const Node &n) {
+        return Is(n, "node", "jump_id", ui_patch::kMainMenuJumpId);
+      });
+      TEST_ASSERT(mainMenu != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kPauseEvent);
+                      }) != nullptr,
+                  "menu principal ligado ao hub");
+    }
     if (out != nullptr) {
       const std::vector<uint8_t> patched = dr2hook::bxml::Encode(root);
       std::ofstream(std::string(out) + "/" + name + ".bin", std::ios::binary)

@@ -334,11 +334,13 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
       parentOf[*id] = Path(path.begin(), path.end() - 1);
     }
     const std::string *target = nullptr;
+    const bool mainMenu = AttributeIs(node, "jump_id", kMainMenuJumpId);
     for (const Node &child : node.children) {
       if (child.name == "link" && AttributeIs(child, "id", kPauseEvent)) {
         return;
       }
-      if (child.name == "link" && AttributeIs(child, "id", kTemplateLink)) {
+      if (child.name == "link" &&
+          AttributeIs(child, "id", mainMenu ? kMainMenuAnchorLink : kTemplateLink)) {
         target = child.Attribute("target");
       }
     }
@@ -395,9 +397,41 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
   return true;
 }
 
+// Cópia de options_extras com só o bloco kMainMenuPage.tile, textos e evento
+// nossos. Falso se o modelo não tiver o layout esperado.
+bool BuildMainMenuPage(const Node &templateScreen, Node &out) {
+  out = templateScreen;
+  out.SetAttribute("id", kMainMenuPage.name);
+  Node *items = out.Child("items");
+  Node *behaviours = out.Child("behaviours");
+  Node *tile = items != nullptr ? FindChild(*items, "Item", "id", kMainMenuPage.tile)
+                                : nullptr;
+  Node *flow = behaviours != nullptr ? behaviours->Child("SBGridItemFlow") : nullptr;
+  if (tile == nullptr || flow == nullptr) {
+    return false;
+  }
+  Node *title = FindChild(*tile, "BTextStatic", "glyph", "text_title");
+  Node *subtitle = FindChild(*tile, "BTextStatic", "glyph", "text_subtitle");
+  Node *select = tile->Child("IBSelectableSimple");
+  if (title == nullptr || subtitle == nullptr || select == nullptr) {
+    return false;
+  }
+  title->SetAttribute("string", kMainMenuPage.titleKey);
+  subtitle->SetAttribute("string", kMainMenuPage.subtitleKey);
+  select->SetAttribute("select_value", kPauseEvent);
+  Node kept = *tile;
+  items->children.clear();
+  items->children.push_back(std::move(kept));
+  flow->text = std::string("\r\n          ") + kMainMenuPage.tile + "\r\n        ";
+  // O atalho de "trial upsell" é da tela original.
+  behaviours->RemoveChild("SBHotButtonScreenEvent");
+  return true;
+}
+
 bool PatchScreens(Node &root, std::string &error) {
-  Path hostPath, pagePath, pausePath;
+  Path hostPath, pagePath, pausePath, mainMenuTemplatePath;
   bool exists = false, foundHost = false, foundPage = false, foundPause = false;
+  bool foundMainMenuTemplate = false;
   Walk(root, [&](const Node &node, const Path &path) {
     if (node.name != "Screen") {
       return;
@@ -407,7 +441,7 @@ bool PatchScreens(Node &root, std::string &error) {
       return;
     }
     const bool own =
-        *id == kHub.name || *id == kMod.name ||
+        *id == kHub.name || *id == kMod.name || *id == kMainMenuPage.name ||
         std::any_of(std::begin(kPages), std::end(kPages),
                     [&](const PageDef &page) { return *id == page.name; });
     if (own) {
@@ -421,6 +455,9 @@ bool PatchScreens(Node &root, std::string &error) {
     } else if (*id == kPauseScreen) {
       pausePath = path;
       foundPause = true;
+    } else if (*id == kMainMenuPage.templateScreen) {
+      mainMenuTemplatePath = path;
+      foundMainMenuTemplate = true;
     }
   });
   if (exists || !foundHost || !foundPage || !foundPause || hostPath.empty()) {
@@ -476,6 +513,14 @@ bool PatchScreens(Node &root, std::string &error) {
   world.children.push_back(std::move(mainPage));
   world.children.push_back(std::move(modsPage));
   world.children.push_back(std::move(modPage));
+
+  // Opcional: sem o modelo, a pausa continua funcionando sem a aba.
+  Node mainMenuPage;
+  if (foundMainMenuTemplate &&
+      BuildMainMenuPage(At(root, mainMenuTemplatePath), mainMenuPage)) {
+    const Path parent(mainMenuTemplatePath.begin(), mainMenuTemplatePath.end() - 1);
+    At(patched, parent).children.push_back(std::move(mainMenuPage));
+  }
   root = std::move(patched);
   return true;
 }

@@ -61,6 +61,25 @@ inline constexpr unsigned kModsTab = 1;
 inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
                                   nullptr, nullptr, "lng_dr2hook_crumb_mod"};
 
+// Aba "DR2 Hook" do menu principal: página com um bloco, copiada da grade de
+// options_extras. A aba entra em tabs.info pelo hook do Setup do TabController
+// (native_screen.cpp); o bloco dispara kPauseEvent, ligado ao hub no nó do
+// menu principal (jump_id kMainMenuJumpId).
+struct MainMenuPageDef {
+  const char *name;
+  const char *templateScreen;
+  const char *tile;      // id do Item mantido do modelo
+  const char *titleKey;
+  const char *subtitleKey;
+  const char *tabLabel;  // texto já pronto em tabs.info[i].label
+};
+inline constexpr MainMenuPageDef kMainMenuPage{
+    "dr2hook_mm", "options_extras", "preferences", "lng_dr2hook_mm_title",
+    "lng_dr2hook_mm_subtitle", "DR2 Hook"};
+inline constexpr char kMainMenuJumpId[] = "main_menu_hub";
+// Link do nó do menu principal cujo alvo indica onde pôr os nós hub/mod.
+inline constexpr char kMainMenuAnchorLink[] = "game_settings";
+
 // `dr2hook_do_*` não tem link no fluxo: a DLL trata e consome
 // (native_screen.cpp). `dr2hook_nav_*` e `back` são links do fluxo.
 inline constexpr char kActionPrefix[] = "dr2hook_do_";

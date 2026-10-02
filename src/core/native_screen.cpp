@@ -43,6 +43,39 @@ constexpr uint8_t kLanguageLookupBytes[] = {
     0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x48,
     0x83, 0xec, 0x20, 0x48, 0x8b, 0x99, 0x88, 0x00, 0x00, 0x00, 0x48, 0x8b};
 constexpr char kCapsSuffix[] = "_caps";
+
+// TabController::Setup(ctrl, vec<{screen, label, bool}>*, índice, prefixo)
+// (docs/reverse_engineering/ui_tabs.md). O menu principal (0x1402ff0b0) monta
+// a lista dele e chama este Setup com ctrl = estado + 0x128; o estado guarda um
+// código por aba em +0x2a0 (ptr u32), +0x2a8 (capacidade), +0x2b0 (contagem),
+// lido pelo índice da aba atual (0x140312490).
+constexpr uintptr_t kTabSetupRva = 0x140369320 - kImageBase;
+constexpr uint8_t kTabSetupBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56,
+                                      0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
+constexpr uintptr_t kTabControllerOffset = 0x128;
+constexpr uintptr_t kMainMenuCodesOffset = 0x2a0;
+constexpr char kMainMenuMarkerTab[] = "options_extras";
+// Código de options_extras: a aba nossa é tratada como página de opções.
+constexpr uint32_t kMainMenuTabCode = 2;
+
+struct TabEntry {
+  const char *screen;
+  const char *label;
+  uint8_t enabled;
+};
+static_assert(sizeof(TabEntry) == 0x18);
+
+struct TabVector {
+  TabEntry *data;
+  uint64_t capacity;
+  uint64_t count;
+};
+
+struct CodeArray {
+  uint32_t *data;
+  uint64_t capacity;
+  uint64_t count;
+};
 constexpr size_t kMaxQueuedEvents = 64;
 
 // Data store da UI (docs/reverse_engineering/ui_tabs.md). O spinlock em
@@ -97,6 +130,8 @@ struct DataStoreApi {
 using DispatchFn = bool (*)(void *state, const char *eventName);
 using EnterDataFn = void (*)(void *state);
 using LookupFn = const char *(*)(void *handler, const char *key);
+using TabSetupFn = void (*)(void *controller, TabVector *tabs, uint32_t index,
+                            const char *prefix);
 
 struct MenuOption {
   std::string label;
@@ -138,6 +173,7 @@ uintptr_t g_base = 0;
 DispatchFn g_originalDispatch = nullptr;
 EnterDataFn g_originalEnterData = nullptr;
 LookupFn g_originalLookup = nullptr;
+TabSetupFn g_originalTabSetup = nullptr;
 std::atomic<bool> g_reloadModsPending{false};
 
 // Escrito pelo core no Present; lido pela busca de idioma, cuja thread não
@@ -597,6 +633,10 @@ bool MenuText(const std::string &key, std::string &text) {
                : std::to_string(g_menu.size()) +
                      (g_menu.size() == 1 ? " mod loaded." : " mods loaded.") +
                      " Select a mod to open its options.";
+  } else if (key == up::kMainMenuPage.titleKey) {
+    text = "DR2 HOOK";
+  } else if (key == up::kMainMenuPage.subtitleKey) {
+    text = "Mods, Practice Mode and tools";
   } else if (key == up::kModPage.titleKey) {
     text = "OPTIONS";
   } else if (key == up::kModPage.breadcrumbKey) {
@@ -656,6 +696,46 @@ bool InstallTitleHook(uintptr_t base) {
                     reinterpret_cast<void **>(&g_originalLookup)) != MH_OK ||
       MH_EnableHook(target) != MH_OK) {
     HostLog("NativeScreen: falha ao instalar hook da busca de idioma.");
+    return false;
+  }
+  return true;
+}
+
+// Acrescenta a aba DR2 Hook à lista do menu principal antes do Setup gravar
+// tabs.info. Só mexe se a lista tem options_extras, cabe mais uma aba e os
+// códigos do estado estão alinhados com as abas.
+void DetourTabSetup(void *controller, TabVector *tabs, uint32_t index,
+                    const char *prefix) {
+  bool mainMenu = false, present = false;
+  for (uint64_t i = 0; tabs != nullptr && i < tabs->count; ++i) {
+    const char *screen = tabs->data[i].screen;
+    mainMenu = mainMenu || (screen != nullptr && std::strcmp(screen, kMainMenuMarkerTab) == 0);
+    present = present || (screen != nullptr && std::strcmp(screen, up::kMainMenuPage.name) == 0);
+  }
+  if (mainMenu && !present && tabs->count < tabs->capacity) {
+    auto *codes = reinterpret_cast<CodeArray *>(static_cast<uint8_t *>(controller) -
+                                                kTabControllerOffset + kMainMenuCodesOffset);
+    if (codes->data != nullptr && codes->count == tabs->count &&
+        codes->count < codes->capacity) {
+      tabs->data[tabs->count++] = {up::kMainMenuPage.name, up::kMainMenuPage.tabLabel, 1};
+      codes->data[codes->count++] = kMainMenuTabCode;
+    } else {
+      Log("menu principal sem espaco para a aba DR2 Hook");
+    }
+  }
+  g_originalTabSetup(controller, tabs, index, prefix);
+}
+
+bool InstallMainMenuTab(uintptr_t base) {
+  void *target = reinterpret_cast<void *>(base + kTabSetupRva);
+  if (std::memcmp(target, kTabSetupBytes, sizeof(kTabSetupBytes)) != 0) {
+    Log("Setup de abas diferente do esperado; sem aba no menu principal.");
+    return false;
+  }
+  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourTabSetup),
+                    reinterpret_cast<void **>(&g_originalTabSetup)) != MH_OK ||
+      MH_EnableHook(target) != MH_OK) {
+    Log("falha ao instalar o hook do Setup de abas.");
     return false;
   }
   return true;
@@ -818,6 +898,9 @@ bool InstallNativeScreenHook() {
   g_base = base;
   if (InstallTitleHook(base)) {
     HostLog("NativeScreen: textos das telas dr2hook instalados.");
+  }
+  if (InstallMainMenuTab(base)) {
+    HostLog("NativeScreen: aba DR2 Hook do menu principal instalada.");
   }
 
   if (!SwapVtableSlot(base, kDispatchSlot, kDispatchStubRva, kDispatchStubBytes,
