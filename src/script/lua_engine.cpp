@@ -1,5 +1,6 @@
 #include "dr2hook/script/lua_engine.h"
 #include "dr2hook/cutscene_probe.h"
+#include "dr2hook/ghost_lab.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
@@ -471,6 +472,57 @@ static int Lua_Safety_isRestrictedMode(lua_State *L) {
 // Bindings nativos para Race (largada; hooks em CutsceneProbe)
 // ---------------------------------------------------------------------------
 // Race.setStartMode("normal" | "no_countdown" | "automatic" | "on_throttle")
+// ---------------------------------------------------------------------------
+// Bindings nativos para Ghost (carros fantasma, GhostLab)
+// ---------------------------------------------------------------------------
+static int Lua_Ghost_status(lua_State *L) {
+  const dr2hook::GhostLab::Status st = dr2hook::GhostLab::GetStatus();
+  lua_createtable(L, 0, 9);
+  lua_pushboolean(L, st.active);
+  lua_setfield(L, -2, "active");
+  lua_pushinteger(L, st.slots);
+  lua_setfield(L, -2, "slots");
+  lua_pushinteger(L, st.readySlots);
+  lua_setfield(L, -2, "readySlots");
+  lua_pushnumber(L, st.lapSeconds);
+  lua_setfield(L, -2, "lapSeconds");
+  lua_pushnumber(L, st.ghostSeconds);
+  lua_setfield(L, -2, "ghostSeconds");
+  lua_pushnumber(L, st.playerSeconds);
+  lua_setfield(L, -2, "playerSeconds");
+  lua_pushnumber(L, st.deltaSeconds);
+  lua_setfield(L, -2, "delta");
+  lua_pushnumber(L, st.gapMeters);
+  lua_setfield(L, -2, "gapMeters");
+  lua_pushnumber(L, st.offTrackMeters);
+  lua_setfield(L, -2, "offTrackMeters");
+  return 1;
+}
+
+// Ghost.clone(count, stepSeconds): count = 0 tira os clones.
+static int Lua_Ghost_clone(lua_State *L) {
+  const int count = static_cast<int>(luaL_checkinteger(L, 1));
+  const float step = static_cast<float>(luaL_optnumber(L, 2, 2.0));
+  dr2hook::GhostLab::RequestClones(count, step);
+  return 0;
+}
+
+static int Lua_Ghost_setOpaque(lua_State *L) {
+  dr2hook::GhostLab::SetOpaque(lua_toboolean(L, 1) != 0);
+  return 0;
+}
+
+static int Lua_Ghost_setTimeOffset(lua_State *L) {
+  lua_pushboolean(L, dr2hook::GhostLab::SetTimeOffset(
+                         static_cast<float>(luaL_checknumber(L, 1))));
+  return 1;
+}
+
+static int Lua_Ghost_setHud(lua_State *L) {
+  dr2hook::GhostLab::SetHudVisible(lua_toboolean(L, 1) != 0);
+  return 0;
+}
+
 static int Lua_Race_setStartMode(lua_State *L) {
   const char *mode = luaL_checkstring(L, 1);
   if (!CutsceneProbe::SetStartMode(mode)) {
@@ -758,6 +810,20 @@ void LuaEngine::RegisterBindings() {
   lua_pushcfunction(s_L, Lua_Race_setStartMode);
   lua_setfield(s_L, -2, "setStartMode");
   lua_setglobal(s_L, "Race");
+
+  // Tabela Ghost
+  lua_createtable(s_L, 0, 5);
+  lua_pushcfunction(s_L, Lua_Ghost_status);
+  lua_setfield(s_L, -2, "status");
+  lua_pushcfunction(s_L, Lua_Ghost_clone);
+  lua_setfield(s_L, -2, "clone");
+  lua_pushcfunction(s_L, Lua_Ghost_setOpaque);
+  lua_setfield(s_L, -2, "setOpaque");
+  lua_pushcfunction(s_L, Lua_Ghost_setTimeOffset);
+  lua_setfield(s_L, -2, "setTimeOffset");
+  lua_pushcfunction(s_L, Lua_Ghost_setHud);
+  lua_setfield(s_L, -2, "setHud");
+  lua_setglobal(s_L, "Ghost");
 
   // Tabela UI
   lua_createtable(s_L, 0, 1);

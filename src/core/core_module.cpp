@@ -1,5 +1,6 @@
 #include "dr2hook/core_api.h"
 #include "dr2hook/cutscene_probe.h"
+#include "dr2hook/ghost_lab.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
 #include "dr2hook/physics_tick_harness.h"
@@ -137,6 +138,8 @@ int Core_Initialize(int truncateLog) {
 
     dr2hook::CutsceneProbe::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::GhostLab::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
 
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
@@ -160,6 +163,7 @@ void Core_Shutdown() {
     dr2hook::OverlayManager::Shutdown();
     dr2hook::PhysicsTickHarness::Shutdown();
     dr2hook::CutsceneProbe::Shutdown();
+    dr2hook::GhostLab::Shutdown();
     dr2hook::SavestateManager::Shutdown();
     dr2hook::ModManager::Shutdown();
     dr2hook::Logger::Info("DR2Hook Core descarregado.");
@@ -197,6 +201,7 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
       dr2hook::Player::ResolveVehicleAddress(
           reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     }
+    dr2hook::GhostLab::Update();
     DispatchStageEvents();
     dr2hook::ModManager::DispatchTick(deltaTime);
 

@@ -568,6 +568,11 @@ void TestPracticeModeNativeMenu() {
       "Race start: Normal",
       "Indestructible tyres: Off",
       "Indestructible car: Off",
+      "Live gap to ghost: On",
+      "Extra ghost copies: Off",
+      "Ghost copy spacing: 2 s",
+      "Ghost head start: 0 s",
+      "Solid ghost car: Off",
       "Notifications: On",
   };
   TEST_ASSERT(entries.size() == mods.size() && entries[practice].name == "Practice Mode",
@@ -604,7 +609,7 @@ void TestPracticeModeNativeMenu() {
   dr2hook::ModManager::DispatchMenuEvent(practice, 2, 1);
   dr2hook::ModManager::DispatchMenuEvent(practice, 4, -1);
   dr2hook::ModManager::DispatchMenuEvent(practice, 5, -1);
-  dr2hook::ModManager::DispatchMenuEvent(practice, 7, 7);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 12, 7);
   const auto after = dr2hook::ModManager::MenuSnapshot();
   const auto afterLabels = labels(after[practice]);
   TEST_ASSERT(afterLabels[2] == "Restore mode: Momentum", "combo escolhe o valor do choice");
@@ -612,7 +617,7 @@ void TestPracticeModeNativeMenu() {
   TEST_ASSERT(afterLabels[4] == "Race start: No countdown",
               "A avanca o modo de largada sem quebrar o mod fora do jogo");
   TEST_ASSERT(afterLabels[5] == "Indestructible tyres: On", "A avanca o toggle");
-  TEST_ASSERT(afterLabels[7] == "Notifications: On", "indice fora dos valores ignorado");
+  TEST_ASSERT(afterLabels[12] == "Notifications: On", "indice fora dos valores ignorado");
   TEST_ASSERT(after[practice].options[2].ValueNames() ==
                   std::vector<std::string>({"Normal", "Momentum"}),
               "valores do combo no snapshot");

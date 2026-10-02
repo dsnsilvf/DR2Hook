@@ -93,6 +93,7 @@ add_library(dr2hook_core SHARED
     src/core/savestate.cpp
     src/core/physics_tick_harness.cpp
     src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
@@ -210,6 +211,7 @@ add_executable(test_lua_engine
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
@@ -252,6 +254,7 @@ add_executable(test_overlay
     src/core/savestate.cpp
     src/script/lua_engine.cpp
     src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
@@ -294,6 +297,7 @@ add_executable(test_stability_soak
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
