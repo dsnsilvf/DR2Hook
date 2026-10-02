@@ -67,6 +67,14 @@ inline constexpr unsigned kModsTab = 1;
 inline constexpr PageDef kModPage{kMod.name, "lng_dr2hook_title_mod", nullptr,
                                   nullptr, nullptr, "lng_dr2hook_crumb_mod"};
 
+// `dr2hook_do_*` não tem link no fluxo: a DLL trata e consome
+// (native_screen.cpp; no menu principal, pelo despacho do
+// StateScreenMainMenu). `dr2hook_nav_*` e `back` são links do fluxo.
+inline constexpr char kActionPrefix[] = "dr2hook_do_";
+inline constexpr char kOpenOverlayEvent[] = "dr2hook_do_overlay";
+inline constexpr char kReloadModsEvent[] = "dr2hook_do_reload_mods";
+inline constexpr char kReloadCoreEvent[] = "dr2hook_do_reload_core";
+
 // Aba "DR2 Hook" do menu principal: página copiada da grade de options_extras
 // com os blocos abaixo. A aba entra em tabs.info pelo hook do Setup do
 // TabController (native_screen.cpp); os eventos caem no nó do menu principal
@@ -95,8 +103,10 @@ inline constexpr MainMenuTile kMainMenuTiles[] = {
      TileState::Action, kMainMenuModsEvent},
     {"input", "lng_dr2hook_mm_mp_title", "lng_dr2hook_mm_soon", "tile_watermark_join",
      TileState::Disabled, nullptr},
-    {"profile", "lng_dr2hook_mm_overlay_title", nullptr, nullptr, TileState::Disabled, nullptr},
-    {"racenet", "lng_dr2hook_mm_reload_title", nullptr, nullptr, TileState::Disabled, nullptr},
+    {"profile", "lng_dr2hook_mm_overlay_title", nullptr, nullptr, TileState::Action,
+     kOpenOverlayEvent},
+    {"racenet", "lng_dr2hook_mm_reload_title", nullptr, nullptr, TileState::Action,
+     kReloadModsEvent},
     {"graphics", "lng_dr2hook_mm_world_title", "lng_dr2hook_mm_soon",
      "tile_watermark_rally_lead", TileState::Disabled, nullptr},
     {"audio", "lng_dr2hook_mm_vehicle_title", "lng_dr2hook_mm_soon",
@@ -128,12 +138,6 @@ inline constexpr char kMainMenuJumpId[] = "main_menu_hub";
 // Link do nó do menu principal cujo alvo indica onde pôr os nós hub/mod.
 inline constexpr char kMainMenuAnchorLink[] = "game_settings";
 
-// `dr2hook_do_*` não tem link no fluxo: a DLL trata e consome
-// (native_screen.cpp). `dr2hook_nav_*` e `back` são links do fluxo.
-inline constexpr char kActionPrefix[] = "dr2hook_do_";
-inline constexpr char kOpenOverlayEvent[] = "dr2hook_do_overlay";
-inline constexpr char kReloadModsEvent[] = "dr2hook_do_reload_mods";
-inline constexpr char kReloadCoreEvent[] = "dr2hook_do_reload_core";
 inline constexpr char kOptionEventPrefix[] = "dr2hook_do_opt_";
 inline constexpr char kNavModPrefix[] = "dr2hook_nav_mod_";
 

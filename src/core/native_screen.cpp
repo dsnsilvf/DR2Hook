@@ -32,6 +32,13 @@ constexpr uintptr_t kDispatchStubRva = 0x140ebb300 - kImageBase;
 constexpr uint8_t kDispatchStubBytes[] = {0x32, 0xc0, 0xc3};
 constexpr uintptr_t kEnterDataStubRva = 0x1406bfe70 - kImageBase;
 constexpr uint8_t kEnterDataStubBytes[] = {0xc2, 0x00, 0x00};
+// StateScreenMainMenu: vtable própria (+0x80 é o Setup das abas 0x1402ff0b0) e
+// despacho próprio em +0x88. Os blocos de ação da aba DR2 Hook disparam
+// eventos dr2hook_do_*, que o nó do menu principal não tem como link.
+constexpr uintptr_t kMainMenuVtableRva = 0x14125c0c0 - kImageBase;
+constexpr uintptr_t kMainMenuDispatchRva = 0x140318c50 - kImageBase;
+constexpr uint8_t kMainMenuDispatchBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                              0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
 // StateScreenFECore: id, store, Path de ui.<tela> (depois do Enter).
 constexpr uintptr_t kStateIdOffset = 0x08;
 constexpr uintptr_t kStateStoreOffset = 0x38;
@@ -173,6 +180,7 @@ struct ComboWatch {
 
 uintptr_t g_base = 0;
 DispatchFn g_originalDispatch = nullptr;
+DispatchFn g_originalMainMenuDispatch = nullptr;
 EnterDataFn g_originalEnterData = nullptr;
 LookupFn g_originalLookup = nullptr;
 TabSetupFn g_originalTabSetup = nullptr;
@@ -623,6 +631,13 @@ bool DetourDispatch(void *state, const char *eventName) {
   return g_originalDispatch(state, eventName);
 }
 
+bool DetourMainMenuDispatch(void *state, const char *eventName) {
+  if (eventName != nullptr && StartsWith(eventName, up::kActionPrefix)) {
+    return HandleAction(eventName);
+  }
+  return g_originalMainMenuDispatch(state, eventName);
+}
+
 // ---------------------------------------------------------------------------
 // Textos
 // ---------------------------------------------------------------------------
@@ -668,9 +683,9 @@ bool MenuText(const std::string &key, std::string &text) {
   } else if (key == "lng_dr2hook_mm_soon") {
     text = "Coming soon";
   } else if (key == "lng_dr2hook_mm_overlay_title") {
-    text = "OVERLAY - SOON";
+    text = "OPEN OVERLAY";
   } else if (key == "lng_dr2hook_mm_reload_title") {
-    text = "RELOAD MODS - SOON";
+    text = "RELOAD MODS";
   } else if (key == "lng_dr2hook_mm_practice_title") {
     text = "PRACTICE MODE";
   } else if (key == "lng_dr2hook_mm_about_title") {
@@ -818,10 +833,10 @@ SlotPath ParseSlotPath(const char *path, size_t available) {
 }
 
 // Vtable trocada só depois de conferir o valor atual e os bytes do stub.
-bool SwapVtableSlot(uintptr_t base, uintptr_t slotOffset, uintptr_t stubRva,
-                    const uint8_t *stubBytes, size_t stubSize, void *detour,
-                    void **original, const char *name) {
-  auto *slot = reinterpret_cast<uintptr_t *>(base + kFeCoreVtableRva + slotOffset);
+bool SwapVtableSlot(uintptr_t base, uintptr_t vtableRva, uintptr_t slotOffset,
+                    uintptr_t stubRva, const uint8_t *stubBytes, size_t stubSize,
+                    void *detour, void **original, const char *name) {
+  auto *slot = reinterpret_cast<uintptr_t *>(base + vtableRva + slotOffset);
   const uintptr_t stub = base + stubRva;
   if (*slot != stub ||
       std::memcmp(reinterpret_cast<const void *>(stub), stubBytes, stubSize) != 0) {
@@ -950,8 +965,16 @@ bool InstallNativeScreenHook() {
     HostLog("NativeScreen: aba DR2 Hook do menu principal instalada.");
   }
 
-  if (!SwapVtableSlot(base, kDispatchSlot, kDispatchStubRva, kDispatchStubBytes,
-                      sizeof(kDispatchStubBytes),
+  if (SwapVtableSlot(base, kMainMenuVtableRva, kDispatchSlot, kMainMenuDispatchRva,
+                     kMainMenuDispatchBytes, sizeof(kMainMenuDispatchBytes),
+                     reinterpret_cast<void *>(&DetourMainMenuDispatch),
+                     reinterpret_cast<void **>(&g_originalMainMenuDispatch),
+                     "+0x88 do menu principal")) {
+    HostLog("NativeScreen: blocos de acao do menu principal tratados pela DLL.");
+  }
+
+  if (!SwapVtableSlot(base, kFeCoreVtableRva, kDispatchSlot, kDispatchStubRva,
+                      kDispatchStubBytes, sizeof(kDispatchStubBytes),
                       reinterpret_cast<void *>(&DetourDispatch),
                       reinterpret_cast<void **>(&g_originalDispatch), "+0x88")) {
     HostLog("NativeScreen: executavel diferente do esperado; eventos das "
@@ -961,8 +984,8 @@ bool InstallNativeScreenHook() {
   HostLog("NativeScreen: eventos das telas dr2hook tratados pela DLL.");
 
   if (ResolveDataStore(base) &&
-      SwapVtableSlot(base, kEnterDataSlot, kEnterDataStubRva, kEnterDataStubBytes,
-                     sizeof(kEnterDataStubBytes),
+      SwapVtableSlot(base, kFeCoreVtableRva, kEnterDataSlot, kEnterDataStubRva,
+                     kEnterDataStubBytes, sizeof(kEnterDataStubBytes),
                      reinterpret_cast<void *>(&DetourEnterData),
                      reinterpret_cast<void **>(&g_originalEnterData), "+0x80")) {
     HostLog("NativeScreen: abas e combos das telas dr2hook criados pela DLL.");

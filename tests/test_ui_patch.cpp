@@ -635,6 +635,12 @@ void TestRealFiles() {
         }
       }
       TEST_ASSERT(rows == 4, "grade da aba do menu principal com 4 linhas");
+      for (const char *event : {ui_patch::kOpenOverlayEvent, ui_patch::kReloadModsEvent}) {
+        TEST_ASSERT(page != nullptr && Find(*page, [&](const Node &n) {
+                      return Is(n, "IBSelectableSimple", "select_value", event);
+                    }) != nullptr,
+                    std::string("bloco de acao no menu principal: ") + event);
+      }
     }
     if (ok && std::string(name) == "flow") {
       const Node *mainMenu = Find(root, [](const Node &n) {
