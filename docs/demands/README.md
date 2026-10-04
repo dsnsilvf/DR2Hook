@@ -11,6 +11,7 @@ Ideas people want from DR2Hook, kept apart from the reverse-engineering notes an
 | Vehicle editor / custom cars | Speculation, not started | [vehicle-editor.md](vehicle-editor.md) |
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
 | TAS, replay and optimal lines | Speculation, determinism not tested | [tas-and-optimal-lines.md](tas-and-optimal-lines.md) |
+| Run comparer and in-game HTML | Speculation, UDP offsets not confirmed | [run-comparer.md](run-comparer.md) |
 
 ## How findings are labelled
 
