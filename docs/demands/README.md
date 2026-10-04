@@ -10,6 +10,7 @@ Ideas people want from DR2Hook, kept apart from the reverse-engineering notes an
 | Map editor | Speculation, not started | [map-editor.md](map-editor.md) |
 | Vehicle editor / custom cars | Speculation, not started | [vehicle-editor.md](vehicle-editor.md) |
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
+| TAS, replay and optimal lines | Speculation, determinism not tested | [tas-and-optimal-lines.md](tas-and-optimal-lines.md) |
 
 ## How findings are labelled
 
