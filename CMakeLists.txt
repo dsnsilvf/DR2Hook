@@ -95,6 +95,7 @@ add_library(dr2hook_core SHARED
     src/core/cutscene_probe.cpp
     src/core/free_camera.cpp
     src/core/ghost_lab.cpp
+    src/core/ghost_trace.cpp
     src/core/terminal_damage.cpp
     src/core/remote_commands.cpp
     src/core/net_dialog.cpp

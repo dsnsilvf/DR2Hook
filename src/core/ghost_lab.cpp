@@ -1,4 +1,5 @@
 #include "dr2hook/ghost_lab.h"
+#include "dr2hook/ghost_trace.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/player.h"
 
@@ -713,6 +714,7 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   LinkAllCloneControllers();
   ApplyCollision(owner);
   const int result = g_originalEvaluate(owner, time, arg, out);
+  if (GhostTrace::Enabled()) GhostTrace::OnEvaluate(owner, time, result, out);
   if (result == 0 && out != nullptr && out[kOutValid] != 0) RecordOwnerPos(owner, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
 

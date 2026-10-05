@@ -2,6 +2,7 @@
 #include "dr2hook/cutscene_probe.h"
 #include "dr2hook/free_camera.h"
 #include "dr2hook/ghost_lab.h"
+#include "dr2hook/ghost_trace.h"
 #include "dr2hook/terminal_damage.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
@@ -148,6 +149,8 @@ int Core_Initialize(int truncateLog) {
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::GhostLab::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::GhostTrace::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::TerminalDamage::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::NetDialog::Install(
@@ -176,6 +179,7 @@ void Core_Shutdown() {
     dr2hook::FreeCamera::Shutdown();
     dr2hook::PhysicsTickHarness::Shutdown();
     dr2hook::CutsceneProbe::Shutdown();
+    dr2hook::GhostTrace::Shutdown();
     dr2hook::GhostLab::Shutdown();
     dr2hook::TerminalDamage::Shutdown();
     dr2hook::NetDialog::Shutdown();
