@@ -123,7 +123,20 @@ Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Prac
 
 **Teste de limite (2026-10-04, tecla F7, log `GhostLab[limite]`):** cada F7 pede mais uma cópia (`GhostLab::SpawnClone`). Com 5 slots (1 fonte), o jogo aceitou 4 cópias e não caiu: a 5ª e a 6ª pedidas deram "feitas 4: sem slot livre". Ou seja, o teto das cópias de dados é 4 (limite do gerenciador, `mov r13d, 5`). Só 1 cópia aparece na tela (`car 3`); as outras avaliam sem carro desenhado.
 
-**Correção:** o trecho `0x140a8834f`/`0x140a884d1` (`mov eax, 2`, `mov r12d, 2`) cria `windscreen_camera`, `windscreen_activation_map` e `QuadBlitRenderInstance` (strings em `0x1413aad78`, `0x1413aad90`, `0x1413a6ba0`); não é o criador dos veículos fantasma. O número de veículos fantasma (2) vem de uma lista de dados lida em `0x14046b33c`/`0x140426760` (entradas com tipo `+0x2c == 3`) e ainda não foi localizado. Para ver mais de 1 cópia, falta achar onde essa lista é montada.
+**Correção:** o trecho `0x140a8834f`/`0x140a884d1` (`mov eax, 2`, `mov r12d, 2`) cria `windscreen_camera`, `windscreen_activation_map` e `QuadBlitRenderInstance`; não é o criador dos veículos fantasma.
+
+#### Origem do limite de 2 carros e como passar dele (2026-10-04)
+
+Validado no jogo: **3 carros fantasma aparecendo** (jogador + 3).
+
+- `SpawnStageVehicles` (`0x14046b320`, chamado de `0x1404a892b`) percorre a lista da sessão `[0x1416951e8]` (`+0x30` entradas, `+0x40` contagem). O passe 2 pula a entrada cujo método virtual `+0x108` (`0x1404c9b00`) devolve o byte `entrada+0xb4`. `CreateStageVehicle` (`0x14046af20`) não tem teto.
+- A lista sempre tem 5 entradas de fantasma, porque `0x1405bac01` completa até 5 (`mov r13d, 5` em `0x1405ba987`) com **registros vazios** (`[registro+8] == 0`, montados em `[rbp+0x190]`, 0xb8 bytes). `AddGhostEntry` (`0x14057df00`) grava `+0xb4 = 1` nesses (`0x14057e02c` a `0x14057e033`), por isso só 2 fantasmas nascem.
+- Só zerar `+0xb4` NÃO basta: o carro nasce sem o dado da volta, e `PollVehiclesReady` (`0x1404b6160`, chamada por `TryFinishVehicleLoad` `0x1404b5750`) exige `veículo+0x30` e `+0x38` preenchidos; a carga espera para sempre (ver `loading_hangs.md`).
+- **Solução que funcionou:** hook em `AddGhostEntry`; se o registro tem `+0x08 == 0`, troca por cópia dos 0xb8 bytes do último registro real. A entrada nasce sem `+0xb4`, o carro nasce com o dado e a carga termina.
+- O controlador do carro extra nasce com `+0x63 = 0` (6º argumento de `AddGhostEntry`); o atualizador sai sem ele e `EvaluateGhostState` nunca roda para ele. O mod liga `+0x62` e `+0x63` de todo controlador cujo slot é cópia (`LinkAllCloneControllers`).
+- `GhostCarValues` ganha uma entrada por carro (4 ponteiros em `bloco+0x1a0f0..0x1a108`); sem erro.
+- Teste: arquivo `dr2hook_ghost_cars.txt` com o total de carros fantasma (0 a 5). Carregamento completo da especial (o Reiniciar não recria veículos).
+- Pendente: 4 e 5 carros; vários Reiniciar; sair da especial (cópia de registro compartilha o ponteiro da volta: risco de double free na desmontagem).
 
 ### 6.4 Transparência e aura (resolvidas em 2026-10-02, noite)
 
