@@ -4,10 +4,12 @@
 #include "dr2hook/player.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <thread>
+#include <utility>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -1326,9 +1328,7 @@ void DetourSpawnVehicles(void *ctx) {
   g_stageCtx = ctx;
   g_realSeen = 0;
   LogStageEntries("antes do spawn");
-  ArmDriverWatch();
   g_originalSpawn(ctx);
-  ArmDriverWatch();
   LogStageEntries("depois do spawn");
   LogLimits("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
@@ -1373,8 +1373,8 @@ std::string ReturnChain(uintptr_t rsp) {
 
 LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
   const DWORD code = info->ExceptionRecord->ExceptionCode;
-  if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 0xf) != 0 &&
-      g_watchAddrs[0].load() != 0) {
+  // No Wine o Dr6 pode chegar zerado: com um watchpoint armado, todo single-step e dele.
+  if (code == EXCEPTION_SINGLE_STEP && g_watchAddrs[0].load() != 0) {
     CONTEXT *w = info->ContextRecord;
     const DWORD64 hit = w->Dr6 & 0xf;
     w->Dr6 = 0;
@@ -1985,6 +1985,69 @@ void ApplyDriverParams(uint8_t *ds) {
   Logger::Info(msg);
 }
 
+// O objeto de pilotos tem mais arrays de 16 por veiculo (dwords em +0x104/+0x144/+0x184/
+// +0x1c4, 16 x 0x4f8 em +0xac0 e +0x5a40, 16 x 0x30 em +0xa9c0) alcancados pelos tratadores
+// de evento do despachante 0x140b96f80 (todos recebem rcx = objeto, o indice do veiculo em
+// edx ou r8d e um ponteiro). Em vez de relocar tudo, veiculos >= 16 sao ignorados nesses
+// tratadores: ficam sem piloto/animacao interna (cosmetico; os fantasmas nem mostram).
+struct DriverHandler {
+  uintptr_t va;
+  bool indexInR8; // false = indice em edx
+  uint8_t prologue[6];
+};
+constexpr DriverHandler kDriverHandlers[] = {
+    {0x140b73b10, false, {0x41, 0x8b, 0x00, 0x48, 0x63, 0xd2}}, // dword +0x104 = [r8]
+    {0x140b731f0, false, {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14}}, // le os arrays de dwords
+    {0x140b73210, false, {0x41, 0x8b, 0x00, 0x48, 0x63, 0xd2}}, // dword +0x184 = [r8]
+    {0x140b4f8e0, false, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48}}, // "Interior Animations"
+    {0x140b4f420, false, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48}},
+    {0x140b4f520, false, {0x41, 0x8b, 0x00, 0x48, 0x63, 0xd2}}, // dword +0x144 = [r8]
+    {0x140b4fa30, true, {0x41, 0x8b, 0xc0, 0x48, 0x81, 0xc1}},  // parametros +0x300 (XML)
+    {0x140b4f530, true, {0x4c, 0x8b, 0xca, 0x41, 0x8b, 0xc0}},  // 0x4f8 em +0xac0
+    {0x140b4f400, true, {0x4c, 0x8b, 0xca, 0x41, 0x8b, 0xc0}},  // 0x4f8 em +0x5a40
+    {0x140b5f6c0, true, {0x4c, 0x8b, 0xca, 0x41, 0x8b, 0xc0}},  // 0x30 em +0xa9c0
+};
+constexpr size_t kDriverHandlerCount = sizeof(kDriverHandlers) / sizeof(kDriverHandlers[0]);
+using DriverHandlerFn = uint64_t (*)(void *, uint64_t, uint64_t);
+DriverHandlerFn g_driverHandlerOriginal[kDriverHandlerCount] = {};
+void *g_driverHandlerTarget[kDriverHandlerCount] = {};
+std::atomic<int> g_driverSkipped{0};
+
+template <size_t I> uint64_t DetourDriverHandler(void *self, uint64_t rdx, uint64_t r8) {
+  const int index = static_cast<int>(kDriverHandlers[I].indexInR8 ? r8 : rdx);
+  if (index >= 16) {
+    if (g_driverSkipped.fetch_add(1) < 4) {
+      char msg[120];
+      std::snprintf(msg, sizeof(msg), "GhostLab[pilotos]: evento do veiculo %d ignorado (0x%llx).",
+                    index, static_cast<unsigned long long>(kDriverHandlers[I].va));
+      Logger::Info(msg);
+    }
+    return 0;
+  }
+  return g_driverHandlerOriginal[I](self, rdx, r8);
+}
+
+template <size_t... I> constexpr std::array<void *, sizeof...(I)> DriverDetours(std::index_sequence<I...>) {
+  return {reinterpret_cast<void *>(&DetourDriverHandler<I>)...};
+}
+
+void HookDriverHandlers() {
+  static const auto detours = DriverDetours(std::make_index_sequence<kDriverHandlerCount>{});
+  int ok = 0;
+  for (size_t i = 0; i < kDriverHandlerCount; ++i) {
+    if (g_driverHandlerTarget[i] != nullptr) continue;
+    char name[48];
+    std::snprintf(name, sizeof(name), "pilotos 0x%llx", static_cast<unsigned long long>(kDriverHandlers[i].va));
+    if (Hook(kDriverHandlers[i].va - kImageBase, kDriverHandlers[i].prologue, 6, detours[i],
+             reinterpret_cast<void **>(&g_driverHandlerOriginal[i]), &g_driverHandlerTarget[i], name))
+      ++ok;
+  }
+  char msg[100];
+  std::snprintf(msg, sizeof(msg), "GhostLab[pilotos]: %d de %zu tratadores filtram veiculos >= 16.", ok,
+                kDriverHandlerCount);
+  Logger::Info(msg);
+}
+
 void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) {
   void *result = g_originalDriverCtor(self, a, b, c, d, e);
   if (g_vehicleSlotsWanted && result != nullptr) ApplyDriverParams(static_cast<uint8_t *>(result));
@@ -1993,6 +2056,7 @@ void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) 
 
 void PatchDriverParams() {
   if (!g_vehicleSlotsWanted) return; // so junto com o VEHICLE_SYSTEM ampliado
+  HookDriverHandlers();
   if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SIZE", nullptr, 0) == 0) {
     Logger::Warn("GhostLab[pilotos]: dxgi.dll sem a ampliacao do objeto de pilotos; "
                  "atualize a dxgi.dll e reabra o jogo.");
@@ -2085,6 +2149,9 @@ void GhostLab::Shutdown() {
                        g_vehicleCtorTarget, g_driverCtorTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
+  for (void *target : g_driverHandlerTarget) {
+    if (target != nullptr) MH_DisableHook(target);
+  }
   if (g_crashHandler != nullptr) {
     RemoveVectoredExceptionHandler(g_crashHandler);
     g_crashHandler = nullptr;
@@ -2098,6 +2165,12 @@ void GhostLab::Shutdown() {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;
+    }
+  }
+  for (void *&target : g_driverHandlerTarget) {
+    if (target != nullptr) {
+      MH_RemoveHook(target);
+      target = nullptr;
     }
   }
 #endif
