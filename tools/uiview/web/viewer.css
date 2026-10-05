@@ -197,3 +197,18 @@ canvas.gl { flex: 1; width: 100%; min-height: 280px; max-height: none; aspect-ra
 canvas.gl:active { cursor: grabbing; }
 .model-foot { padding: 6px 12px 10px; color: var(--muted); font-size: 12px; background: var(--panel); border-top: 1px solid var(--line); }
 .kind { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+
+/* ---- Car Model Explorer ---- */
+.tree-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; cursor: pointer; white-space: nowrap; }
+.tree-row .tw { width: 14px; flex: none; text-align: center; color: var(--muted); font-size: 11px; user-select: none; }
+.tree-row .eye { cursor: pointer; }
+.tree-row .eye:hover, .tree-row .caret:hover { color: var(--text, #fff); }
+.tree-row .nm { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; font: 12px var(--mono); }
+.tree-row .cnt { color: var(--muted); font-size: 10px; flex: none; }
+.tree-row.slice .nm { color: var(--muted); }
+.tree-row.off .nm, .tree-row.off .cnt { opacity: .4; text-decoration: line-through; }
+.tree-row.bad .nm { color: #e0775c; }
+.car-bar button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; color: inherit; cursor: pointer; }
+.car-bar button.on { background: #3a2c10; border-color: #e09a2c; }
+.car-bar button:disabled { opacity: .45; cursor: default; }
+.inspect details > summary.mono { cursor: pointer; margin: 4px 0; }

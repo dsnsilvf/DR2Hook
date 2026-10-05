@@ -840,4 +840,3 @@ refresh = function () {
   document.querySelector(".side .list").hidden = !!MODES[state.mode].noList;
   _refresh();
 };
-start();

@@ -1491,7 +1491,7 @@ window.addEventListener("hashchange", () => {
   else { renderList(); refresh(); }
 });
 
-// content.js chama start() depois de registrar as outras abas.
+// carview.js (o último script) chama start() depois de registrar as outras abas.
 function start() {
   if (!fromHash()) state.screen = "pause_menu";
   applyI18n();
