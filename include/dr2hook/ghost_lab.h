@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace dr2hook {
 
@@ -49,6 +50,9 @@ public:
   // antes de aplicar, para saber quantas existiam se o jogo cair. A conta (copias existentes + 1) e feita na
   // thread do jogo, entao o Reiniciar zera sozinha.
   static int SpawnClone();
+
+  // Texto do ultimo F7 (copias de dados x carros desenhados), uma vez.
+  static bool TakeSpawnNotice(std::string &out);
 
   // Fantasma solido na hora: GhostCarValues.x volta a 1, o fator de
   // esmaecimento fica abaixo de 1 (com 1,0 o desenho descarta o carro colado

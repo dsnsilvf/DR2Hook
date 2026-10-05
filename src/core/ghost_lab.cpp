@@ -290,6 +290,36 @@ std::vector<uint8_t *> CollectSlots() {
   return slots;
 }
 
+// Carros fantasma realmente desenhados: controlador com veiculo e +0x62 ligado.
+int CountDrawnGhostCars() {
+  int drawn = 0;
+  uint8_t *manager = ManagerPtr();
+  if (manager == nullptr) return 0;
+  uint8_t *head = Read<uint8_t *>(manager, kManagerMapHead);
+  const uint64_t size = Read<uint64_t>(manager, kManagerMapSize);
+  if (head == nullptr || size == 0 || size > 64) return 0;
+  std::vector<uint8_t *> stack;
+  uint8_t *node = Read<uint8_t *>(head, 0x8);
+  int guard = 0;
+  while (((node != nullptr && node[0x19] == 0) || !stack.empty()) && ++guard < 256) {
+    while (node != nullptr && node[0x19] == 0) {
+      stack.push_back(node);
+      node = Read<uint8_t *>(node, 0x0);
+    }
+    node = stack.back();
+    stack.pop_back();
+    const uint8_t *controller = Read<const uint8_t *>(node, 0x40);
+    if (controller != nullptr && Read<uintptr_t>(controller, kControllerVehicle) != 0 &&
+        controller[kControllerDraw] != 0) {
+      ++drawn;
+    }
+    node = Read<uint8_t *>(node, 0x10);
+  }
+  return drawn;
+}
+
+std::string g_spawnNotice; // g_mutex; mostrada pelo core no proximo frame
+
 bool IsReady(const uint8_t *slot) { return Read<uint32_t>(slot, kSlotState) == 2; }
 
 bool KeyOf(const uint8_t *slot, LapKey &key, uint32_t &start) {
@@ -585,6 +615,15 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
     Logger::Info("GhostLab[limite]: F7 -> copia #" + std::to_string(existing + 1) +
                  " (existentes: " + std::to_string(existing) + ").");
     ApplyClones(existing + 1, stepMs > 0 ? stepMs : 1000);
+    const int copies = std::min(existing + 1, static_cast<int>(slots.size()) - 1);
+    const int drawn = CountDrawnGhostCars();
+    char notice[128];
+    std::snprintf(notice, sizeof(notice),
+                  "Ghost data copy %d; ghost cars drawn: %d (the game creates only 2).",
+                  copies, drawn);
+    Logger::Info(std::string("GhostLab[limite]: ") + notice);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_spawnNotice = notice;
   }
 
   g_anyEvalTick.store(GetTickCount64());
@@ -1013,6 +1052,19 @@ void GhostLab::RequestClones(int count, float stepSeconds) {
 #else
   (void)count;
   (void)stepSeconds;
+#endif
+}
+
+bool GhostLab::TakeSpawnNotice(std::string &out) {
+#if defined(_WIN32)
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_spawnNotice.empty()) return false;
+  out.swap(g_spawnNotice);
+  g_spawnNotice.clear();
+  return true;
+#else
+  (void)out;
+  return false;
 #endif
 }
 

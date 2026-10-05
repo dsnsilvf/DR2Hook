@@ -217,6 +217,14 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
           reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     }
     dr2hook::GhostLab::Update();
+    {
+      std::string notice;
+      if (dr2hook::GhostLab::TakeSpawnNotice(notice) &&
+          dr2hook::OverlayManager::IsInitialized()) {
+        dr2hook::OverlayManager::AddNotification(notice, 3.0f,
+                                                 dr2hook::ToastType::Info);
+      }
+    }
     dr2hook::TerminalDamage::Update();
     dr2hook::RemoteCommands::Poll(hwnd);
     DispatchStageEvents();
@@ -265,11 +273,6 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F7 &&
         (lParam & (1 << 30)) == 0) {
       dr2hook::GhostLab::SpawnClone();
-      if (dr2hook::OverlayManager::IsInitialized()) {
-        dr2hook::OverlayManager::AddNotification(
-            "Ghost copy requested.", 2.0f,
-            dr2hook::ToastType::Info);
-      }
       return 1;
     }
 
