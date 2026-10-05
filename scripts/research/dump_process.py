@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dump das regioes graváveis do dirtrally2.exe (via /proc/<pid>/mem) mais a
 imagem do executável, para análise offline. Uso:
-    python3 scripts/dump_process.py captures/dumps/<nome>
+    python3 scripts/research/dump_process.py captures/dumps/<nome>
 Gera regions.tsv (inicio, fim, perms, arquivo) e um .bin por região."""
 import os, re, subprocess, sys, time
 

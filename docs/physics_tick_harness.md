@@ -157,7 +157,7 @@ Os primeiros **12 bytes** em disco (hex verificado) vivem em `include/dr2hook/ph
 | 73A070 | `4c8bdc55535741554157498d` |
 | 73B620 | `488bc45657415641574881ec` |
 
-Teste Wine (thunk + MinHook, dummy `mov rax,rsp`): `bash scripts/run_physics_detour_wine_test.sh` — valida **rbx/rbp/rsi/rdi/r12–r15**, **xmm6–15**, args **rcx–r9/xmm0–3**, retorno **rax/xmm0**.
+Teste Wine (thunk + MinHook, dummy `mov rax,rsp`): `bash scripts/release/run_physics_detour_wine_test.sh` — valida **rbx/rbp/rsi/rdi/r12–r15**, **xmm6–15**, args **rcx–r9/xmm0–3**, retorno **rax/xmm0**.
 
 Cada hook chama `VerifyHookPrologue` antes de `MH_CreateHook`.
 

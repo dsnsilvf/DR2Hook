@@ -112,9 +112,9 @@ Janela seguinte: `28 s`, `397` amostras, velocidade máxima `0,006` km/h, varia�
 
 ### Captura ainda não executada, e o método
 
-O desenho, antes de rodar: `scripts/capture_suspension_pair.py` só lê. Escolhe o processo cujo `/proc/pid/maps` contém `dirtrally2.exe`. A cada datagrama em UDP `20777` reabre a cadeia `dirtrally2.exe + 0x1681ce8` → `car + 0x30` → `container + 0x08` e confere `[rig + 0x12c0] == rig` e `[rig + 0x12d0] == 4`. Os escalares gravados são `rig + 0x1504`, `+0x1924`, `+0x1d44` e `+0x2164`, rotulados A–D. O pacote entra como RL, RR, FL, FR nos offsets `68`, `72`, `76` e `80`. Ponteiro nulo, falha de leitura ou troca de rig encerra a série.
+O desenho, antes de rodar: `scripts/research/capture_suspension_pair.py` só lê. Escolhe o processo cujo `/proc/pid/maps` contém `dirtrally2.exe`. A cada datagrama em UDP `20777` reabre a cadeia `dirtrally2.exe + 0x1681ce8` → `car + 0x30` → `container + 0x08` e confere `[rig + 0x12c0] == rig` e `[rig + 0x12d0] == 4`. Os escalares gravados são `rig + 0x1504`, `+0x1924`, `+0x1d44` e `+0x2164`, rotulados A–D. O pacote entra como RL, RR, FL, FR nos offsets `68`, `72`, `76` e `80`. Ponteiro nulo, falha de leitura ou troca de rig encerra a série.
 
-`scripts/analyze_suspension_pair.py` testa as 24 permutações e as escalas `1`, `1000` e `0,001`, com um `b` só e um deslocamento de no máximo `8` amostras para a série inteira. A decisão usa T1–T6, e só se a amplitude do UDP passar de `10×` a de T0.
+`scripts/research/analyze_suspension_pair.py` testa as 24 permutações e as escalas `1`, `1000` e `0,001`, com um `b` só e um deslocamento de no máximo `8` amostras para a série inteira. A decisão usa T1–T6, e só se a amplitude do UDP passar de `10×` a de T0.
 
 O processo só emite UDP depois de ler `hardware_settings_config.xml` com `udp enabled="true"` e `extradata="3"`. A sessão já aberta não relê esse arquivo. Ver [Telemetry](telemetry.md).
 

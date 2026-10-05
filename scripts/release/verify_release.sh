@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${ROOT_DIR}"
 
 echo "================================================================="
@@ -74,7 +74,7 @@ echo "-> Gate 4 APROVADO: 100% dos testes unitários e de soak aprovados."
 # Gate 5: Geração e Validação do Pacote de Distribuição
 # -----------------------------------------------------------------------------
 echo "[Gate 5/5] Executando empacotamento e conferência de release..."
-bash scripts/package_release.sh
+bash scripts/release/package_release.sh
 
 VERSION="v0.1.0"
 ZIP_FILE="dist/DR2Hook-${VERSION}.zip"

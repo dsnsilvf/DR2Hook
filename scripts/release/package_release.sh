@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VERSION="v0.1.0"
 DIST_DIR="${ROOT_DIR}/dist"
 PKG_DIR="${DIST_DIR}/DR2Hook-${VERSION}"

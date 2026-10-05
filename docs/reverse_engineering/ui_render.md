@@ -181,7 +181,6 @@ Incoerências dos próprios dados, que o jogo ignora: glyphs de visibilidade que
 
 ```
 python -m tools.uiview [--game PASTA] [-o build/uiview] [--models 037,phil_mills] [--all-models] [--open]
-python3 scripts/export_all_models.py [--game PASTA] [-o build/uiview]
 ```
 
 Lê o jogo (só leitura) e gera `build/uiview/index.html`. Se o navegador bloquear `file://`, sirva a pasta por HTTP. A saída confirmada em 2026-10-05:

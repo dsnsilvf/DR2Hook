@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifica dr2hook_core.dll (MinGW): prólogos BUG 1, thunks BUG 2/B4, .pdata SEH.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${ROOT}/build-release"
 DLL="${BUILD_DIR}/dr2hook_core.dll"
 OBJDUMP="${OBJDUMP:-x86_64-w64-mingw32-objdump}"

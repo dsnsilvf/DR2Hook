@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compila test_physics_harness_detour_wine (MinGW) e executa sob Wine.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="${ROOT}/build-detour-wine"
 EXE="${BUILD}/test_physics_harness_detour_wine.exe"
 

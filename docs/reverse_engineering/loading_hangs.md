@@ -22,7 +22,7 @@ Quando uma mudança nossa deixa a tela de carga esperando para sempre, o travame
 
 - Pelo `/proc/<pid>/task/*/syscall` só se vê a pilha do Wine (a thread `pid` é a de inicialização, em `select`). A pilha do Windows tem de ser lida de dentro do processo.
 - O Reiniciar **não** recria os veículos: hooks de spawn só disparam em carregamento completo da especial.
-- Travamento de carga só sai reiniciando o jogo (`scripts/restart_game.sh`).
+- Travamento de carga só sai reiniciando o jogo (`scripts/dev/restart_game.sh`).
 - O pool de entradas da sessão é reaproveitado entre cargas (mesmos endereços).
 
 ## Ideia

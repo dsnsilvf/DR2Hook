@@ -8,14 +8,12 @@ Depende de Python 3 e NumPy. No Linux / Proton a leitura usa `process_vm_readv`.
 
 ```bash
 python3 -m tools.dr2rec --help
-# ou
-./scripts/dr2rec --help
 ```
 
 ## Captura
 
 ```bash
-./scripts/dr2rec record \
+python3 -m tools.dr2rec record \
     --process "DiRT Rally 2.0" \
     --interval 10ms \
     --rig 0x4B76BAB0 \
@@ -45,11 +43,11 @@ O analyzer compara a janela antes e depois do marcador. Sem evidência física, 
 ## Análise
 
 ```bash
-./scripts/dr2rec analyze session.dr2cap
-./scripts/dr2rec analyze session.dr2cap --exe /caminho/dirtrally2.exe
-./scripts/dr2rec compare session_a.dr2cap session_b.dr2cap
-./scripts/dr2rec inspect session.dr2cap --offset 0x1504
-./scripts/dr2rec export session.dr2cap --output session.json
+python3 -m tools.dr2rec analyze session.dr2cap
+python3 -m tools.dr2rec analyze session.dr2cap --exe /caminho/dirtrally2.exe
+python3 -m tools.dr2rec compare session_a.dr2cap session_b.dr2cap
+python3 -m tools.dr2rec inspect session.dr2cap --offset 0x1504
+python3 -m tools.dr2rec export session.dr2cap --output session.json
 ```
 
 `analyze` escreve `session_report/`:

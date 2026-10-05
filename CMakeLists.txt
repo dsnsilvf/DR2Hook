@@ -457,7 +457,7 @@ endif()
 
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/package_release.sh
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/release/package_release.sh
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Gerando pacote compactado de release e hashes SHA-256 do DR2Hook"
 )

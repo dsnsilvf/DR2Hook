@@ -220,7 +220,7 @@ O menu de pausa loga os eventos (`continue`, `back`, `restart_race`, `dr2hook`) 
 ## 10. Ferramentas e fluxo de trabalho
 - Disassembly: Python com `capstone` + `pefile` (venv no scratchpad); xrefs por varredura de rel32 no `.text`; função pelo `.pdata`.
 - Textos do jogo: `language/language_<lng>.lng` (`game_1.dat`): bloco `SIDA` (contagem u32 BE + pares `(off_chave, off_valor)` u32 BE), `SIDB` (chaves) e `LNGB` (valores), strings terminadas em zero.
-- Memória ao vivo: `/proc/<pid>/mem` funciona sob Proton (`ptrace_scope=1`, mesmo usuário). `scripts/dump_process.py` grava as regiões graváveis e a imagem (~2,2 GB, 1 s) em `captures/dumps/`. Escrever um byte ao vivo antes de codar validou `immediate`, OSD e `simple` sem reiniciar o jogo.
+- Memória ao vivo: `/proc/<pid>/mem` funciona sob Proton (`ptrace_scope=1`, mesmo usuário). `scripts/research/dump_process.py` grava as regiões graváveis e a imagem (~2,2 GB, 1 s) em `captures/dumps/`. Escrever um byte ao vivo antes de codar validou `immediate`, OSD e `simple` sem reiniciar o jogo.
 - Pilha de chamadas: varrer a pilha a partir do frame **até o `StackBase` do TEB**. Passar do topo derrubou o jogo uma vez.
 - Hooks em experimentação vão no core (F8); `dxgi.dll` exige fechar o jogo para trocar.
 

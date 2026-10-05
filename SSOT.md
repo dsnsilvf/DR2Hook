@@ -136,7 +136,7 @@ A ordem dos quatro blocos é RL, RR, FL, FR. A captura documentada em `docs/reve
   - Interface padronizada em inglês e adaptada à paleta de cores neutra do DiRT Rally 2.0.
 - [x] **Fase 6: Validação, Testes Automatizados e Lançamento**
   - Suítes de memória, Lua, overlay e soak. O pacote de release inclui `dxgi.dll` e `dr2hook_core.dll`.
-  - Verificação em `scripts/verify_release.sh` e empacotamento em `scripts/package_release.sh`.
+  - Verificação em `scripts/release/verify_release.sh` e empacotamento em `scripts/release/package_release.sh`.
 - [x] **Fase 7: Core nativo recarregável**
   - `dxgi.dll` permanece mapeada (proxy, MinHook, `Present`, `WndProc`, `NetworkGuard`, log).
   - `dr2hook_core.dll` concentra overlay, telemetria, savestate e Lua.
@@ -176,7 +176,7 @@ A ordem dos quatro blocos é RL, RR, FL, FR. A captura documentada em `docs/reve
 | **Isolamento de Rede** | Bloqueio de conexões online para RaceNet | ✅ 100% das requisições DNS/TCP abortadas |
 | **Savestate Normal** | Restauração estável sem ejeção da pista | ✅ Aprovado com sag estático e amortecimento |
 | **Savestate Momentum** | Preservação fiel de velocidade e rotação angular | ✅ Dinâmica contínua em curvas e saltos |
-| **Testes Automatizados**| 100% de testes unitários passando | ✅ Suítes de memória, Lua, overlay e soak em `scripts/verify_release.sh` |
+| **Testes Automatizados**| 100% de testes unitários passando | ✅ Suítes de memória, Lua, overlay e soak em `scripts/release/verify_release.sh` |
 | **Encerramento Limpo** | Fechamento do jogo sem travar o processo | ✅ Threads limpas sem vazamento de recursos |
 
-A caixa-preta de sessão (`scripts/dr2rec`, manual em `docs/BLACKBOX.md`) observa uma sessão local e analisa o `.dr2cap` depois. Não escreve memória e não altera o isolamento de rede desta especificação.
+A caixa-preta de sessão (`python3 -m tools.dr2rec`, manual em `docs/BLACKBOX.md`) observa uma sessão local e analisa o `.dr2cap` depois. Não escreve memória e não altera o isolamento de rede desta especificação.

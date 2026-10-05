@@ -2,13 +2,13 @@
 # Fecha o DiRT Rally 2.0, instala as DLLs e os mods do build e abre o jogo de
 # novo pela Steam (mantém as opções de inicialização configuradas nela).
 #
-#   scripts/restart_game.sh            # fecha, instala, abre
-#   scripts/restart_game.sh --no-launch  # fecha e instala, sem abrir
+#   scripts/dev/restart_game.sh            # fecha, instala, abre
+#   scripts/dev/restart_game.sh --no-launch  # fecha e instala, sem abrir
 #
 # GAME_DIR e BUILD_DIR podem ser trocados por variáveis de ambiente.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GAME_DIR="${GAME_DIR:-/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0}"
 BUILD_DIR="${BUILD_DIR:-$REPO/build-release}"
 APP_ID=690790

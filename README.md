@@ -38,12 +38,12 @@ This is the core of DR2Hook. Findings are split by subsystem and carry confidenc
 | Tool | What it does |
 | --- | --- |
 | **Physics tick harness** ([docs](docs/physics_tick_harness.md)) | Opt-in hooks on the EGO physics tick path. Logs rig samples to CSV and can test queued writes and native calls on real tick boundaries. Off by default. |
-| **`dr2rec`** ([docs](docs/BLACKBOX.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `scripts/dr2rec`. |
+| **`dr2rec`** ([docs](docs/BLACKBOX.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `python3 -m tools.dr2rec`. |
 | **`egodata`** (`tools/egodata/`) | Reads and writes EGO game data: NEFS archives (including writing a modified copy), AES, binary XML, text files. |
 | **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
 | **`pssg`** (`tools/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
 | **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/UIVIEW.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
-| `scripts/` | Capture and analysis helpers (suspension pairs, pause-menu observation), `restart_game.sh`. |
+| `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
 
 Physics tick harness switches (environment variable or INI key):
 
@@ -181,8 +181,8 @@ Requirements: CMake 3.20+, and either MinGW-w64 (Linux cross-compile) or Visual 
 
 | Goal | Command |
 | --- | --- |
-| Linux: unit tests + release package | `bash scripts/verify_release.sh` |
-| Linux: release package only | `bash scripts/package_release.sh` |
+| Linux: unit tests + release package | `bash scripts/release/verify_release.sh` |
+| Linux: release package only | `bash scripts/release/package_release.sh` |
 
 The package (`dist/DR2Hook-v0.1.0.zip`) contains `dxgi.dll`, `dr2hook_core.dll`, and `mods/`. Both DLLs are statically linked.
 

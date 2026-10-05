@@ -208,6 +208,6 @@ Os combos de `ui.advanced_graphics` também estavam montados. `+0x20` era `31` e
 
 Em `/tmp/dr2_pause/gfx.jsonl` a resolução ficou em `19` o tempo todo. Proporção, taxa de atualização, multisampling, anisotrópico e preset ficaram em `3`, `3`, `3`, `3` e `19`. Aos `9,45 s`, quando a lista de pausa soltou, `shader_detail`, `texture_detail` e `reflections` foram de `0` para `3`. As outras listas avançadas continuaram em `0` durante a troca de aba e a ida à página de áudio. Aos `35,16 s` a lista de pausa voltou e esses dwords não voltaram atrás. `+0x28` não acompanha o destaque nem a aba. O papel dele continua UNKNOWN.
 
-`scripts/watch_pause_focus.py` reencontra a tela `ui.pause_menu`, os itens e a navegação a cada execução, e imprime o foco, `+0xc0` da tela e o `+0x230` de cada item quando algum deles muda.
+`scripts/research/watch_pause_focus.py` reencontra a tela `ui.pause_menu`, os itens e a navegação a cada execução, e imprime o foco, `+0xc0` da tela e o `+0x230` de cada item quando algum deles muda.
 
-`scripts/observe_pause_menu.py` grava uma leitura das instâncias. `scripts/record_pause_menu.py` grava quem aponta para a tela de pausa, as cópias dos rótulos fora do bloco de localização, e o dword `+0x28` de cada combo de gráficos. Os dois só leem.
+`scripts/research/observe_pause_menu.py` grava uma leitura das instâncias. `scripts/research/record_pause_menu.py` grava quem aponta para a tela de pausa, as cópias dos rótulos fora do bloco de localização, e o dword `+0x28` de cada combo de gráficos. Os dois só leem.
