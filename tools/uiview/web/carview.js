@@ -341,7 +341,7 @@ const CAR_GROUPS = [
   ["wheels", /^(wheel|tyre|disc|hub|caliper|brake)/],
   ["susp", /^(suspension|wishbone|damper|spring)/],
   ["engine", /^(engine|exhaust|fan|radiator|turbo)/],
-  ["body", /^(main_body|bonnet|boot|door|bumper|wing|spoiler|mud|under|aerial|mpn|wiper|splitter|diffuser|roof|scoop|vent|mirror|badge|plate)/],
+  ["body", /^(main_body|bonnet|boot|door|bumper|wing|spoiler|mud|under|aerial|mpn|wiper|splitter|diffuser|roof|scoop|vent|mirror|badge|plate|front_panel|canopy)/],
 ];
 const CAR_GROUP_MIN = 8;
 function carGroupOf(n) {
