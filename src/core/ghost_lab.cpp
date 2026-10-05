@@ -397,6 +397,38 @@ bool IsClone(const uint8_t *slot) {
   return KeyOf(slot, k, t) && k == g_lapKey;
 }
 
+// Controladores de cada slot que e copia: liga +0x62 (desenho) e +0x63 (o
+// atualizador sai sem ele; o enchimento de AddGhostEntry nasce com 0). Roda a
+// cada avaliacao, pois so o controlador do carro ligado chega a
+// EvaluateGhostState.
+void LinkAllCloneControllers() {
+  uint8_t *manager = ManagerPtr();
+  if (manager == nullptr) return;
+  uint8_t *head = Read<uint8_t *>(manager, kManagerMapHead);
+  const uint64_t size = Read<uint64_t>(manager, kManagerMapSize);
+  if (head == nullptr || size == 0 || size > 64) return;
+  std::vector<uint8_t *> stack;
+  uint8_t *node = Read<uint8_t *>(head, 0x8);
+  int guard = 0;
+  while (((node != nullptr && node[0x19] == 0) || !stack.empty()) && ++guard < 256) {
+    while (node != nullptr && node[0x19] == 0) {
+      stack.push_back(node);
+      node = Read<uint8_t *>(node, 0x0);
+    }
+    node = stack.back();
+    stack.pop_back();
+    uint8_t *controller = Read<uint8_t *>(node, 0x40);
+    if (controller != nullptr && Read<uintptr_t>(controller, kControllerVehicle) != 0) {
+      const uint8_t *slot = Read<const uint8_t *>(controller, kControllerSlot);
+      if (slot != nullptr && IsClone(slot)) {
+        controller[kControllerDraw] = 1;
+        controller[0x63] = 1;
+      }
+    }
+    node = Read<uint8_t *>(node, 0x10);
+  }
+}
+
 void ApplyClones(int count, int stepMs) {
   const std::vector<uint8_t *> slots = CollectSlots();
   {
@@ -640,6 +672,7 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
 
   g_anyEvalTick.store(GetTickCount64());
   LinkCloneVehicle(owner);
+  LinkAllCloneControllers();
   ApplyCollision(owner);
   const int result = g_originalEvaluate(owner, time, arg, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
