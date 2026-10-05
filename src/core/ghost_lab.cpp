@@ -129,6 +129,14 @@ constexpr uint8_t kMakeGhostMaterialsPrologue[] = {
 constexpr uintptr_t kSpawnVehiclesRva = 0x14046b320 - kImageBase;
 constexpr uint8_t kSpawnVehiclesPrologue[] = {0x40, 0x56, 0x41, 0x54, 0x48, 0x83,
                                               0xec, 0x38, 0x4c, 0x8b, 0xe1};
+// AddGhostEntry: cria a entrada de fantasma da sessao a partir de um registro
+// de 0xb8 bytes. Registro com +0x08 (dado da volta) nulo = enchimento ate 5:
+// a funcao marca a entrada com +0xb4 = 1 e o spawn a pula (so 2 carros).
+constexpr uintptr_t kAddGhostEntryRva = 0x14057df00 - kImageBase;
+constexpr uint8_t kAddGhostEntryPrologue[] = {0x4c, 0x8b, 0xdc, 0x49, 0x89, 0x5b, 0x08, 0x49,
+                                              0x89, 0x6b, 0x10, 0x45, 0x89, 0x4b, 0x20};
+constexpr size_t kGhostRecordSize = 0xb8;
+constexpr uintptr_t kVehicleSystemIndexRva = 0x141693ffc - kImageBase;
 constexpr uintptr_t kSessionGlobalRva = 0x1416951e8 - kImageBase;
 
 constexpr uintptr_t kCopyLapRva = 0x1409cfd30 - kImageBase;
@@ -220,6 +228,10 @@ void *g_makeGhostTarget = nullptr;
 void *g_packTarget = nullptr;
 void *g_submitTarget = nullptr;
 using SpawnVehiclesFn = void (*)(void *ctx);
+using AddGhostEntryFn = uintptr_t (*)(void *, void *, void *, uintptr_t, uint8_t *, uintptr_t);
+AddGhostEntryFn g_originalAddEntry = nullptr;
+void *g_addEntryTarget = nullptr;
+void *g_stageCtx = nullptr; // objeto da especial visto em SpawnStageVehicles
 SpawnVehiclesFn g_originalSpawn = nullptr;
 void *g_spawnTarget = nullptr;
 bool g_opacityLogged = false;
@@ -825,17 +837,91 @@ void DumpThreads() {
   Logger::Info("GhostLab[espera]: " + std::to_string(shown) + " thread(s) com chamadas do jogo.");
 }
 
+// Quantos carros fantasma pedir (arquivo de teste); 0 = comportamento do jogo.
+int WantedGhostCars() {
+  int want = 0;
+  if (FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
+    if (std::fscanf(f, "%d", &want) != 1) want = 0;
+    std::fclose(f);
+  }
+  return std::clamp(want, 0, 5);
+}
+
+uint8_t g_realRecord[kGhostRecordSize];
+bool g_haveRealRecord = false;
+uint8_t g_fillerRecords[5][kGhostRecordSize];
+int g_realSeen = 0;
+int g_fillerUsed = 0;
+
+// Troca o registro de enchimento (+0x08 nulo) por copia de um registro real:
+// a entrada nasce sem +0xb4 e o spawn cria o carro.
+uintptr_t DetourAddGhostEntry(void *a, void *b, void *c, uintptr_t d, uint8_t *record,
+                              uintptr_t f) {
+  InFlight guard;
+  if (UsablePointer(reinterpret_cast<uintptr_t>(record))) {
+    if (Read<uintptr_t>(record, 0x08) != 0) {
+      if (g_realSeen == 0) g_fillerUsed = 0; // comeco de uma carga
+      ++g_realSeen;
+      std::memcpy(g_realRecord, record, kGhostRecordSize);
+      g_haveRealRecord = true;
+    } else {
+      const int want = WantedGhostCars();
+      if (want > 0 && g_haveRealRecord && g_realSeen + g_fillerUsed < want &&
+          g_fillerUsed < 5) {
+        uint8_t *copy = g_fillerRecords[g_fillerUsed++];
+        std::memcpy(copy, g_realRecord, kGhostRecordSize);
+        Logger::Info("GhostLab[limite]: registro vazio trocado por copia de um real (carro " +
+                     std::to_string(g_realSeen + g_fillerUsed) + " de " +
+                     std::to_string(want) + ").");
+        record = copy;
+      }
+    }
+  }
+  return g_originalAddEntry(a, b, c, d, record, f);
+}
+
+// Estado da tela de carga (leituras sugeridas na analise do Grok).
+void LogLoadState() {
+  const uint8_t *ctx = static_cast<const uint8_t *>(g_stageCtx);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(ctx))) return;
+  char buf[200];
+  std::snprintf(buf, sizeof(buf),
+                "GhostLab[espera]: carga +0x80=%u +0xae=%u +0xc0=%u",
+                Read<uint32_t>(ctx, 0x80), ctx[0xae], Read<uint32_t>(ctx, 0xc0));
+  Logger::Info(buf);
+  const uint8_t *owner = Read<const uint8_t *>(ctx, 0x28);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(owner))) return;
+  const uint8_t *table = Read<const uint8_t *>(owner, 0x8);
+  const int index = Read<int32_t>(reinterpret_cast<const uint8_t *>(g_gameBase + kVehicleSystemIndexRva), 0);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(table)) || index < 0 || index > 64) return;
+  const uint8_t *system = Read<const uint8_t *>(table, index * 8);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(system))) return;
+  const uint8_t *begin = Read<const uint8_t *>(system, 0xf8);
+  const uint8_t *end = Read<const uint8_t *>(system, 0x100);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(begin)) || end < begin || end - begin > 8 * 32) return;
+  for (const uint8_t *p = begin; p < end; p += 8) {
+    const uint8_t *v = Read<const uint8_t *>(p, 0);
+    if (!UsablePointer(reinterpret_cast<uintptr_t>(v))) continue;
+    std::snprintf(buf, sizeof(buf),
+                  "GhostLab[espera]: veiculo %p +0x30=%p +0x38=%p tipo=%u", v,
+                  Read<const void *>(v, 0x30), Read<const void *>(v, 0x38),
+                  Read<uint32_t>(v, 0xbc));
+    Logger::Info(buf);
+  }
+}
+
 void DetourSpawnVehicles(void *ctx) {
   InFlight guard;
+  g_stageCtx = ctx;
+  g_realSeen = 0;
   LogStageEntries("antes do spawn");
-  UnflagGhostEntries();
-  LogStageEntries("apos liberar");
   g_originalSpawn(ctx);
   LogStageEntries("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
     std::fclose(f);
     std::thread([] {
       Sleep(25000);
+      LogLoadState();
       DumpThreads();
     }).detach();
   }
@@ -950,6 +1036,10 @@ bool GhostLab::Install(uintptr_t gameBase) {
        reinterpret_cast<void *>(&DetourSpawnVehicles),
        reinterpret_cast<void **>(&g_originalSpawn), &g_spawnTarget,
        "SpawnStageVehicles");
+  Hook(kAddGhostEntryRva, kAddGhostEntryPrologue, sizeof(kAddGhostEntryPrologue),
+       reinterpret_cast<void *>(&DetourAddGhostEntry),
+       reinterpret_cast<void **>(&g_originalAddEntry), &g_addEntryTarget,
+       "AddGhostEntry");
   if (g_crashHandler == nullptr) {
     g_crashHandler = AddVectoredExceptionHandler(1, CrashLogger);
     g_crashLogged.store(0);
@@ -975,7 +1065,7 @@ bool GhostLab::Install(uintptr_t gameBase) {
 void GhostLab::Shutdown() {
 #if defined(_WIN32)
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
-                       g_submitTarget, g_bodySleepTarget, g_spawnTarget}) {
+                       g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
   if (g_crashHandler != nullptr) {
@@ -986,7 +1076,7 @@ void GhostLab::Shutdown() {
     Sleep(1);
   }
   for (void **target : {&g_evaluateTarget, &g_makeGhostTarget, &g_packTarget,
-                        &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget}) {
+                        &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget, &g_addEntryTarget}) {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;
