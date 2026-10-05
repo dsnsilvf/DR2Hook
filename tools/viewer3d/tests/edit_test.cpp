@@ -1,0 +1,151 @@
+// Testes do dr2edit (histórico, giro, edits.json), sem GL. Executável simples com asserts.
+#undef NDEBUG
+#include "core/json.hpp"
+#include "edit/edits_json.hpp"
+#include "edit/history.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+using namespace dr2;
+
+namespace {
+
+int checks = 0;
+
+void check(bool ok, const char* what) {
+    ++checks;
+    if (!ok) {
+        std::fprintf(stderr, "FALHOU: %s\n", what);
+        std::abort();
+    }
+}
+
+Instances make_instances(std::uint32_t n) {
+    Instances inst;
+    inst.n = n;
+    for (std::uint32_t i = 0; i < n; ++i) {
+        inst.type.push_back(static_cast<std::uint16_t>(i % 3));
+        inst.idnum.push_back(100 + i);  // idnum diferente da posição: o edits.json usa o idnum
+        const float m[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 10.0f * static_cast<float>(i), 1430.25f, -430.125f};
+        inst.m.insert(inst.m.end(), m, m + 12);
+    }
+    inst.m0 = inst.m;
+    inst.hidden.assign(n, 0);
+    return inst;
+}
+
+Track make_track() {
+    Track t;
+    t.id = "pista_teste";
+    t.src = "locations/pista_teste.nefs";
+    t.routes.push_back({});
+    t.routes[0].name = "route_0";
+    t.types = {{"e:core_barr_aframe_a~a", 0, 1}, {"o:cone|x", 1, 1}, {"t:tree_dist_\"q\"", 2, 1}};
+    return t;
+}
+
+void test_history() {
+    Instances inst = make_instances(5);
+    edit::History h;
+    const std::vector<float> original = inst.m;
+
+    auto before = edit::snapshot(inst, {2});
+    inst.matrix(2)[9] += 3.5f;
+    inst.matrix(2)[11] -= 1.25f;
+    check(h.commit("Mover", before, edit::snapshot(inst, {2})), "history: commit de mover");
+    const std::vector<float> moved = inst.m;
+    check(!h.commit("nada", edit::snapshot(inst, {2}), edit::snapshot(inst, {2})), "history: commit sem mudança é ignorado");
+    check(h.undo(inst) && inst.m == original, "history: desfazer devolve as mesmas floats");
+    check(h.redo(inst) && inst.m == moved, "history: refazer devolve as floats movidas");
+    check(!h.redo(inst), "history: nada para refazer");
+
+    before = edit::snapshot(inst, {4});
+    inst.hidden[4] = 1;
+    h.commit("Apagar", before, edit::snapshot(inst, {4}));
+    check(h.undo(inst) && inst.hidden[4] == 0, "history: desfazer apagar devolve hidden = 0");
+    // empilhar depois de desfazer descarta o futuro
+    before = edit::snapshot(inst, {0});
+    inst.matrix(0)[10] += 1.0f;
+    h.commit("Mover", before, edit::snapshot(inst, {0}));
+    check(h.size() == 2 && h.pos() == 2 && !h.redo(inst), "history: futuro truncado");
+
+    edit::History big;
+    for (int k = 0; k < 350; ++k) {
+        before = edit::snapshot(inst, {1});
+        inst.matrix(1)[9] += 1.0f;
+        big.commit("Mover", before, edit::snapshot(inst, {1}));
+    }
+    check(big.size() == edit::History::kMax && big.pos() == edit::History::kMax, "history: limite de 300 passos");
+    int undone = 0;
+    while (big.undo(inst)) ++undone;
+    check(undone == 300 && inst.matrix(1)[9] == 10.0f + 50.0f, "history: desfaz só os 300 últimos");
+}
+
+void test_spin() {
+    const float base[12] = {2, 0, 0, 0, 1, 0, 0, 0, 3, 5, 6, 7};
+    float m[12];
+    edit::spin(m, base, static_cast<float>(M_PI / 2));
+    // linha 0 (2,0,0) -> (0,0,-2); linha 2 (0,0,3) -> (3,0,0); posição e linha Y intactas
+    check(std::fabs(m[0]) < 1e-6f && std::fabs(m[2] + 2) < 1e-6f, "spin: linha X");
+    check(std::fabs(m[6] - 3) < 1e-6f && std::fabs(m[8]) < 1e-6f, "spin: linha Z");
+    check(m[4] == 1 && m[9] == 5 && m[10] == 6 && m[11] == 7, "spin: Y e posição");
+}
+
+void test_edits_json() {
+    const Track track = make_track();
+    Instances inst = make_instances(6);
+    inst.matrix(1)[9] = 0.1f;          // movida (valor sem representação curta)
+    inst.matrix(3)[0] = 0.70710677f;   // girada
+    inst.hidden[5] = 1;                // apagada
+    std::size_t count = 0;
+    const std::string text = edit::edits_json(track, track.routes[0], inst, &count);
+    check(count == 3, "edits: só as alteradas");
+    const json::Value doc = json::parse(text);
+    check(doc["format"].as_string() == "dr2-track-edits" && doc["version"].as_number() == 1, "edits: cabeçalho");
+    check(doc["track"].as_string() == track.id && doc["src"].as_string() == track.src, "edits: track e src");
+    const auto& e = doc["edits"];
+    check(e.size() == 3, "edits: três entradas");
+    check(e[0]["route"].as_string() == "route_0" && e[0]["kind"].as_string() == "o" && e[0]["type"].as_string() == "cone|x",
+          "edits: kind e type sem o prefixo");
+    check(e[0]["index"].as_number() == 101 && !e[0]["deleted"].as_bool(), "edits: index é o idnum");
+    check(e[2]["kind"].as_string() == "t" && e[2]["type"].as_string() == "tree_dist_\"q\"" && e[2]["deleted"].as_bool(),
+          "edits: apagada, com aspas no nome");
+    for (std::size_t k = 0; k < 3; ++k) {
+        const std::size_t i = k == 0 ? 1 : k == 1 ? 3 : 5;
+        for (std::size_t f = 0; f < 12; ++f) {
+            check(static_cast<float>(e[k]["m"][f].as_number()) == inst.matrix(i)[f], "edits: m exato em float32");
+            check(static_cast<float>(e[k]["m0"][f].as_number()) == inst.m0[i * 12 + f], "edits: m0 exato em float32");
+        }
+    }
+    inst = make_instances(2);
+    check(edit::edits_json(track, track.routes[0], inst, &count).find("\"edits\":[\n]") != std::string::npos && count == 0,
+          "edits: nada alterado, lista vazia");
+}
+
+void test_game_folder() {
+    check(edit::inside_game_folder("/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0/x.json"), "pasta do jogo: dentro");
+    check(edit::inside_game_folder("/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0"), "pasta do jogo: a própria");
+    check(edit::inside_game_folder("/home/x/.steam/steamapps/common/dirt rally 2.0/sub/a.json"), "pasta do jogo: sem diferenciar maiúsculas");
+    check(!edit::inside_game_folder("build/uiview/saves/pista.edits.json"), "pasta do jogo: build/ é permitido");
+    bool refused = false;
+    try {
+        edit::write_text("/tmp/x/steamapps/common/DiRT Rally 2.0/edits.json", "{}");
+    } catch (const std::runtime_error&) {
+        refused = true;
+    }
+    check(refused, "pasta do jogo: write_text recusa");
+}
+
+}  // namespace
+
+int main() {
+    test_history();
+    test_spin();
+    test_edits_json();
+    test_game_folder();
+    std::printf("edit_test OK (%d verificações)\n", checks);
+    return 0;
+}

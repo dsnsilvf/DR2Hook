@@ -35,6 +35,11 @@ add_library(dr2core STATIC
 )
 target_include_directories(dr2core PUBLIC src)
 
+# edit: histórico e edits.json. Só dr2core: nada de GL.
+add_library(dr2edit STATIC src/edit/history.cpp src/edit/edits_json.cpp)
+target_include_directories(dr2edit PUBLIC src)
+target_link_libraries(dr2edit PUBLIC dr2core)
+
 # render: GL, câmera, desenho. Não conhece SDL.
 add_library(dr2render STATIC
     src/render/gl.cpp
@@ -43,16 +48,20 @@ add_library(dr2render STATIC
     src/render/texture.cpp
     src/render/lines.cpp
     src/render/instances.cpp
+    src/render/pick.cpp
 )
 target_include_directories(dr2render PUBLIC src)
 target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers PRIVATE PkgConfig::WEBP)
 
 add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp)
-target_link_libraries(viewer3d PRIVATE dr2render SDL3::SDL3)
+target_link_libraries(viewer3d PRIVATE dr2render dr2edit SDL3::SDL3)
 
 add_executable(camera_test tests/camera_test.cpp)
 target_include_directories(camera_test PRIVATE src)
 target_link_libraries(camera_test PRIVATE glm_headers)
+
+add_executable(edit_test tests/edit_test.cpp)
+target_link_libraries(edit_test PRIVATE dr2edit)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE dr2core)

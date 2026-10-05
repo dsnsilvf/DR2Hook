@@ -104,7 +104,7 @@ Em ordem provável: (1) **Polônia** com LOD e streaming de blocos; (2) portar P
 | 1 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
 | 2 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
 | 3 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
-| 4 | não iniciada |
-| 5 | não iniciada |
-| 6 | não iniciada |
-| 7 | não iniciada |
+| 4 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
+| 5 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
+| 6 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
+| 7 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |

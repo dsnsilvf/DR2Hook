@@ -58,4 +58,4 @@ Ao terminar cada passo, deixe no corpo do commit: o que moveu, o resultado de `t
 | 01 — Python em camadas | não iniciado |
 | 02 — Web em módulos | não iniciado |
 | 03 — Documentação por ferramenta | concluído na branch `claude/charming-cerf-74fjw5` (comandos conferidos só com `--help`: o jogo não estava no ambiente) |
-| Viewer 3D nativo | etapas 1–3 concluídas na branch `claude/charming-cerf-74fjw5` (Mesa llvmpipe no Xvfb; falta conferir na GPU do dono); etapa 4 em diante não iniciada |
+| Viewer 3D nativo | etapas 1–7 feitas na branch `claude/charming-cerf-74fjw5` (Mesa llvmpipe no Xvfb, pista sintética de `tools/synthtrack`); falta conferir na Montalegre e na GPU do dono |
