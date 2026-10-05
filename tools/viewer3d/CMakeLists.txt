@@ -23,6 +23,15 @@ else()
     add_compile_options(-Wall -Wextra)
 endif()
 
+# core: formatos exportados pelo Python. Só a biblioteca padrão: nada de SDL, GL, GLEW ou GLM.
+add_library(dr2core STATIC
+    src/core/io.cpp
+    src/core/json.cpp
+    src/core/dr2m.cpp
+    src/core/track.cpp
+)
+target_include_directories(dr2core PUBLIC src)
+
 # render: GL, câmera, desenho. Não conhece SDL.
 add_library(dr2render STATIC src/render/gl.cpp)
 target_include_directories(dr2render PUBLIC src)
@@ -34,3 +43,12 @@ target_link_libraries(viewer3d PRIVATE dr2render SDL3::SDL3)
 add_executable(camera_test tests/camera_test.cpp)
 target_include_directories(camera_test PRIVATE src)
 target_link_libraries(camera_test PRIVATE glm_headers)
+
+add_executable(core_tests tests/core_tests.cpp)
+target_link_libraries(core_tests PRIVATE dr2core)
+
+# Regra de camadas: dr2core não liga nada.
+get_target_property(_dr2core_links dr2core LINK_LIBRARIES)
+if(_dr2core_links)
+    message(FATAL_ERROR "dr2core não pode ligar outras bibliotecas: ${_dr2core_links}")
+endif()
