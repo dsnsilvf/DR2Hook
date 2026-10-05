@@ -698,9 +698,41 @@ void LogStageEntries(const char *when) {
   Logger::Info(line);
 }
 
+// Teste de limite: o 2o passe de SpawnStageVehicles pula a entrada de fantasma
+// com +0xb4 = 1 (as entradas 3 a 5 chegam assim). Se existir
+// dr2hook_ghost_cars.txt com N, desmarca ate haver N entradas de fantasma
+// liberadas; sem arquivo, nada muda.
+void UnflagGhostEntries() {
+  int want = 0;
+  if (FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
+    if (std::fscanf(f, "%d", &want) != 1) want = 0;
+    std::fclose(f);
+  }
+  if (want <= 0) return;
+  uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
+  const uint32_t count = Read<uint32_t>(session, 0x40);
+  uint8_t *entries = Read<uint8_t *>(session, 0x30);
+  if (count > 64 || !UsablePointer(reinterpret_cast<uintptr_t>(entries))) return;
+  int open = 0, cleared = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint8_t *e = Read<uint8_t *>(entries, i * 8);
+    if (!UsablePointer(reinterpret_cast<uintptr_t>(e)) || Read<uint32_t>(e, 0x2c) != 1) continue;
+    if (e[0xb4] == 0) { ++open; continue; }
+    if (open >= want) break;
+    e[0xb4] = 0;
+    ++open;
+    ++cleared;
+  }
+  Logger::Info("GhostLab[limite]: pedidos " + std::to_string(want) +
+               " carros fantasma; " + std::to_string(cleared) + " entrada(s) liberada(s).");
+}
+
 void DetourSpawnVehicles(void *ctx) {
   InFlight guard;
   LogStageEntries("antes do spawn");
+  UnflagGhostEntries();
+  LogStageEntries("apos liberar");
   g_originalSpawn(ctx);
   LogStageEntries("depois do spawn");
 }
