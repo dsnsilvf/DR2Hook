@@ -450,6 +450,30 @@ def _load_js(path: str, var: str) -> Any:
 def _copy_web(out: str) -> None:
     for name in os.listdir(os.path.join(HERE, "web")):
         shutil.copy(os.path.join(HERE, "web", name), os.path.join(out, name))
+    _bust_cache(out)
+
+
+def _bust_cache(out: str) -> None:
+    """`?v=<hash>` nos scripts e no CSS do index.html: o navegador não reaproveita uma versão velha."""
+    import hashlib
+    import re
+
+    path = os.path.join(out, "index.html")
+
+    def stamp(match: re.Match) -> str:
+        attr, ref = match.group(1), match.group(2)
+        file = os.path.join(out, ref)
+        if not os.path.isfile(file):
+            return match.group(0)
+        with open(file, "rb") as fh:
+            digest = hashlib.md5(fh.read()).hexdigest()[:8]
+        return f'{attr}="{ref}?v={digest}"'
+
+    with open(path, encoding="utf-8") as fh:
+        html = fh.read()
+    html = re.sub(r'(src|href)="([^":?]+\.(?:js|css))(?:\?v=\w+)?"', stamp, html)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html)
 
 
 def run(game: str, out: str, force_textures: bool = False, scene_images_only: bool = False,
