@@ -19,5 +19,10 @@ else()
     add_compile_options(-Wall -Wextra)
 endif()
 
+# render: GL, câmera, desenho. Não conhece SDL.
+add_library(dr2render STATIC src/render/gl.cpp)
+target_include_directories(dr2render PUBLIC src)
+target_link_libraries(dr2render PUBLIC GLEW::GLEW OpenGL::GL)
+
 add_executable(viewer3d src/app/main.cpp)
-target_link_libraries(viewer3d PRIVATE SDL3::SDL3 GLEW::GLEW OpenGL::GL)
+target_link_libraries(viewer3d PRIVATE dr2render SDL3::SDL3)

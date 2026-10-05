@@ -42,12 +42,16 @@ DISPLAY=:99 ./build/viewer3d/viewer3d --frames 120
 | Opção | Efeito |
 | --- | --- |
 | `--frames N` | roda `N` quadros, imprime `OK renderer=<GL_RENDERER> gl=<GL_VERSION> frames=N` e sai com 0 |
+| `--screenshot arq.ppm` | com `--frames`, grava o último quadro em PPM (P6) antes de sair |
+
+Ver o PPM: `python3 -c "from PIL import Image; Image.open('arq.ppm').save('arq.png')"`.
 
 ## Verificado
 
 | Etapa | Ambiente | Resultado |
 | --- | --- | --- |
 | 1 | Ubuntu 24.04, Xvfb, SDL 3.2.24, GLEW 2.2.0, Mesa 25.2.8 | `OK renderer=llvmpipe (LLVM 20.1.2, 256 bits) gl=4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.2 frames=120` |
+| 2 | o mesmo | `--frames 30 --screenshot`: canto `(140, 173, 209)`, 54 196 cores distintas, triângulo vermelho/verde/azul |
 
 ## Ideias
 
