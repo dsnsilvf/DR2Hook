@@ -30,6 +30,7 @@ add_library(dr2core STATIC
     src/core/io.cpp
     src/core/json.cpp
     src/core/dr2m.cpp
+    src/core/dr2i.cpp
     src/core/track.cpp
 )
 target_include_directories(dr2core PUBLIC src)
@@ -41,6 +42,7 @@ add_library(dr2render STATIC
     src/render/terrain.cpp
     src/render/texture.cpp
     src/render/lines.cpp
+    src/render/instances.cpp
 )
 target_include_directories(dr2render PUBLIC src)
 target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers PRIVATE PkgConfig::WEBP)

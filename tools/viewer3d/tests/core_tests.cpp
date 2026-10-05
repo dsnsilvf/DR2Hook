@@ -7,6 +7,7 @@
 // expected.json (pista sintética de `python -m tools.synthtrack`, contagens lidas pelo unpack_geom
 // do Python), confere também contra ele; na Montalegre, confere os números do plano.
 #undef NDEBUG
+#include "core/dr2i.hpp"
 #include "core/dr2m.hpp"
 #include "core/io.hpp"
 #include "core/json.hpp"
@@ -116,6 +117,43 @@ void test_dr2m_synthetic() {
     check(throws([&] { dr2::read_dr2m(huge); }), "dr2m: contagem absurda lança sem alocar");
 }
 
+// DR2I montado à mão: n instâncias com tipo k % types.
+std::vector<std::uint8_t> tiny_dr2i(std::uint32_t n, std::uint16_t types) {
+    std::vector<std::uint8_t> b = {'D', 'R', '2', 'I'};
+    auto put = [&](const void* p, std::size_t len) { b.insert(b.end(), static_cast<const std::uint8_t*>(p), static_cast<const std::uint8_t*>(p) + len); };
+    put(&n, 4);
+    for (std::uint32_t k = 0; k < n; ++k) {
+        const auto t = static_cast<std::uint16_t>(k % types);
+        put(&t, 2);
+    }
+    while (b.size() % 4) b.push_back(0);
+    for (std::uint32_t k = 0; k < n; ++k) put(&k, 4);
+    for (std::uint32_t k = 0; k < n; ++k) {
+        const float m[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, static_cast<float>(k), 2, 3};
+        put(m, sizeof m);
+    }
+    return b;
+}
+
+void test_dr2i_synthetic() {
+    for (std::uint32_t n : {0u, 1u, 3u, 4u}) {  // ímpar e par: o preenchimento do uint16[n] muda
+        const auto data = tiny_dr2i(n, 2);
+        const auto inst = dr2::read_dr2i(data, 2);
+        check(inst.n == n && inst.type.size() == n && inst.m.size() == 12 * n && inst.hidden.size() == n, "dr2i: tamanhos");
+        if (n) check(inst.idnum[n - 1] == n - 1 && inst.matrix(n - 1)[9] == static_cast<float>(n - 1) && inst.m0 == inst.m, "dr2i: valores");
+    }
+    const auto data = tiny_dr2i(3, 2);
+    check(throws([&] { dr2::read_dr2i(data, 1); }, "tipo"), "dr2i: tipo fora de type_order lança");
+    std::vector<std::uint8_t> trunc(data.begin(), data.end() - 1);
+    check(throws([&] { dr2::read_dr2i(trunc, 2); }, "tamanho"), "dr2i: truncado lança");
+    auto longer = data;
+    longer.push_back(0);
+    check(throws([&] { dr2::read_dr2i(longer, 2); }, "tamanho"), "dr2i: sobra no fim lança");
+    auto magic = data;
+    magic[3] = 'M';
+    check(throws([&] { dr2::read_dr2i(magic, 2); }, "magia"), "dr2i: magia errada lança");
+}
+
 void test_track(const std::string& dir) {
     const dr2::Track track = dr2::read_track(dir);
     const dr2::Route& r0 = track.routes.at(0);
@@ -153,7 +191,19 @@ void test_track(const std::string& dir) {
         check(track.materials.size() == exp["materials"].as_number(), "track: número de materiais");
         std::printf("  expected.json (oráculo Python): igual\n");
     }
+    const auto inst = dr2::read_dr2i(dr2::read_file(dr2::join_path(dir, "inst_" + r0.name + ".bin")), track.types.size());
+    std::printf("  inst_%s.bin: %u instâncias, %zu tipos\n", r0.name.c_str(), inst.n, track.types.size());
+    check(inst.n == r0.instances, "track: DR2I tem routes[0].instances instâncias");
+    const auto objects = dr2::read_dr2m(dr2::read_file(dr2::join_path(dir, "objects.bin")));
+    for (const auto& ty : track.types) check(ty.first + ty.count <= objects.size(), "track: faixa do tipo dentro de objects.bin");
+    if (std::filesystem::exists(expected_path)) {
+        const auto exp = dr2::json::parse_file(expected_path);
+        check(inst.n == exp["instances"].as_number() && objects.size() == exp["objects"]["meshes"].as_number(),
+              "track: instâncias e objects.bin iguais ao Python");
+    }
+
     if (track.id == "portugal__montalegre_rallycross") {
+        check(inst.n == 2897 && objects.size() == 802, "montalegre: 2897 instâncias, 802 malhas em objects.bin");
         check(t.meshes == 1324 && t.verts == 428789 && t.tris == 557900, "montalegre: 1324 / 428 789 / 557 900");
         check(track.materials.size() == 820, "montalegre: 820 materiais");
         std::printf("  Montalegre: números do plano conferem\n");
@@ -175,6 +225,7 @@ int main(int argc, char** argv) {
     try {
         test_json();
         test_dr2m_synthetic();
+        test_dr2i_synthetic();
         if (!track_dir.empty()) test_track(track_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FALHOU com exceção: %s\n", e.what());

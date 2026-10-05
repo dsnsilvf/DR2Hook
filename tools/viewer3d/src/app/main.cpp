@@ -1,7 +1,8 @@
 // DR2 Viewer3D: janela SDL3 com contexto OpenGL 3.3 core e câmera orbital do Track Explorer.
 //
-//   viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1]
+//   viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--camera yaw,pitch,dist,x,y,z]
 //
+// --camera põe a câmera num estado exato (para comparar capturas com o viewer web).
 // Sem --track, mostra a cena de teste (cubo e grade). Com --track, abre a pista exportada em DIR
 // (track.json, terrain_<n>.bin, ...). Com --frames, roda N quadros, imprime
 // "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
@@ -31,6 +32,8 @@ struct Options {
     const char* screenshot = nullptr;
     const char* track = nullptr;
     int vsync = 1;
+    bool has_camera = false;
+    float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
 };
 
 bool parse_args(int argc, char** argv, Options& opt) {
@@ -46,10 +49,17 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.screenshot = argv[++i];
         } else if (std::strcmp(argv[i], "--track") == 0 && i + 1 < argc) {
             opt.track = argv[++i];
+        } else if (std::strcmp(argv[i], "--camera") == 0 && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &opt.camera[0], &opt.camera[1], &opt.camera[2], &opt.camera[3],
+                            &opt.camera[4], &opt.camera[5]) != 6) {
+                std::fprintf(stderr, "--camera precisa de yaw,pitch,dist,x,y,z\n");
+                return false;
+            }
+            opt.has_camera = true;
         } else if (std::strcmp(argv[i], "--vsync") == 0 && i + 1 < argc) {
             opt.vsync = std::atoi(argv[++i]) != 0 ? 1 : 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--camera yaw,pitch,dist,x,y,z]\n");
             return false;
         }
     }
@@ -304,6 +314,12 @@ int run(const Options& opt) {
     } else {
         scene = std::make_unique<TestScene>(cam.target);
     }
+    if (opt.has_camera) {
+        cam.yaw = opt.camera[0];
+        cam.pitch = opt.camera[1];
+        cam.dist = opt.camera[2];
+        cam.target = {opt.camera[3], opt.camera[4], opt.camera[5]};
+    }
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
@@ -332,7 +348,7 @@ int run(const Options& opt) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
         const glm::mat4 view_proj = cam.proj(aspect) * cam.view();
-        if (track) track->draw(view_proj);
+        if (track) track->draw(view_proj, cam);
         else scene->draw(view_proj);
         dr2::gl::check("quadro");
 

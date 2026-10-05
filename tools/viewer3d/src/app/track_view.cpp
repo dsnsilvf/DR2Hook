@@ -3,6 +3,7 @@
 #include "core/dr2m.hpp"
 #include "core/io.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -42,6 +43,16 @@ TrackView::TrackView(const std::string& dir) : track_(read_track(dir)), textures
     const double upload_s = seconds_since(t0);
     lines_ = std::make_unique<render::RouteLines>(*route_);
 
+    t0 = std::chrono::steady_clock::now();
+    const std::vector<Mesh> lib = read_dr2m(read_file(join_path(dir, "objects.bin")));
+    inst_ = read_dr2i(read_file(join_path(dir, "inst_" + route_->name + ".bin")), track_.types.size());
+    objects_ = std::make_unique<render::InstanceRenderer>(track_, lib, inst_);
+    glFinish();
+    std::size_t with_mesh = 0;
+    for (const auto& ty : objects_->types()) with_mesh += !ty.empty;
+    std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha), %u instâncias; %.3f s\n", lib.size(),
+                 objects_->types().size(), with_mesh, inst_.n, seconds_since(t0));
+
     // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
     t0 = std::chrono::steady_clock::now();
     for (const auto& part : terrain_->parts()) textures_.for_material(part.material);
@@ -70,22 +81,30 @@ bool TrackView::key(SDL_Keycode key, render::OrbitCamera& cam) {
     switch (key) {
     case SDLK_F: frame_route(cam); return true;
     case SDLK_F1: show_terrain_ = !show_terrain_; return true;
+    case SDLK_F2: layers_.obj = !layers_.obj; return true;
+    case SDLK_F3: layers_.tree = !layers_.tree; return true;
+    case SDLK_F4: layers_.dist = !layers_.dist; return true;
+    case SDLK_LEFTBRACKET: draw_dist_ = std::max(100.0f, draw_dist_ - 100.0f); return true;
+    case SDLK_RIGHTBRACKET: draw_dist_ = std::min(4000.0f, draw_dist_ + 100.0f); return true;
     case SDLK_G: show_gates_ = !show_gates_; return true;
     case SDLK_I: show_ai_ = !show_ai_; return true;
     default: return false;
     }
 }
 
-void TrackView::draw(const glm::mat4& view_proj) {
+void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam) {
+    objects_->cull(inst_, cam.target, cam.dist, draw_dist_, layers_, edit_rev_);
     shader_.use();
     shader_.set_view_proj(view_proj);
     if (show_terrain_) terrain_->draw(shader_, &textures_);
+    objects_->draw(shader_, textures_);
     lines_->draw(shader_, show_gates_, show_ai_);
 }
 
 std::string TrackView::title() const {
     return route_->name + " | " + thousands(terrain_->meshes()) + " malhas | " + thousands(terrain_->vertices()) +
-           " vértices | " + thousands(terrain_->triangles()) + " tri";
+           " vértices | " + thousands(terrain_->triangles()) + " tri | inst " + thousands(objects_->visible()) + "/" +
+           thousands(inst_.n) + " | " + std::to_string(static_cast<int>(draw_dist_)) + " m";
 }
 
 }  // namespace dr2::app
