@@ -201,7 +201,7 @@ function carRows(q) {
     rows.push(`<div class="row tree-row${cv.selected === key ? " on" : ""}${off ? " off" : ""}" data-id="${esc(key)}" style="padding-left:${6 + depth * 14}px">
       <span class="tw caret" data-act="toggle" data-uid="${n.uid}">${has ? (open ? "▾" : "▸") : ""}</span>
       <span class="tw eye" data-act="eye" data-uid="${n.uid}" title="${esc(t("car.eye"))}">${eyeOn(cv.hidden.has(n.uid))}</span>
-      <span class="nm">${esc(label)}</span><span class="cnt">${n._tris ? n._tris.toLocaleString("pt-BR") : ""}</span></div>`);
+      <span class="nm" title="${esc(label)}${n._tris ? esc(` · ${n._verts.toLocaleString("pt-BR")} v · ${n._tris.toLocaleString("pt-BR")} △`) : ""}">${esc(label)}</span><span class="cnt">${n._tris ? n._tris.toLocaleString("pt-BR") : ""}</span></div>`);
     if (!open) return;
     for (const s of n.slices) {
       if (q && !carNodeMatches({ id: "", slices: [s], children: [] }, q) && !n.id.toLowerCase().includes(q)) continue;
@@ -209,7 +209,7 @@ function carRows(q) {
       const soff = off || cv.hiddenSlices.has(s.key);
       rows.push(`<div class="row tree-row slice${cv.selected === sk ? " on" : ""}${soff ? " off" : ""}${s.ok ? "" : " bad"}" data-id="${esc(sk)}" style="padding-left:${6 + (depth + 1) * 14}px">
         <span class="tw"></span><span class="tw eye" data-act="seye" data-key="${s.key}" title="${esc(t("car.eye"))}">${eyeOn(cv.hiddenSlices.has(s.key))}</span>
-        <span class="nm">${esc(s.material)}</span><span class="cnt">${s.tris.toLocaleString("pt-BR")}</span></div>`);
+        <span class="nm" title="${esc(s.material)} · ${s.vc.toLocaleString("pt-BR")} v · ${s.tris.toLocaleString("pt-BR")} △">${esc(s.material)}</span><span class="cnt">${s.tris.toLocaleString("pt-BR")}</span></div>`);
     }
     for (const c of n.children) visit(c, depth + 1, off);
   };
@@ -237,7 +237,8 @@ function carSelect(id) {
   cv.dirty = true;
   renderList();
   carInspect();
-  carSyncBar();
+  inspectEl.scrollTop = 0;
+  carSyncBar(); carStatus();
 }
 function carToggleHidden(uid) {
   if (cv.hidden.has(uid)) cv.hidden.delete(uid); else cv.hidden.add(uid);
@@ -494,26 +495,154 @@ function carCamera() {
   return { eye, look, right: [rx, 0, rz], up };
 }
 
+// ------------------------------------------------------------ painéis redimensionáveis
+
+// Divisória arrastável reutilizável: controla uma variável CSS de largura de um painel vizinho.
+// o: { root, panel, prop, edge: "left"|"right" (lado do painel), min, max, def, key, other(), reserve }
+function makeResizer(handle, o) {
+  const read = () => { try { return Number(localStorage.getItem(o.key)) || 0; } catch (e) { return 0; } };
+  let last = 0, want = 0;
+  const clamp = (w) => {
+    const room = o.root.clientWidth - (o.other ? o.other() : 0) - o.reserve;
+    return Math.round(Math.max(o.min, Math.min(o.max, room, w)));
+  };
+  const set = (w, save, keep) => {
+    if (!keep) want = w;
+    last = clamp(w);
+    o.root.style.setProperty(o.prop, last + "px");
+    handle.setAttribute("aria-valuenow", String(last));
+    if (save) { try { localStorage.setItem(o.key, String(last)); } catch (e) { /* sem armazenamento */ } }
+  };
+  set(read() || o.def, false);
+  handle.setAttribute("aria-valuemin", String(o.min));
+  handle.setAttribute("aria-valuemax", String(o.max));
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("drag"); document.body.classList.add("rz-drag");
+    const rect = o.root.getBoundingClientRect();
+    const move = (ev) => set(o.edge === "left" ? ev.clientX - rect.left : rect.right - ev.clientX, false);
+    const up = () => {
+      handle.classList.remove("drag"); document.body.classList.remove("rz-drag");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      set(last, true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+  handle.addEventListener("dblclick", () => { set(o.def, false); try { localStorage.removeItem(o.key); } catch (e) { /* ok */ } });
+  handle.addEventListener("keydown", (e) => {
+    const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    set(last + 16 * dir * (o.edge === "left" ? 1 : -1), true);
+  });
+  return { refit: () => set(want || o.def, false, true) };
+}
+
 // ------------------------------------------------------------ barra, palco e inspector
 
+function carSelLabel() {
+  const n = carSelNode();
+  if (!cv.selected || !n) return "";
+  const [kind, key] = cv.selected.split(":");
+  if (kind === "s") { const s = cv.slices.get(key); return `${n.id} › ${s.material}`; }
+  return n.id;
+}
 function carStatus() {
   const el = document.getElementById("car-note");
   if (!el) return;
+  const sel = document.getElementById("car-sel");
+  if (sel) { sel.textContent = carSelLabel(); sel.title = sel.textContent; }
   if (cv.status) { el.textContent = cv.status; return; }
   const tris = cv.draw.reduce((a, d) => a + d.s.tris, 0);
   el.textContent = t("car.status", { slices: cv.draw.length, tris: tris.toLocaleString("pt-BR") }) + " · " + t("mdl.drag");
+  el.title = el.textContent;
 }
+
+const CAR_ICONS = {
+  wire: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+  mats: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
+  glass: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 15l6-6M12 17l5-5"/>',
+  flip: '<path d="M8 4v16M8 4L4 8M8 4l4 4M16 20V4M16 20l-4-4M16 20l4-4"/>',
+  reset: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/>',
+  focus: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><circle cx="12" cy="12" r="2"/>',
+  solo: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  show: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  insp: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  tree: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  expand: '<path d="M6 9l6 6 6-6"/>',
+  collapse: '<path d="M6 15l6-6 6 6"/>',
+};
+const carIco = (k) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CAR_ICONS[k]}</svg>`;
+
+// Ações da toolbar e do overlay do viewport (as mesmas, ligadas por data-car).
+const CAR_ACTS = {
+  wire: { key: "car.wire", toggle: () => { cv.wire = !cv.wire; }, on: () => cv.wire },
+  mats: { key: "car.mats", toggle: () => { cv.flat = !cv.flat; }, on: () => !cv.flat },
+  glass: { key: "car.glass", toggle: () => { cv.glass = !cv.glass; }, on: () => cv.glass },
+  flip: { key: "mdl.flip", toggle: () => { cv.flip = !cv.flip; }, on: () => cv.flip },
+  reset: { key: "car.reset", run: carResetCamera },
+  focus: { key: "car.focus", run: () => carFrame(carSelNode()), need: true },
+  solo: { key: "car.solo", run: () => { cv.solo = !cv.solo; cv.dirty = true; }, on: () => cv.solo, need: true },
+  show: { key: "car.showall", run: () => { cv.hidden.clear(); cv.hiddenSlices.clear(); cv.solo = false; cv.dirty = true; renderList(); } },
+};
+const carBtn = (name) => `<button type="button" class="tb-btn" data-car="${name}" title="${esc(t(CAR_ACTS[name].key))}" aria-label="${esc(t(CAR_ACTS[name].key))}">${carIco(name)}</button>`;
+
 function carSyncBar() {
-  const solo = document.getElementById("car-solo");
-  if (solo) { solo.classList.toggle("on", cv.solo); solo.disabled = !cv.selected; }
-  const focus = document.getElementById("car-focus");
-  if (focus) focus.disabled = !cv.selected;
+  document.querySelectorAll("[data-car]").forEach((b) => {
+    const a = CAR_ACTS[b.dataset.car];
+    if (a.on) { b.classList.toggle("on", !!a.on()); b.setAttribute("aria-pressed", String(!!a.on())); }
+    if (a.need) b.disabled = !cv.selected;
+  });
   const lod = document.getElementById("car-lod");
   if (lod && cv.data) {
     lod.innerHTML = [...cv.data.lods.map((l) => l.name), "ALL"].map((n) => `<option value="${esc(n)}"${n === cv.lod ? " selected" : ""}>${esc(n === "ALL" ? t("mdl.all") : n)}</option>`).join("");
   }
   const sel = document.getElementById("car-open");
   if (sel) sel.value = cv.carId || "";
+  const ws = cv.ws;
+  if (ws) {
+    const i = ws.querySelector('[data-pane="insp"]'), tr = ws.querySelector('[data-pane="tree"]');
+    if (i) i.classList.toggle("on", !ws.classList.contains("insp-hidden"));
+    if (tr) tr.classList.toggle("on", !ws.classList.contains("tree-hidden"));
+  }
+}
+
+// Move a árvore (.side) e o inspector (#inspect) para dentro do workspace e de volta ao grid global.
+function carDock(on) {
+  const layout = document.querySelector(".layout");
+  const side = document.querySelector(".side"), insp = document.getElementById("inspect");
+  const ws = cv.ws;
+  if (on && ws && !ws.contains(side)) {
+    const body = ws.querySelector(".car-body");
+    body.prepend(side); body.append(insp);
+    if (!cv.treeTools) {
+      cv.treeTools = document.createElement("div");
+      cv.treeTools.className = "tree-tools";
+      cv.treeTools.innerHTML = `<button type="button" class="tb-btn" data-tree="expand" title="${esc(t("car.tree.expand"))}">${carIco("expand")}</button>
+        <button type="button" class="tb-btn" data-tree="collapse" title="${esc(t("car.tree.collapse"))}">${carIco("collapse")}</button><span class="grow"></span>`;
+      cv.treeTools.addEventListener("click", carTreeTools);
+    }
+    side.insertBefore(cv.treeTools, document.getElementById("list"));
+    layout.classList.add("docked");
+    if (cv.rz) cv.rz.forEach((r) => r.refit());
+  } else if (!on) {
+    layout.classList.remove("docked");
+    if (cv.treeTools) cv.treeTools.remove();
+    if (!layout.contains(side) || ws && ws.contains(side)) { layout.insertBefore(side, layout.firstChild); layout.append(insp); }
+  }
+}
+function carTreeTools(e) {
+  const b = e.target.closest("[data-tree]");
+  if (!b || !cv.data) return;
+  if (b.dataset.tree === "expand") cv.nodes.forEach((n) => { if (n.children.length || n.slices.length) cv.expanded.add(n.uid); });
+  else { cv.expanded.clear(); cv.expanded.add(cv.data.tree.uid); }
+  renderList();
 }
 
 function ensureCarStage() {
@@ -521,27 +650,37 @@ function ensureCarStage() {
   cv.gen++;
   cv.gl = null; cv.res.clear(); cv.textures.clear(); cv.loadedId = null;
   const options = CAR_LIST.map((m) => `<option value="${esc(m.id)}">${esc(m.n)} · ${esc(carKindLabel(m))}</option>`).join("");
-  contentEl.innerHTML = `<div class="model-stage">
-    <div class="model-bar car-bar">
-      <label>${esc(t("car.open"))} <select id="car-open">${options}</select></label>
-      <label>${esc(t("car.lod"))} <select id="car-lod"></select></label>
-      <label>${esc(t("mdl.surface"))}
-        <select id="car-surface">
-          <option value="tarmac">${esc(t("mdl.tarmac"))}</option><option value="gravel">${esc(t("mdl.gravel"))}</option>
-          <option value="snow">${esc(t("mdl.snow"))}</option><option value="all">${esc(t("mdl.all"))}</option>
-        </select></label>
-      <label><input type="checkbox" id="car-wire"> ${esc(t("car.wire"))}</label>
-      <label><input type="checkbox" id="car-mats" checked> ${esc(t("car.mats"))}</label>
-      <label><input type="checkbox" id="car-glass" checked> ${esc(t("car.glass"))}</label>
-      <label><input type="checkbox" id="car-flip"> ${esc(t("mdl.flip"))}</label>
-      <button id="car-reset">${esc(t("car.reset"))}</button>
-      <button id="car-focus" disabled>${esc(t("car.focus"))}</button>
-      <button id="car-solo" disabled>${esc(t("car.solo"))}</button>
-      <button id="car-show">${esc(t("car.showall"))}</button>
+  const paneBtn = (pane, icon, key) => `<button type="button" class="tb-btn" data-pane="${pane}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${carIco(icon)}</button>`;
+  const rz = (id) => `<div class="rz" id="${id}" role="separator" aria-orientation="vertical" tabindex="0" title="${esc(t("car.resize"))}"></div>`;
+  contentEl.innerHTML = `<div class="car-ws" id="car-ws">
+    <div class="car-tb" role="toolbar">
+      ${paneBtn("tree", "tree", "car.tool.tree")}
+      <select id="car-open" title="${esc(t("car.open"))}">${options}</select>
+      <select id="car-lod" title="${esc(t("car.lod"))}"></select>
+      <select id="car-surface" title="${esc(t("mdl.surface"))}">
+        <option value="tarmac">${esc(t("mdl.tarmac"))}</option><option value="gravel">${esc(t("mdl.gravel"))}</option>
+        <option value="snow">${esc(t("mdl.snow"))}</option><option value="all">${esc(t("mdl.all"))}</option>
+      </select>
+      <span class="tb-sep"></span>
+      ${["wire", "mats", "glass", "flip"].map(carBtn).join("")}
+      <span class="tb-sep"></span>
+      ${["reset", "focus", "solo", "show"].map(carBtn).join("")}
+      <span class="tb-grow"></span>
+      ${paneBtn("insp", "insp", "car.tool.insp")}
     </div>
-    <canvas class="gl" id="car-view"></canvas>
-    <div class="model-foot" id="car-note"></div>
+    <div class="car-body">
+      ${rz("car-rz1")}
+      <div class="car-vp">
+        <canvas class="gl" id="car-view"></canvas>
+        <div class="vp-tools" role="toolbar" aria-label="${esc(t("car.tool.view"))}">
+          ${["reset", "focus", "solo", "show"].map(carBtn).join("")}<span class="tb-sep"></span>${["wire", "mats"].map(carBtn).join("")}
+        </div>
+      </div>
+      ${rz("car-rz2")}
+    </div>
+    <div class="car-sb"><span id="car-note"></span><span id="car-sel"></span></div>
   </div>`;
+  const ws = cv.ws = document.getElementById("car-ws");
   const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
   on("car-open", "change", (e) => { openCar(e.target.value); history.replaceState(null, "", "#k=" + encodeURIComponent(e.target.value)); });
   on("car-lod", "change", (e) => {
@@ -549,18 +688,49 @@ function ensureCarStage() {
     renderFilters(); renderList(); carFrame(null);
   });
   on("car-surface", "change", (e) => { cv.variant = e.target.value; cv.dirty = true; });
-  on("car-wire", "change", (e) => { cv.wire = e.target.checked; });
-  on("car-mats", "change", (e) => { cv.flat = !e.target.checked; });
-  on("car-glass", "change", (e) => { cv.glass = e.target.checked; });
-  on("car-flip", "change", (e) => { cv.flip = e.target.checked; });
-  on("car-reset", "click", carResetCamera);
-  on("car-focus", "click", () => carFrame(carSelNode()));
-  on("car-solo", "click", () => { cv.solo = !cv.solo; cv.dirty = true; carSyncBar(); });
-  on("car-show", "click", () => { cv.hidden.clear(); cv.hiddenSlices.clear(); cv.solo = false; cv.dirty = true; renderList(); carSyncBar(); });
+  ws.addEventListener("click", (e) => {
+    const pane = e.target.closest("[data-pane]");
+    if (pane) { ws.classList.toggle(pane.dataset.pane === "tree" ? "tree-hidden" : "insp-hidden"); carSyncBar(); return; }
+    const b = e.target.closest("[data-car]");
+    if (!b || b.disabled) return;
+    const a = CAR_ACTS[b.dataset.car];
+    if (a.toggle) a.toggle(); else a.run();
+    carSyncBar();
+  });
+
+  // larguras e breakpoints: viewport absorve; abaixo de 860px o inspector vira drawer, abaixo de 640px a árvore também
+  const body = ws.querySelector(".car-body");
+  const side = document.querySelector(".side"), insp = document.getElementById("inspect");
+  const inFlow = (el) => (el.isConnected && el.offsetParent && getComputedStyle(el).position !== "absolute" ? el.offsetWidth : 0);
+  cv.rz = [
+    makeResizer(document.getElementById("car-rz1"), { root: body, panel: side, prop: "--tree-w", edge: "left", min: 200, max: 480, def: 300, key: "car.treeW", reserve: 240 + 12, other: () => inFlow(insp) }),
+    makeResizer(document.getElementById("car-rz2"), { root: body, panel: insp, prop: "--insp-w", edge: "right", min: 300, max: 550, def: 400, key: "car.inspW", reserve: 240 + 12, other: () => inFlow(side) }),
+  ];
+  const mqI = window.matchMedia("(max-width: 860px)"), mqT = window.matchMedia("(max-width: 640px)");
+  const adapt = () => {
+    ws.classList.toggle("idrawer", mqI.matches);
+    ws.classList.toggle("tdrawer", mqT.matches);
+    ws.classList.toggle("insp-hidden", mqI.matches);
+    ws.classList.toggle("tree-hidden", mqT.matches);
+    cv.rz.forEach((r) => r.refit()); carSyncBar();
+  };
+  mqI.addEventListener("change", adapt); mqT.addEventListener("change", adapt);
+  window.addEventListener("resize", () => cv.rz.forEach((r) => r.refit()));
+  adapt();
   try { carGL(); } catch (err) { document.getElementById("car-note").textContent = String((err && err.message) || err); }
 }
 
+// ------------------------------------------------------------ inspector
+
 const carNum = (v, d = 4) => (typeof v === "number" ? String(Math.round(v * 10 ** d) / 10 ** d) : String(v));
+const carInt = (v) => (typeof v === "number" ? v.toLocaleString("pt-BR") : String(v));
+// Linha rótulo/valor. mode: "mono", "mono ell" (uma linha, ellipsis + tooltip), "mono wrap" (até 3 linhas), "html".
+function carKv(k, v, mode = "") {
+  const text = v == null || v === "" ? "—" : String(v);
+  if (mode === "html") return `<div class="k" title="${esc(k)}">${esc(k)}</div><div class="v">${text}</div>`;
+  return `<div class="k" title="${esc(k)}">${esc(k)}</div><div class="v${mode ? " " + mode : ""}" title="${esc(text)}">${esc(text)}</div>`;
+}
+const carKvs = (rows) => `<div class="kv">${rows.join("")}</div>`;
 function carMatrix(m) {
   const rows = [];
   for (let r = 0; r < 4; r++) rows.push(m.slice(r * 4, r * 4 + 4).map((v) => carNum(v, 4).padStart(9)).join(" "));
@@ -568,86 +738,159 @@ function carMatrix(m) {
 }
 function carExtra(extra) {
   const keys = Object.keys(extra || {});
-  return keys.length ? `<div class="kv">${keys.map((k) => `<div class="mono">${esc(k)}</div><div class="mono">${esc(JSON.stringify(extra[k]))}</div>`).join("")}</div>` : `<p class="muted small">—</p>`;
+  return keys.length ? carKvs(keys.map((k) => carKv(k, JSON.stringify(extra[k]), "mono wrap"))) : `<p class="muted small">—</p>`;
 }
+function carNodeOff(n) {
+  for (let p = n; p; p = p._parent) if (cv.hidden.has(p.uid)) return true;
+  return false;
+}
+
+// Preview de textura: altura fixa, fit/zoom, fundo xadrez para alpha. Os botões usam delegação (carTexClick).
+function carTexHtml(asset) {
+  const btn = (act, label, key) => `<button type="button" data-tex="${act}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${label}</button>`;
+  return `<div class="tex fit" data-bg="0" data-zoom="1">
+    <div class="tex-bar">${btn("fit", "⤢", "car.tex.fit")}${btn("actual", "1:1", "car.tex.actual")}${btn("out", "−", "car.tex.out")}${btn("in", "+", "car.tex.in")}${btn("bg", "▦", "car.tex.bg")}<span class="tex-info mono"></span></div>
+    <div class="tex-box bg-checker"><img src="${esc(asset.p)}" alt="${esc(asset.n)}" loading="lazy"></div></div>`;
+}
+const CAR_TEX_BG = ["bg-checker", "bg-dark", "bg-light"];
+function carTexUpdate(box) {
+  const img = box.querySelector("img"), info = box.querySelector(".tex-info");
+  const fit = box.classList.contains("fit");
+  const zoom = Number(box.dataset.zoom) || 1;
+  if (fit) { img.style.width = img.style.height = ""; }
+  else if (img.naturalWidth) { img.style.width = img.naturalWidth * zoom + "px"; img.style.height = img.naturalHeight * zoom + "px"; }
+  const dim = img.naturalWidth ? `${img.naturalWidth}×${img.naturalHeight}` : "";
+  info.textContent = fit ? dim : `${dim} · ${Math.round(zoom * 100)}%`;
+  box.querySelector('[data-tex="fit"]').classList.toggle("on", fit);
+  const pane = box.querySelector(".tex-box");
+  CAR_TEX_BG.forEach((c, i) => pane.classList.toggle(c, i === Number(box.dataset.bg)));
+}
+function carTexClick(e) {
+  const b = e.target.closest("[data-tex]");
+  if (!b) return;
+  const box = b.closest(".tex");
+  const act = b.dataset.tex;
+  let zoom = Number(box.dataset.zoom) || 1;
+  if (act === "fit") box.classList.add("fit");
+  else if (act === "actual") { box.classList.remove("fit"); zoom = 1; }
+  else if (act === "in" || act === "out") {
+    const img = box.querySelector("img");
+    if (box.classList.contains("fit") && img.naturalWidth) zoom = img.clientWidth / img.naturalWidth;
+    box.classList.remove("fit");
+    zoom = Math.max(0.1, Math.min(8, zoom * (act === "in" ? 1.5 : 1 / 1.5)));
+  } else if (act === "bg") box.dataset.bg = String((Number(box.dataset.bg) + 1) % CAR_TEX_BG.length);
+  box.dataset.zoom = String(zoom);
+  carTexUpdate(box);
+}
+
 function carMaterialHtml(name) {
   const m = carMaterial(name);
-  const params = Object.entries(m.params || {}).map(([k, v]) => `<div class="mono">${esc(k)}</div><div class="mono">${esc(JSON.stringify(v))}</div>`).join("");
-  const tid = carMatTexId(name);
-  const asset = tid && assetById.get(tid);
-  const declared = Object.entries(m.textures || {}).map(([k, v]) => `<div class="mono">${esc(k)}</div><div class="mono">${esc(v)}</div>`).join("");
-  return `<div class="kv">
-      <div>${t("car.shader")}</div><div class="mono">${esc(m.group || "—")}</div>
-      <div>${t("car.params")}</div><div>${m.paramCount == null ? "—" : `${m.savedCount}/${m.paramCount}`}</div>
-      <div>${t("car.blend")}</div><div>${carIsBlend(name) ? t("car.yes") : t("car.no")}</div>
-      <div>${t("mdl.textures")}</div><div class="mono">${asset ? esc(asset.n) : "—"} <span class="muted">${t("car.guessed")}</span></div>
-    </div>
-    ${asset ? `<div class="tile"><span class="pic bg-checker"><img src="${esc(asset.t)}" alt=""></span></div>` : ""}
-    ${params ? `<h3>${esc(t("car.shaderparams"))}</h3><div class="kv">${params}</div>` : ""}
-    ${declared ? `<h3>${esc(t("car.declared"))}</h3><div class="kv">${declared}</div>` : `<p class="muted small">${esc(t("car.nodeclared"))}</p>`}
-    ${carExtra(m.extra)}`;
+  const params = Object.entries(m.params || {}).map(([k, v]) => carKv(k, JSON.stringify(v), "mono ell"));
+  const parts = [carKvs([
+    carKv(t("car.shader"), m.group, "mono ell"),
+    carKv(t("car.params"), m.paramCount == null ? "—" : `${m.savedCount}/${m.paramCount}`),
+    carKv(t("car.blend"), carIsBlend(name) ? t("car.yes") : t("car.no")),
+  ])];
+  if (params.length) parts.push(`<h4>${esc(t("car.shaderparams"))}</h4>${carKvs(params)}`);
+  const extra = Object.keys(m.extra || {}).length ? carExtra(m.extra) : "";
+  return parts.join("") + extra;
 }
-function carSliceHtml(s) {
-  const r = cv.data.resources[s.rds];
-  return `<div class="kv">
-    <div>${t("car.slice")}</div><div class="mono">${esc(s.id)}</div>
-    <div>${t("car.material")}</div><div class="mono">${esc(s.material)}</div>
-    <div>${t("car.buffer")}</div><div class="mono">${esc(s.rds)}${r ? ` (${r.verts.toLocaleString("pt-BR")} v, ${r.tris.toLocaleString("pt-BR")} t)` : ""}</div>
-    <div>${t("car.vrange")}</div><div class="mono">${s.vo} + ${s.vc}</div>
-    <div>${t("car.irange")}</div><div class="mono">${s.io} + ${s.ic}</div>
-    <div>${t("mdl.tris")}</div><div>${s.tris.toLocaleString("pt-BR")}</div>
-    <div>jointID</div><div class="mono">${esc(s.joint)}</div>
-    <div>${t("car.state")}</div><div>${s.ok ? "OK" : `<span class="warn">${esc(t("car.badslice"))}</span>`}</div>
-  </div>
-  ${carExtra(s.extra)}`;
+function carTexturesHtml(names) {
+  const seen = new Set(), out = [];
+  for (const name of names) {
+    const tid = carMatTexId(name);
+    const asset = tid && assetById.get(tid);
+    const declared = Object.entries(carMaterial(name).textures || {});
+    out.push(`<h4 title="${esc(name)}">${esc(name)}</h4>`);
+    if (asset && !seen.has(tid)) {
+      seen.add(tid);
+      out.push(carKvs([carKv(t("mdl.textures"), asset.n, "mono ell"), carKv("", t("car.guessed"), "")]), carTexHtml(asset));
+    } else if (asset) out.push(carKvs([carKv(t("mdl.textures"), asset.n, "mono ell")]));
+    else out.push(`<p class="muted small">${esc(t("car.tex.none"))}</p>`);
+    if (declared.length) out.push(carKvs(declared.map(([k, v]) => carKv(k, v, "mono ell"))));
+    else out.push(`<p class="muted small">${esc(t("car.nodeclared"))}</p>`);
+  }
+  return out.join("");
+}
+function carLodHtml(node) {
+  const lods = cv.data.lods;
+  const cur = cv.lod === "ALL" ? { nodes: lods.reduce((a, l) => a + l.nodes, 0), slices: lods.reduce((a, l) => a + l.slices, 0), tris: lods.reduce((a, l) => a + l.tris, 0) } : lods.find((l) => l.name === cv.lod);
+  const rows = [carKv(t("car.current"), cv.lod === "ALL" ? t("mdl.all") : cv.lod)];
+  if (node && node._lod) rows.push(carKv(t("car.lod"), node._lod));
+  if (cur) rows.push(carKv(t("car.meshes"), carInt(cur.nodes)), carKv(t("car.slices"), carInt(cur.slices)), carKv(t("mdl.tris"), carInt(cur.tris)));
+  return carKvs(rows) + `<h4>${esc(t("car.lods"))}</h4>` + carKvs(lods.map((l) => carKv(l.name, `${carInt(l.nodes)} / ${carInt(l.slices)} / ${carInt(l.tris)}`, "mono")));
+}
+function carSourceRows() {
+  const src = cv.data.source || {};
+  return [carKv(t("mdl.package"), src.package, "mono ell"), carKv(t("mdl.path"), src.path, "mono wrap"),
+    carKv(t("car.buffers"), Object.keys(cv.data.resources).length), carKv(t("car.materials"), Object.keys(cv.data.materials).length)];
+}
+function carBufferText(rds) {
+  const r = cv.data.resources[rds];
+  return r ? `${rds} (${carInt(r.verts)} v, ${carInt(r.tris)} t)` : rds;
 }
 
 function carInspect() {
-  if (!cv.data) { inspectEl.innerHTML = `<p class="muted">${esc(cv.status || t("car.pick"))}</p>`; return; }
-  const d = cv.data, src = d.source || {};
+  const el = inspectEl;
+  rememberSections(el);
+  const d = cv.data;
+  if (!d) { el.innerHTML = `<p class="muted" style="padding-top:12px">${esc(cv.status || t("car.pick"))}</p>`; return; }
   const node = carSelNode();
-  const head = `<h2 class="mono">${esc(cv.row ? cv.row.n : d.id)}</h2>
-    <div class="kv">
-      <div>${t("mdl.package")}</div><div class="mono">${esc(src.package || "—")}</div>
-      <div>${t("mdl.path")}</div><div class="mono">${esc(src.path || "—")}</div>
-      <div>${t("car.lods")}</div><div>${d.lods.map((l) => `${esc(l.name)}: ${l.nodes} / ${l.slices} / ${l.tris.toLocaleString("pt-BR")}`).join("<br>") || "—"}</div>
-      <div>${t("car.buffers")}</div><div>${Object.keys(d.resources).length}</div>
-      <div>${t("car.materials")}</div><div>${Object.keys(d.materials).length}</div>
-    </div>`;
-  const notes = d.notes.length ? section("car.notes", `<div class="mono small">${d.notes.map(esc).join("<br>")}</div>`, true) : "";
-  if (!node) {
-    const mats = Object.keys(d.materials).map((n) => `<div class="mono">${esc(n)} <span class="muted">${esc(d.materials[n].group)}</span></div>`).join("");
-    inspectEl.innerHTML = head + notes + section("mdl.mats", mats || "—", true) + `<p class="muted small">${esc(t("car.hint"))}</p>`;
-    return;
-  }
-  const [kind, key] = cv.selected.split(":");
+  const sel = carSelLabel();
+  const head = `<div class="insp-head"><h2 title="${esc(cv.row ? cv.row.n : d.id)}">${esc(cv.row ? cv.row.n : d.id)}</h2><div class="sub" title="${esc(sel)}">${esc(sel || t("car.hint"))}</div></div>`;
+  const notes = d.notes.length ? section("car.notes", `<div class="mono small">${d.notes.map(esc).join("<br>")}</div>`, false) : "";
   let body;
-  if (kind === "s") {
-    const s = cv.slices.get(key);
-    body = `<h3>${esc(t("car.slice"))}</h3>${carSliceHtml(s)}
-      ${section("car.material", carMaterialHtml(s.material), true)}
-      <p class="muted small">${esc(t("car.owner"))}: <span class="mono">${esc(node.id)}</span></p>`;
+  if (!node) {
+    const mats = Object.keys(d.materials).map((n) => carKv(n, d.materials[n].group, "mono ell"));
+    body = section("car.sec.car", carKvs(carSourceRows()), true) + section("car.sec.lod", carLodHtml(null), true)
+      + section("car.sec.mats", carKvs(mats), false);
   } else {
-    const matNames = [...new Set(node.slices.map((s) => s.material))];
-    const bb = node.bbox;
-    body = `<h3>${esc(node.id)}</h3><div class="kv">
-        <div>${t("car.pssgtype")}</div><div class="mono">${esc(node.type)}</div>
-        <div>uid</div><div class="mono">${node.uid}</div>
-        <div>${t("car.nickname")}</div><div class="mono">${esc(node.nickname || "—")}</div>
-        <div>${t("car.parent")}</div><div class="mono">${esc(node._parent ? node._parent.id : "—")}</div>
-        <div>${t("car.children")}</div><div>${node.children.length}</div>
-        <div>${t("car.slices")}</div><div>${node.slices.length}</div>
-        <div>${t("mdl.tris")}</div><div>${node._tris.toLocaleString("pt-BR")}</div>
-        <div>${t("mdl.verts")}</div><div>${node._verts.toLocaleString("pt-BR")}</div>
-        <div>${t("car.bbox")}</div><div class="mono">${bb ? esc(bb.map((v) => carNum(v, 3)).join(", ")) : "—"}</div>
-      </div>
-      ${section("car.local", carMatrix(node.local) + (node.identity ? `<p class="muted small">${esc(t("car.identity"))}</p>` : ""), true)}
-      ${section("car.world", carMatrix(node.world), false)}
-      ${node.slices.length ? section("car.slices", node.slices.map((s) => `<div class="beh"><div class="desc mono">${esc(s.id)} · ${esc(s.material)}</div><div class="raw">${esc(s.rds)} v ${s.vo}+${s.vc} i ${s.io}+${s.ic} · ${s.tris} tris</div></div>`).join(""), true) : ""}
-      ${matNames.length ? section("mdl.mats", matNames.map((n) => `<details><summary class="mono">${esc(n)}</summary>${carMaterialHtml(n)}</details>`).join(""), false) : ""}
-      ${section("car.extra", carExtra(node.extra), false)}`;
+    const [kind, key] = cv.selected.split(":");
+    const off = carNodeOff(node);
+    if (kind === "s") {
+      const s = cv.slices.get(key);
+      const hidden = off || cv.hiddenSlices.has(s.key);
+      body = section("car.sec.object", carKvs([
+        carKv(t("car.slice"), s.id, "mono ell"), carKv(t("car.owner"), node.id, "mono ell"),
+        carKv(t("car.state"), (s.ok ? "OK" : `<span class="warn">${esc(t("car.badslice"))}</span>`) + ` · ${esc(hidden ? t("car.hidden") : t("car.visible"))}`, "html"),
+      ]), true)
+      + section("car.sec.geometry", carKvs([
+        carKv(t("car.buffer"), carBufferText(s.rds), "mono ell"), carKv(t("car.vrange"), `${s.vo} + ${s.vc}`, "mono"),
+        carKv(t("car.irange"), `${s.io} + ${s.ic}`, "mono"), carKv(t("mdl.tris"), carInt(s.tris)),
+      ]), true)
+      + section("car.sec.material", `<h4 title="${esc(s.material)}">${esc(s.material)}</h4>` + carMaterialHtml(s.material), true)
+      + section("car.sec.textures", carTexturesHtml([s.material]), true)
+      + section("car.sec.lod", carLodHtml(node), false)
+      + section("car.sec.technical", carKvs([carKv("jointID", s.joint, "mono"), carKv("uid", node.uid, "mono"), ...carSourceRows()]) + carExtra(s.extra), false);
+    } else {
+      const matNames = [...new Set(node.slices.map((s) => s.material))];
+      const buffers = [...new Set(node.slices.map((s) => s.rds))];
+      const bb = node.bbox;
+      body = section("car.sec.object", carKvs([
+        carKv(t("car.mesh"), node.id, "mono ell"), carKv(t("car.pssgtype"), node.type, "mono ell"),
+        carKv(t("car.nickname"), node.nickname, "mono ell"), carKv(t("car.parent"), node._parent ? node._parent.id : "", "mono ell"),
+        carKv(t("car.children"), node.children.length), carKv(t("car.state"), off ? t("car.hidden") : t("car.visible")),
+      ]), true)
+      + section("car.sec.geometry", carKvs([
+        carKv(t("car.slices"), carInt(node.slices.length)), carKv(t("mdl.verts"), carInt(node._verts)), carKv(t("mdl.tris"), carInt(node._tris)),
+        carKv(t("car.bbox"), bb ? bb.map((v) => carNum(v, 3)).join(", ") : "", "mono wrap"),
+        ...buffers.map((b) => carKv(t("car.buffer"), carBufferText(b), "mono ell")),
+      ]) + (node.slices.length ? `<h4>${esc(t("car.slices"))}</h4>` + node.slices.map((s) => `<div class="beh"><div class="desc mono">${esc(s.id)} · ${esc(s.material)}</div><div class="raw">${esc(s.rds)} v ${s.vo}+${s.vc} i ${s.io}+${s.ic} · ${s.tris} ${esc(t("car.tris.short"))}</div></div>`).join("") : ""), true)
+      + (matNames.length ? section("car.sec.material", matNames.map((n) => `<details class="mat"><summary class="mono" title="${esc(n)}">${esc(n)}</summary>${carMaterialHtml(n)}</details>`).join(""), true) : "")
+      + (matNames.length ? section("car.sec.textures", carTexturesHtml(matNames), true) : "")
+      + section("car.sec.lod", carLodHtml(node), false)
+      + section("car.sec.technical", carKvs([carKv("uid", node.uid, "mono"), ...carSourceRows()])
+        + `<h4>${esc(t("car.local"))}</h4>${carMatrix(node.local)}${node.identity ? `<p class="muted small">${esc(t("car.identity"))}</p>` : ""}`
+        + `<h4>${esc(t("car.world"))}</h4>${carMatrix(node.world)}<h4>${esc(t("car.extra"))}</h4>${carExtra(node.extra)}`, false);
+    }
   }
-  inspectEl.innerHTML = head + notes + body;
+  el.innerHTML = head + body + notes;
+  restoreSections(el);
+  el.querySelectorAll(".tex").forEach((box) => {
+    const img = box.querySelector("img");
+    if (img.complete) carTexUpdate(box); else img.addEventListener("load", () => carTexUpdate(box), { once: true });
+    carTexUpdate(box);
+  });
 }
 
 MODES.cars = {
@@ -668,6 +911,7 @@ MODES.cars = {
   },
   show() {
     ensureCarStage();
+    carDock(true);
     if (!cv.carId) { const first = CAR_LIST.find((m) => m.k === "carro") || CAR_LIST[0]; if (first) cv.carId = first.id; }
     if (cv.carId && cv.loadedId !== cv.carId) openCar(cv.carId);
     carSyncBar(); carInspect(); carStatus();
@@ -682,6 +926,14 @@ document.addEventListener("keydown", (e) => {
     if (kind === "n") carToggleHidden(Number(key)); else carToggleSliceHidden(key);
   }
 });
+
+// Fora da aba Carros, árvore e inspector voltam ao grid global antes de qualquer outra aba escrever em #content.
+const _refreshCars = refresh;
+refresh = function () {
+  if (state.mode !== "cars") carDock(false);
+  _refreshCars();
+};
+document.getElementById("inspect").addEventListener("click", carTexClick);
 
 // content.js e este arquivo registram as abas; só agora a página inicia.
 start();

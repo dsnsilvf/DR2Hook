@@ -20,7 +20,7 @@ button, select, input { font: inherit; color: inherit; }
 
 .top { display: flex; align-items: center; gap: 16px; height: 44px; padding: 0 14px;
   border-bottom: 1px solid var(--line); background: var(--panel); }
-.brand { font: 700 18px "Barlow Condensed", sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+.brand { white-space: nowrap; font: 700 18px "Barlow Condensed", sans-serif; letter-spacing: .04em; text-transform: uppercase; }
 .brand::before { content: ""; display: inline-block; width: 4px; height: 16px; margin-right: 8px;
   background: var(--accent); vertical-align: -2px; }
 .modes { display: flex; gap: 4px; }
@@ -199,7 +199,63 @@ canvas.gl:active { cursor: grabbing; }
 .kind { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 
 /* ---- Car Model Explorer ---- */
-.tree-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; cursor: pointer; white-space: nowrap; }
+/* Workspace próprio: a árvore (.side) e o inspector (.inspect) são reparentados para dentro
+   de #car-ws enquanto a aba Carros está ativa; as outras abas continuam no grid global. */
+.layout.docked { display: block; overflow: hidden; }
+.layout.docked > .content { height: 100%; overflow: hidden; }
+
+.car-ws { --tree-w: 300px; --insp-w: 400px; --rz: 6px; --tb: 34px;
+  display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; background: #0b0d12; }
+.car-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+
+/* painéis laterais: largura base na variável; encolhem até o mínimo antes do viewport sumir */
+.car-ws .side, .car-ws .inspect { flex: 0 1 auto; min-height: 0; border: 0; }
+.car-ws .side { width: var(--tree-w); min-width: 200px; max-width: 480px; overflow: hidden; }
+.car-ws .inspect { width: var(--insp-w); min-width: 300px; max-width: 550px; padding: 0 14px 28px; overflow-x: hidden; overflow-y: auto; }
+.car-ws .side #search { margin: 8px 8px 6px; flex: none; }
+.car-ws .side .filters { padding: 0 8px 6px; flex: none; }
+.car-ws .side .list { min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.tree-tools { display: flex; align-items: center; gap: 4px; padding: 0 8px 6px; flex: none; }
+.tree-tools .grow { flex: 1; }
+
+.car-vp { position: relative; flex: 1 1 0; min-width: 240px; min-height: 0; overflow: hidden; }
+.car-ws canvas.gl { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; max-width: none; max-height: none; }
+
+/* divisórias arrastáveis (componente makeResizer) */
+.rz { flex: none; width: var(--rz); cursor: col-resize; background: var(--line); position: relative; touch-action: none; outline: 0; }
+.rz::after { content: ""; position: absolute; inset: 0 -3px; }
+.rz:hover, .rz:focus-visible, .rz.drag { background: var(--accent); }
+body.rz-drag { cursor: col-resize; user-select: none; }
+body.rz-drag .car-vp canvas { pointer-events: none; }
+
+/* toolbar global e barra de status */
+.car-tb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 8px; min-height: var(--tb);
+  background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.car-tb select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; height: 26px; min-width: 0; }
+.car-tb #car-open { max-width: 220px; }
+.tb-sep { width: 1px; align-self: stretch; margin: 3px 2px; background: var(--line); }
+.tb-grow { flex: 1; }
+.tb-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; padding: 0;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; color: var(--text); cursor: pointer; }
+.tb-btn:hover:not(:disabled) { border-color: #4a5264; }
+.tb-btn.on { background: #3a2c10; border-color: #e09a2c; color: #ffd08a; }
+.tb-btn:disabled { opacity: .4; cursor: default; }
+.car-sb { display: flex; align-items: center; gap: 12px; padding: 0 10px; height: 24px; flex: none; overflow: hidden;
+  background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.car-sb > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#car-note { flex: 1 1 auto; }
+#car-sel { flex: 0 1 45%; color: var(--text); font: 11px var(--mono); text-align: right; }
+
+/* overlay flutuante de câmera/seleção */
+.vp-tools { position: absolute; top: 8px; left: 8px; display: flex; gap: 3px; padding: 3px;
+  background: rgba(15, 17, 21, .78); border: 1px solid var(--line); border-radius: 6px; backdrop-filter: blur(4px); }
+.vp-tools .tb-btn { background: transparent; border-color: transparent; }
+.vp-tools .tb-btn:hover:not(:disabled) { background: var(--panel-2); }
+.vp-tools .tb-btn.on { background: #3a2c10; border-color: #e09a2c; }
+.vp-tools .tb-sep { margin: 3px 1px; }
+
+/* árvore */
+.tree-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; cursor: pointer; white-space: nowrap; min-width: 0; }
 .tree-row .tw { width: 14px; flex: none; text-align: center; color: var(--muted); font-size: 11px; user-select: none; }
 .tree-row .eye { cursor: pointer; }
 .tree-row .eye:hover, .tree-row .caret:hover { color: var(--text, #fff); }
@@ -208,7 +264,47 @@ canvas.gl:active { cursor: grabbing; }
 .tree-row.slice .nm { color: var(--muted); }
 .tree-row.off .nm, .tree-row.off .cnt { opacity: .4; text-decoration: line-through; }
 .tree-row.bad .nm { color: #e0775c; }
-.car-bar button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; color: inherit; cursor: pointer; }
-.car-bar button.on { background: #3a2c10; border-color: #e09a2c; }
-.car-bar button:disabled { opacity: .45; cursor: default; }
-.inspect details > summary.mono { cursor: pointer; margin: 4px 0; }
+
+/* inspector */
+.insp-head { position: sticky; top: 0; z-index: 2; margin: 0 -14px; padding: 10px 14px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.car-ws .inspect h2 { margin: 0; font-size: 19px; word-break: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-head .sub { color: var(--muted); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.car-ws .inspect details.sec { margin-top: 8px; }
+.car-ws .inspect details.sec > summary { padding: 6px 0 4px; }
+.car-ws .inspect .kv { grid-template-columns: minmax(70px, 28%) minmax(0, 1fr); }
+.car-ws .inspect .kv > .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.car-ws .inspect .kv > .v { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.kv > .v.mono { font: 11px var(--mono); }
+.kv > .v.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.kv > .v.wrap { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.car-ws .inspect pre.xml { max-height: 180px; overflow: auto; }
+.car-ws .inspect .mat > summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 4px 0; }
+.car-ws .inspect h4 { margin: 10px 0 4px; font: 600 11px "Roboto Condensed"; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.car-ws .inspect .beh .desc, .car-ws .inspect .beh .raw { overflow-wrap: anywhere; word-break: normal; }
+
+/* preview de textura com tamanho controlado */
+.tex { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--panel-2); }
+.tex-bar { display: flex; align-items: center; gap: 3px; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.tex-bar button { min-width: 24px; height: 22px; padding: 0 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; color: var(--text); cursor: pointer; font-size: 11px; }
+.tex-bar button.on { border-color: var(--accent); }
+.tex-bar .tex-info { margin-left: auto; color: var(--muted); font: 10.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tex-box { height: 180px; max-height: 40vh; overflow: auto; display: flex; }
+.tex-box img { display: block; margin: auto; flex: none; image-rendering: auto; }
+.tex.fit .tex-box { overflow: hidden; }
+.tex.fit .tex-box img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+
+/* responsividade estrutural: o inspector (e depois a árvore) viram drawers sobre o viewport */
+@media (max-width: 1200px) {
+  .car-ws .side { max-width: 280px; }
+  .car-ws .inspect { max-width: 360px; }
+}
+.car-ws.idrawer .car-body > #car-rz2 { display: none; }
+.car-ws.idrawer .inspect { position: absolute; z-index: 5; top: 0; right: 0; bottom: 0; width: min(var(--insp-w), 92%);
+  max-width: none; box-shadow: -12px 0 28px rgba(0, 0, 0, .5); transition: transform .16s ease; }
+.car-ws.idrawer.insp-hidden .inspect { transform: translateX(105%); visibility: hidden; transition: transform .16s ease, visibility 0s .16s; }
+.car-ws:not(.idrawer).insp-hidden .inspect, .car-ws:not(.idrawer).insp-hidden #car-rz2 { display: none; }
+.car-ws.tdrawer .car-body > #car-rz1 { display: none; }
+.car-ws.tdrawer .side { position: absolute; z-index: 5; top: 0; left: 0; bottom: 0; width: min(var(--tree-w), 92%);
+  max-width: none; box-shadow: 12px 0 28px rgba(0, 0, 0, .5); transition: transform .16s ease; }
+.car-ws.tdrawer.tree-hidden .side { transform: translateX(-105%); visibility: hidden; transition: transform .16s ease, visibility 0s .16s; }
+.car-ws:not(.tdrawer).tree-hidden .side, .car-ws:not(.tdrawer).tree-hidden #car-rz1 { display: none; }
