@@ -422,7 +422,7 @@ function guessTexture(material, ids) {
     ["glass", ["glass"]],
     ["light", ["light", "lamp"]], ["cabin", ["cabin", "interior", "cockpit"]], ["carbon", ["carbon"]],
     ["body", ["body", "paint", "livery"]], ["caliper", ["caliper"]], ["disc", ["disc", "brake"]],
-    ["grille", ["grill", "light"]], ["suspension", ["susp"]], ["aerial", ["aerial"]],
+    ["grille", ["grill"]], ["suspension", ["susp"]], ["aerial", ["aerial"]],
     ["helmet", ["helmet"]], ["head", ["head"]], ["hand", ["hand"]], ["eye", ["eye"]],
   ];
   for (const [key, words] of table) {

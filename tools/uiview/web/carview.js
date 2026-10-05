@@ -484,7 +484,10 @@ function carSliceVisible(material) {
   const v = meshVariant(material);
   return v === "base" || cv.variant === "all" || v === cv.variant;
 }
+// A grade (car_grill.fx) usa uma textura de malha em tile que não está nos arquivos do carro: fica em cinza escuro.
+const carIsGrill = (name) => /grill/i.test(carMaterial(name).group);
 function carMatTexId(name) {
+  if (carIsGrill(name)) return null;
   if (!cv.matTex.has(name)) {
     const guess = guessTexture(name, (cv.row && cv.row.tex) || []);
     cv.matTex.set(name, guess ? guess.g + "/" + guess.n : null);
@@ -650,7 +653,7 @@ function carGL() {
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.uniform1i(loc.uHasTex, 1);
       } else {
-        const c = colorOf(s.material);
+        const c = carIsGrill(s.material) ? [0.16, 0.16, 0.17] : colorOf(s.material);
         gl.uniform1i(loc.uHasTex, 0);
         gl.uniform3f(loc.uColor, c[0], c[1], c[2]);
       }
