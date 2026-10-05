@@ -882,6 +882,7 @@ int WantedGhostCars() {
 
 uint8_t g_realRecord[kGhostRecordSize];
 bool g_haveRealRecord = false;
+bool g_haveTypeZero = false;
 uint8_t g_fillerRecords[5][kGhostRecordSize];
 int g_realSeen = 0;
 int g_fillerUsed = 0;
@@ -893,10 +894,25 @@ uintptr_t DetourAddGhostEntry(void *a, void *b, void *c, uintptr_t d, uint8_t *r
   InFlight guard;
   if (UsablePointer(reinterpret_cast<uintptr_t>(record))) {
     if (Read<uintptr_t>(record, 0x08) != 0) {
-      if (g_realSeen == 0) g_fillerUsed = 0; // comeco de uma carga
+      if (g_realSeen == 0) {
+        g_fillerUsed = 0; // comeco de uma carga
+        g_haveTypeZero = false;
+      }
       ++g_realSeen;
-      std::memcpy(g_realRecord, record, kGhostRecordSize);
-      g_haveRealRecord = true;
+      // Prefere copiar o registro de tipo 0 (fantasma proprio, nasce com o desenho
+      // ligado); o de tipo 2 (RecordingGhost) nasce oculto.
+      const bool typeZero = record[0xb0] == 0;
+      char info[160];
+      std::snprintf(info, sizeof(info),
+                    "GhostLab[limite]: registro real #%d: +0x00=%u +0x01=%u tipo(+0xb0)=%u id=%llx",
+                    g_realSeen, record[0], record[1], record[0xb0],
+                    static_cast<unsigned long long>(Read<uint64_t>(record, 0x08)));
+      Logger::Info(info);
+      if (typeZero || !g_haveTypeZero) {
+        std::memcpy(g_realRecord, record, kGhostRecordSize);
+        g_haveRealRecord = true;
+        g_haveTypeZero = typeZero;
+      }
     } else {
       const int want = WantedGhostCars();
       if (want > 0 && g_haveRealRecord && g_realSeen + g_fillerUsed < want &&
