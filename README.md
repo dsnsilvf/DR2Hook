@@ -184,6 +184,8 @@ Requirements: CMake 3.20+, and either MinGW-w64 (Linux cross-compile) or Visual 
 | Linux: unit tests + release package | `bash scripts/release/verify_release.sh` |
 | Linux: release package only | `bash scripts/release/package_release.sh` |
 
+Python tools (`tools/`): `bash scripts/dev/test_tools.sh` runs their tests. Optional dependencies are declared in `pyproject.toml` (`pip install -e .[all]`: `numpy` for `dr2rec`, `Pillow` for the UI Viewer, `pycryptodome` for `dr2save`).
+
 The package (`dist/DR2Hook-v0.1.0.zip`) contains `dxgi.dll`, `dr2hook_core.dll`, and `mods/`. Both DLLs are statically linked.
 
 Windows:

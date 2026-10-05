@@ -1,0 +1,25 @@
+[project]
+name = "dr2hook-tools"
+version = "0.1.0"
+description = "Offline research and asset tools for DiRT Rally 2.0 (dr2rec, egodata, UI Viewer, save and ghost readers)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# dr2rec (memory recorder and analyzer)
+rec = ["numpy"]
+# uiview (UI Viewer, Car and Track Explorer): texture export to WebP
+view = ["Pillow"]
+# dr2save (save decryption)
+save = ["pycryptodome"]
+all = ["numpy", "Pillow", "pycryptodome"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tools*"]
+exclude = ["tools*.tests"]

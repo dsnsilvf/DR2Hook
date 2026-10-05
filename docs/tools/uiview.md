@@ -28,7 +28,7 @@ python -m tools.uiview.serve [--port 8790] [--root build/uiview]
 python -m tools.uiview.track_edit montalegre.edits.json -o build/uiview/saves/montalegre.nefs
 ```
 
-Tests: `python3 -m unittest discover -s tools/uiview/tests -t .` (and `tools/egodata/tests`).
+Tests: `bash scripts/dev/test_tools.sh` (or `python3 -m unittest discover -s tools/uiview/tests -t .`).
 
 ## Track Explorer controls
 
