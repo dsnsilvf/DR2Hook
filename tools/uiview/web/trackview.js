@@ -4,7 +4,7 @@ const TRACKS = typeof TRACK_DATA !== "undefined" ? TRACK_DATA : [];
 const tv = {
   id: null, loadedId: null, data: null, gl: null, prog: null, loc: null, gen: 0,
   terrain: [], types: new Map(), inst: [], lines: [],
-  sel: -1, showTerrain: true, showObjects: true, showGates: true, showAi: true, wire: false,
+  sel: -1, showTerrain: true, showObjects: true, showTrees: true, showDist: false, showGates: true, showAi: true, wire: false,
   yaw: 0.8, pitch: 0.6, dist: 400, target: [0, 1430, -430], drag: null, keys: new Set(),
   dirty: true, status: "", busy: false,
 };
@@ -128,7 +128,10 @@ async function tvOpen(id) {
       for (const m of meshes) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], m.lo[k]); hi[k] = Math.max(hi[k], m.hi[k]); }
       tv.types.set(name, { name, meshes, lo, hi, empty: !meshes.length });
     }
-    tv.inst = data.instances.map((i, n) => ({ n, id: i.id, type: i.type, route: i.route, m: new Float32Array(i.m), hidden: false }));
+    tv.inst = data.instances.map((i, n) => {
+      const kind = i.type[0] === "t" ? (/_dist_/.test(i.type) ? "dist" : "tree") : "obj";
+      return { n, id: i.id, type: i.type, kind, route: i.route, m: new Float32Array(i.m), hidden: false };
+    });
     const gl = tv.gl;
     tv.lines = tvLinesFrom(data).map((l) => {
       const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -146,6 +149,9 @@ async function tvOpen(id) {
     tvStatus(); tvInspect();
   }
 }
+
+const tvLayer = (i) => (i.kind === "obj" ? tv.showObjects : i.kind === "tree" ? tv.showTrees : tv.showDist);
+const tvName = (type) => type.slice(2);
 
 function tvFrameRoute() {
   const pts = [];
@@ -231,9 +237,9 @@ function tvGL() {
     };
     gl.uniform1i(loc.uLine, 0);
     if (tv.showTerrain) for (const r of tv.terrain) drawMesh(r, IDENT, 0);
-    if (tv.showObjects) {
+    {
       for (const i of tv.inst) {
-        if (i.hidden) continue;
+        if (i.hidden || !tvLayer(i)) continue;
         const ty = tv.types.get(i.type);
         if (!ty) continue;
         const hi = i.n === tv.sel ? 1 : 0;
@@ -319,7 +325,7 @@ function tvPick(e, canvas) {
   const ray = tvRay(e, canvas);
   let best = -1, bt = Infinity;
   for (const i of tv.inst) {
-    if (i.hidden) continue;
+    if (i.hidden || !tvLayer(i)) continue;
     const ty = tv.types.get(i.type);
     if (!ty || ty.empty) continue;
     // leva o raio ao espaço local: p_local = (p - t) * R^-1 (convenção de vetor-linha)
@@ -352,7 +358,7 @@ function tvStatus() {
   const d = tv.data;
   note.textContent = d ? t("trk.status", { terrain: d.terrain.meshes.toLocaleString("pt-BR"), inst: tv.inst.length.toLocaleString("pt-BR"), types: tv.types.size }) : "";
   const i = tv.sel >= 0 ? tv.inst[tv.sel] : null;
-  sel.textContent = i ? `${i.type} · ${i.m[12].toFixed(1)} ${i.m[13].toFixed(1)} ${i.m[14].toFixed(1)}` : "";
+  sel.textContent = i ? `${tvName(i.type)} · ${i.m[12].toFixed(1)} ${i.m[13].toFixed(1)} ${i.m[14].toFixed(1)}` : "";
 }
 
 function tvInspect() {
@@ -371,14 +377,14 @@ function tvInspect() {
       ${kv(t("trk.objects"), d ? `${tv.inst.length} ${t("trk.instances")} · ${tv.types.size} ${t("trk.types")}` : "…")}
     </div>
     ${i ? `<h3>${esc(t("trk.selected"))}</h3><div class="kv">
-      ${kv("id", i.id)}${kv(t("trk.type"), i.type)}${kv(t("trk.route"), i.route)}
+      ${kv("id", i.id)}${kv(t("trk.type"), tvName(i.type))}${kv(t("trk.kind"), t("trk.kind." + i.kind))}${kv(t("trk.route"), i.route)}
       ${kv(t("trk.pos"), `${i.m[12].toFixed(2)}, ${i.m[13].toFixed(2)}, ${i.m[14].toFixed(2)}`)}
       ${kv(t("trk.meshes"), ty ? (ty.empty ? t("trk.nomesh") : ty.meshes.length) : "—")}
     </div>` : `<p class="muted">${esc(t("trk.hint"))}</p>`}`;
 }
 
 const TV_ACTS = [
-  ["showTerrain", "trk.show.terrain"], ["showObjects", "trk.show.objects"], ["showGates", "trk.show.gates"], ["showAi", "trk.show.ai"],
+  ["showTerrain", "trk.show.terrain"], ["showObjects", "trk.show.objects"], ["showTrees", "trk.show.trees"], ["showDist", "trk.show.dist"], ["showGates", "trk.show.gates"], ["showAi", "trk.show.ai"],
 ];
 
 function ensureTrackStage() {

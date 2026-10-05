@@ -70,6 +70,52 @@ def instances(ens: bytes) -> list[dict[str, Any]]:
     return out
 
 
+def _records(data: bytes, start_at: int, count_at: int, stride: int, rot_at: int, pos_at: int) -> list[dict[str, Any]]:
+    start = struct.unpack_from("<I", data, start_at)[0]
+    count = struct.unpack_from("<I", data, count_at)[0]
+    out = []
+    for i in range(count):
+        o = start + i * stride
+        if o + stride > len(data):
+            break
+        h, ident = struct.unpack_from("<II", data, o)
+        r = struct.unpack_from("<9f", data, o + rot_at)
+        p = struct.unpack_from("<3f", data, o + pos_at)
+        out.append({"hash": h, "id": ident, "m": [r[0], r[1], r[2], 0, r[3], r[4], r[5], 0, r[6], r[7], r[8], 0, p[0], p[1], p[2], 1]})
+    return out
+
+
+def trees_bin(data: bytes) -> list[dict[str, Any]]:
+    """`trees.bin`: cabeçalho de 72 bytes (caixa, contagem em 48, início em 60) e registros de 96 bytes:
+    hash do tipo, índice, matriz 3×3 em 8 (linhas = eixos, já com escala), posição em 44."""
+    return _records(data, 60, 48, 96, 8, 44)
+
+
+def ornaments_bin(data: bytes) -> list[dict[str, Any]]:
+    """`ornaments.bin`: início em 80, contagem em 88, registros de 212 bytes:
+    hash do tipo, índice, matriz 3×3 em 16, posição em 52."""
+    return _records(data, 80, 88, 212, 16, 52)
+
+
+def references(xml: bytes) -> dict[int, str]:
+    """`reference_id` → `filename` de `trees_references.xml` / `ornaments_references.xml`."""
+    root = ET.fromstring(xml.decode("utf-8-sig"))
+    return {int(n.get("reference_id", 0)): n.get("filename", "") for n in root.iter("instanceref")}
+
+
+def nick_index(root: PSSGNode) -> dict[str, PSSGNode]:
+    out: dict[str, PSSGNode] = {}
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        for key in ("nick", "nickname", "id"):
+            attr = node.attributes.get(key)
+            if attr is not None:
+                out.setdefault(str(attr.value), node)
+        stack.extend(node.children)
+    return out
+
+
 def object_renderables(types_xml: bytes) -> dict[str, str]:
     """Tipo de objeto → nó `default!N` de `objects.pssg`.
 
@@ -224,13 +270,62 @@ def export_track(game: str, rel: str, out: str, log=print) -> dict[str, Any]:
         ms = node_meshes(objs.root, idx, node_id) if node_id else []
         types[t] = {"node": node_id, "first": len(lib_meshes), "count": len(ms)}
         lib_meshes.extend(ms)
+
+    # árvores (trees.bin → trees.pssg) e ornamentos (ornaments.bin → objects.pssg)
+    nicks = nick_index(objs.root)
+    for i in all_instances:
+        i["type"] = "e:" + i["type"]
+    types = {"e:" + k: v for k, v in types.items()}
+
+    def resolve(key: str, candidates: list[str], index: dict[str, PSSGNode], root: PSSGNode, ids: dict[str, PSSGNode]) -> None:
+        if key in types:
+            return
+        for cand in candidates:
+            node = index.get(cand)
+            if node is None:
+                continue
+            ms = node_meshes(root, ids, str(node.attributes["id"].value)) if "id" in node.attributes else []
+            if ms:
+                types[key] = {"node": cand, "first": len(lib_meshes), "count": len(ms)}
+                lib_meshes.extend(ms)
+                return
+        types[key] = {"node": None, "first": len(lib_meshes), "count": 0}
+
+    for name in _route_dirs(arc, base):
+        prefix = base + name + "/"
+        try:
+            orn = ornaments_bin(arc.read(prefix + "ornaments.bin"))
+            orn_refs = references(arc.read(base + "ornaments_references.xml"))
+        except (KeyError, FileNotFoundError, ET.ParseError, struct.error):
+            orn, orn_refs = [], {}
+        for r in orn:
+            fn = orn_refs.get(r["hash"], f"#{r['hash']}")
+            key = "o:" + fn
+            plain = fn.split("~")[0]
+            resolve(key, [fn + " Root", fn + "_physics", fn, plain + " Root", plain + "_physics", plain], nicks, objs.root, idx)
+            all_instances.append({"id": f"orn{r['id']}", "type": key, "m": r["m"], "route": name})
+        try:
+            trees = trees_bin(arc.read(prefix + "trees.bin"))
+        except (KeyError, FileNotFoundError, struct.error):
+            trees = []
+        if trees:
+            tree_refs = references(arc.read(base + "trees_references.xml"))
+            tp = PSSGFile(arc.read(base + "trees.pssg"))
+            tnicks, tidx = nick_index(tp.root), mesh._index(tp.root)
+            for r in trees:
+                fn = tree_refs.get(r["hash"], f"#{r['hash']}")
+                key = "t:" + fn
+                resolve(key, [fn + "_x0", fn, fn + "_fo"], tnicks, tp.root, tidx)
+                all_instances.append({"id": f"tree{r['id']}", "type": key, "m": r["m"], "route": name})
+            del tp
     with open(os.path.join(dest, "objects.bin"), "wb") as fh:
         fh.write(_pack_meshes(lib_meshes))
     result["types"] = types
     result["instances"] = all_instances
     with open(os.path.join(dest, "track.json"), "w", encoding="utf-8") as fh:
         json.dump(result, fh, separators=(",", ":"))
-    log(f"{tid}: {len(terrain)} blocos de terreno, {len(types)} tipos, {len(all_instances)} instâncias")
+    solved = sum(1 for v in types.values() if v["count"])
+    log(f"{tid}: {len(terrain)} blocos de terreno, {len(types)} tipos ({solved} com malha), {len(all_instances)} instâncias")
     return result
 
 
