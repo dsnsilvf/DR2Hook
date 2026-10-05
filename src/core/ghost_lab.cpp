@@ -645,6 +645,42 @@ void RevertCollision() {
   g_collideApplied = false;
 }
 
+void LogSubmitted();
+
+// Ultima posicao avaliada por dono (controlador), para o log do F7.
+struct OwnerPos {
+  const uint8_t *owner = nullptr;
+  float pos[3] = {0, 0, 0};
+  uint64_t tick = 0;
+};
+OwnerPos g_ownerPos[16];
+
+void RecordOwnerPos(const uint8_t *owner, const uint8_t *out) {
+  OwnerPos *slot = nullptr;
+  for (OwnerPos &p : g_ownerPos) {
+    if (p.owner == owner) { slot = &p; break; }
+    if (slot == nullptr && p.owner == nullptr) slot = &p;
+  }
+  if (slot == nullptr) return;
+  slot->owner = owner;
+  std::memcpy(slot->pos, out + kOutPosition, sizeof(slot->pos));
+  slot->tick = GetTickCount64();
+}
+
+void LogOwnerPositions() {
+  const uint64_t now = GetTickCount64();
+  std::string line = "GhostLab[limite]: posicoes dos fantasmas (x z y, idade ms):";
+  int n = 0;
+  for (const OwnerPos &p : g_ownerPos) {
+    if (p.owner == nullptr) continue;
+    char one[96];
+    std::snprintf(one, sizeof(one), " [%d] %.0f %.0f %.0f (%llu)", n++, p.pos[0], p.pos[1],
+                  p.pos[2], static_cast<unsigned long long>(now - p.tick));
+    line += one;
+  }
+  Logger::Info(line);
+}
+
 int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   InFlight guard;
   const int pending = g_cloneCount.exchange(-1);
@@ -666,6 +702,8 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
                   "Ghost data copy %d; ghost cars drawn: %d (the game creates only 2).",
                   copies, drawn);
     Logger::Info(std::string("GhostLab[limite]: ") + notice);
+    LogOwnerPositions();
+    LogSubmitted();
     std::lock_guard<std::mutex> lock(g_mutex);
     g_spawnNotice = notice;
   }
@@ -675,6 +713,7 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   LinkAllCloneControllers();
   ApplyCollision(owner);
   const int result = g_originalEvaluate(owner, time, arg, out);
+  if (result == 0 && out != nullptr && out[kOutValid] != 0) RecordOwnerPos(owner, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
 
   // A referencia e a fonte das copias (ou o 1o slot pronto, sem copias).
@@ -698,8 +737,28 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   return result;
 }
 
+// Objetos de render de carro vistos no packer (diagnostico do F7).
+std::atomic<uint64_t> g_packSeenObj[32];
+std::atomic<uint64_t> g_packSeenTick[32];
+
+void NotePackedObject(uint8_t *renderObj) {
+  const uint64_t key = reinterpret_cast<uint64_t>(renderObj);
+  const uint64_t now = GetTickCount64();
+  for (int i = 0; i < 32; ++i) {
+    if (g_packSeenObj[i].load() == key) { g_packSeenTick[i].store(now); return; }
+  }
+  for (int i = 0; i < 32; ++i) {
+    uint64_t expected = 0;
+    if (g_packSeenObj[i].compare_exchange_strong(expected, key)) {
+      g_packSeenTick[i].store(now);
+      return;
+    }
+  }
+}
+
 void DetourPackOpacity(uint8_t *renderObj, int channel) {
   InFlight guard;
+  if (renderObj != nullptr && channel == 0) NotePackedObject(renderObj);
   const bool opaque = g_opaque.load() && renderObj != nullptr;
   // Abaixo de 1 o desenho nao descarta o carro; a opacidade e forcada abaixo.
   if (opaque && channel == 0 && Read<float>(renderObj, kFadeFactor) >= 1.f) {
@@ -727,9 +786,38 @@ void DetourPackOpacity(uint8_t *renderObj, int channel) {
 // solido ja vem do fator abaixo de 1 no packer.
 constexpr bool kSpoofSubmitType = false;
 
+// Indices de veiculo vistos na submissao de desenho (diagnostico do F7).
+std::atomic<uint64_t> g_submitSeen[32];
+std::atomic<uint32_t> g_submitCalls{0};
+
+void LogSubmitted() {
+  const uint64_t now = GetTickCount64();
+  std::string line = "GhostLab[limite]: objetos de render de carro no packer (ultimos 500 ms):";
+  int n = 0;
+  for (int i = 0; i < 32; ++i) {
+    const uint64_t t = g_packSeenTick[i].load();
+    if (g_packSeenObj[i].load() != 0 && now - t < 500) {
+      char one[32];
+      std::snprintf(one, sizeof(one), " %llx",
+                    static_cast<unsigned long long>(g_packSeenObj[i].load()));
+      line += one;
+      ++n;
+    }
+  }
+  line += " (total " + std::to_string(n) + ")";
+  (void)g_submitSeen;
+  (void)g_submitCalls;
+  Logger::Info(line);
+}
+
 void DetourSubmitCar(uint8_t *renderObj, uint8_t *context, void *pass,
                      void *extra) {
   InFlight guard;
+  if (UsablePointer(reinterpret_cast<uintptr_t>(renderObj))) {
+    const int index = Read<int>(renderObj, 0);
+    if (index >= 0 && index < 32) g_submitSeen[index].store(GetTickCount64());
+    g_submitCalls.fetch_add(1);
+  }
   uint8_t *vehicle = nullptr;
   uint32_t savedType = 0;
   bool spoofed = false;
