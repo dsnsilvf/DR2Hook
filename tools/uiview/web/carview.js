@@ -257,6 +257,12 @@ function carFixWheels() {
   }
 }
 
+// Nós "<peça>_pos_NN" são poses extras de animação (ex.: limpador de para-brisa) sobrepostas à peça base.
+function carHidePoses(n) {
+  if (/_pos_\d+$/.test(n.id || "")) cv.hidden.add(n.uid);
+  for (const c of n.children || []) carHidePoses(c);
+}
+
 function openCar(id) {
   const row = modelById.get(id);
   if (!row || !row.car) return;
@@ -272,6 +278,7 @@ function openCar(id) {
     if (cv.carId !== id) return null;
     cv.data = data;
     carIndex(data);
+    carHidePoses(data.tree);
     carLog(id, "árvore:", data.lods.map((l) => `${l.name}=${l.nodes} nós/${l.slices} fatias/${l.tris} tris`).join(", "),
       "| buffers:", Object.keys(data.resources).length, "| notas:", data.notes.length);
     for (const note of data.notes) console.warn("[car]", note);
