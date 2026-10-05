@@ -1617,6 +1617,83 @@ uint8_t *AllocNearImage(size_t size) {
   return nullptr;
 }
 
+// Lacos de 16 sobre os objetos de render, limitadores de indice (> 15 -> 0) e a lista de
+// flags do gerenciador (+0x194a8 -> +0x1ab30). Tabela gerada por immtab.py sobre a
+// desmontagem completa; cada campo e conferido antes. Mais: o seletor de LOD (0x1409558c0..)
+// guarda 3 arrays de 16 na pilha indexados pelo carro; a contagem lida ali
+// (`movsxd rcx,[rcx+0x19640]`) passa por uma caverna que a limita a 16.
+struct ImmPatch {
+  uintptr_t va;
+  int size; // 1 ou 4
+  uint32_t from;
+  uint32_t to;
+};
+constexpr ImmPatch kRenderLimits[] = {
+    {0x14097028c, 1, 0x10, 0x18},       {0x14097031b, 1, 0x10, 0x18},
+    {0x14097035c, 1, 0x10, 0x18},       {0x140970797, 1, 0x10, 0x18},
+    {0x14097080a, 1, 0x10, 0x18},       {0x14097144b, 1, 0x10, 0x18},
+    {0x14097149c, 1, 0x10, 0x18},       {0x1409749ee, 1, 0x10, 0x18},
+    {0x140974a2a, 1, 0x10, 0x18},       {0x140978be3, 1, 0x10, 0x18},
+    {0x140992b69, 1, 0x10, 0x18},       {0x14099f0fd, 1, 0x10, 0x18},
+    {0x14099f298, 1, 0x10, 0x18},       {0x14099f2cf, 1, 0x10, 0x18},
+    {0x1409707bf, 1, 0x10, 0x18},       // carro selecionado >= 16 -> 0
+    {0x14099f105, 1, 0x0f, 0x17},       {0x14095352b, 1, 0x0f, 0x17},
+    {0x1409535ac, 1, 0x0f, 0x17},       {0x140953a58, 1, 0x0f, 0x17},
+    {0x1409ab7ba, 1, 0x0f, 0x17},       {0x140955a1a, 1, 0x0f, 0x17},
+    {0x140977d2f, 4, 0x17300, 0x22c80}, {0x1409a2d27, 4, 0x17300, 0x22c80},
+    {0x140ac0472, 4, 0x17300, 0x22c80}, {0x140b9b236, 4, 0x17300, 0x22c80},
+    {0x140b9b22c, 4, 0x10, 0x18},       // carga de modelos (0x140b9b210), de tras para frente
+    {0x1404acdf3, 4, 0x194a8, 0x1ab30}, {0x140953595, 4, 0x194a8, 0x1ab30},
+    {0x14095371e, 4, 0x194a8, 0x1ab30}, {0x140953a37, 4, 0x194a8, 0x1ab30},
+    {0x140986226, 4, 0x194a8, 0x1ab30}, {0x140991548, 4, 0x194a8, 0x1ab30},
+    {0x140999a8c, 4, 0x194a8, 0x1ab30}, {0x140b4cd99, 4, 0x194a8, 0x1ab30},
+    {0x140b51668, 4, 0x194a8, 0x1ab30}, {0x140c48635, 4, 0x194a8, 0x1ab30},
+    {0x140c48aa1, 4, 0x194a8, 0x1ab30},
+};
+constexpr uintptr_t kLodCountVa = 0x140955917; // movsxd rcx,[rcx+0x19640] (7 bytes)
+
+bool PatchRenderLimits() {
+  for (const auto &p : kRenderLimits) {
+    uint32_t cur = 0;
+    std::memcpy(&cur, reinterpret_cast<void *>(g_gameBase + (p.va - kImageBase)), p.size);
+    if (cur != p.from) {
+      char msg[140];
+      std::snprintf(msg, sizeof(msg), "GhostLab[render]: limite em 0x%llx = 0x%x (esperado 0x%x); nada trocado.",
+                    static_cast<unsigned long long>(p.va), cur, p.from);
+      Logger::Warn(msg);
+      return false;
+    }
+  }
+  uint8_t *lod = reinterpret_cast<uint8_t *>(g_gameBase + (kLodCountVa - kImageBase));
+  const uint8_t lodExpected[] = {0x48, 0x63, 0x89, 0x40, 0x96, 0x01, 0x00};
+  if (std::memcmp(lod, lodExpected, sizeof(lodExpected)) != 0) {
+    Logger::Warn("GhostLab[render]: contagem do seletor de LOD diferente do esperado; nada trocado.");
+    return false;
+  }
+  // Caverna: movsxd rcx,[rcx+0x19640]; cmp rcx,16; jle +5; mov ecx,16; ret
+  uint8_t *cave = AllocNearImage(0x1000);
+  if (cave == nullptr) return false;
+  const uint8_t caveCode[] = {0x48, 0x63, 0x89, 0x40, 0x96, 0x01, 0x00, 0x48, 0x83, 0xf9,
+                              0x10, 0x7e, 0x05, 0xb9, 0x10, 0x00, 0x00, 0x00, 0xc3};
+  std::memcpy(cave, caveCode, sizeof(caveCode));
+  DWORD old = 0;
+  VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
+  FlushInstructionCache(GetCurrentProcess(), cave, sizeof(caveCode));
+  uint8_t call[7] = {0xe8, 0, 0, 0, 0, 0x66, 0x90}; // call cave; nop
+  const int32_t rel = static_cast<int32_t>(reinterpret_cast<intptr_t>(cave) -
+                                           reinterpret_cast<intptr_t>(lod + 5));
+  std::memcpy(call + 1, &rel, 4);
+  bool ok = PatchBytes(reinterpret_cast<uintptr_t>(lod), call, 7);
+  for (const auto &p : kRenderLimits) {
+    ok = PatchBytes(g_gameBase + (p.va - kImageBase), reinterpret_cast<const uint8_t *>(&p.to), p.size) && ok;
+  }
+  char msg[140];
+  std::snprintf(msg, sizeof(msg), "GhostLab[render]: %zu limites de render 16 -> 24 e LOD limitado a 16 (%s).",
+                sizeof(kRenderLimits) / sizeof(kRenderLimits[0]), ok ? "ok" : "FALHOU parcialmente");
+  Logger::Info(msg);
+  return ok;
+}
+
 void PatchRenderObjectArray() {
   if (WantedGhostCars() < 16) return;
   if (GetEnvironmentVariableA("DR2HOOK_RENDER_ARRAY", nullptr, 0) != 0) {
@@ -1677,6 +1754,13 @@ void PatchRenderObjectArray() {
   const int32_t rb = rel32(bLea, 7, scratch);
   std::memcpy(leaArray + 3, &ra, 4);
   std::memcpy(leaFlags + 3, &rb, 4);
+  // Com a dxgi.dll que amplia o gerenciador, a lista de flags (24) fica no proprio objeto,
+  // em +0x1ab30, e os outros acessos a ela e os lacos de 16 sao ajustados.
+  const bool bigManager = GetEnvironmentVariableA("DR2HOOK_RENDERMGR_SIZE", nullptr, 0) != 0;
+  if (bigManager) {
+    const uint8_t inObject[7] = {0x48, 0x8d, 0xbe, 0x30, 0xab, 0x01, 0x00}; // lea rdi,[rsi+0x1ab30]
+    std::memcpy(leaFlags, inObject, 7);
+  }
   const uint8_t cmpLoop[] = {0x83, 0xfb, static_cast<uint8_t>(kRenderObjects)};
   const uint8_t cmpFind[] = {0x48, 0x83, 0xfa, static_cast<uint8_t>(kRenderObjects)};
   bool ok = PatchBytes(g_gameBase + (0x14095341a - kImageBase), cmpFind, 4);
@@ -1684,6 +1768,12 @@ void PatchRenderObjectArray() {
   ok = PatchBytes(g_gameBase + (0x1409462e7 - kImageBase), cmpLoop, 3) && ok;
   ok = PatchBytes(bLea, leaFlags, 7) && ok;
   ok = PatchBytes(aLea, leaArray, 7) && ok; // por ultimo: liga o array externo
+  if (bigManager) {
+    ok = PatchRenderLimits() && ok;
+  } else {
+    Logger::Warn("GhostLab[render]: dxgi.dll sem a ampliacao do gerenciador de render; "
+                 "lacos de render continuam em 16.");
+  }
   SetEnvironmentVariableA("DR2HOOK_RENDER_ARRAY", "1");
   char msg[200];
   std::snprintf(msg, sizeof(msg),

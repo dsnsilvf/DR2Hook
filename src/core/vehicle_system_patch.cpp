@@ -28,6 +28,9 @@ constexpr SizePatch kPatches[] = {
     {0x1404694e9, 0x16c0, 0x1900, "VEHICLE_SYSTEM (delete)", nullptr},
     // Pilotos/animações internas (0x140b46bc0): + 24 parâmetros de 0x68.
     {0x140b93e82, 0xb180, 0xbb40, "pilotos", "DR2HOOK_DRIVERSYS_SIZE"},
+    // Gerenciador de render (0x1409451a0): lista de 16 flags por carro (+0x194a8) vai
+    // para +0x1ab30 com 24.
+    {0x140b947aa, 0x1ab30, 0x1ab90, "render", "DR2HOOK_RENDERMGR_SIZE"},
 };
 constexpr size_t kPatchCount = sizeof(kPatches) / sizeof(kPatches[0]);
 int g_result[kPatchCount] = {}; // 0 = não tentado, 1 = ok, -1 = bytes diferentes
