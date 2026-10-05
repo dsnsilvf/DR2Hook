@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DR2 UI Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;1,500;1,600;1,700&family=Roboto+Condensed:wght@400;700&display=swap">
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">DR2 UI Viewer</div>
+  <nav class="modes" role="tablist">
+    <button data-mode="screens" data-i18n="tab.screens">Telas</button>
+    <button data-mode="components" data-i18n="tab.components">Cenas</button>
+    <button data-mode="images" data-i18n="tab.images">Imagens</button>
+    <button data-mode="models" data-i18n="tab.models">Modelos</button>
+    <button data-mode="cars" data-i18n="tab.cars">Carros</button>
+    <button data-mode="tracks" data-i18n="tab.tracks">Pistas</button>
+    <button data-mode="texts" data-i18n="tab.texts">Textos</button>
+    <button data-mode="dialogs" data-i18n="tab.dialogs">Diálogos</button>
+  </nav>
+  <div class="spacer"></div>
+  <label class="opt"><span data-i18n="lang">Idioma</span>
+    <select id="lang"><option value="bra">Português</option><option value="eng">English</option></select>
+  </label>
+</header>
+<main class="layout">
+  <aside class="side">
+    <input id="search" type="search" autocomplete="off">
+    <div id="filters" class="filters"></div>
+    <div id="list" class="list"></div>
+  </aside>
+
+  <section class="stage" id="stage">
+    <div class="toolbar">
+      <label data-i18n-title="opt.boxes.tip"><input type="checkbox" id="o-boxes"> <span data-i18n="opt.boxes"></span></label>
+      <label data-i18n-title="opt.reveal.tip"><input type="checkbox" id="o-reveal"> <span data-i18n="opt.reveal"></span></label>
+      <label data-i18n-title="opt.data.tip"><input type="checkbox" id="o-data" checked> <span data-i18n="opt.data"></span></label>
+      <label data-i18n-title="opt.names.tip"><input type="checkbox" id="o-names"> <span data-i18n="opt.names"></span></label>
+      <label data-i18n-title="opt.cond.tip"><input type="checkbox" id="o-cond"> <span data-i18n="opt.cond"></span></label>
+      <label data-i18n-title="opt.full.tip"><input type="checkbox" id="o-full"> <span data-i18n="opt.full"></span></label>
+      <label data-i18n-title="opt.static.tip"><input type="checkbox" id="o-static"> <span data-i18n="opt.static"></span></label>
+      <label data-i18n-title="opt.bg.tip"><input type="checkbox" id="o-bg" checked> <span data-i18n="opt.bg"></span></label>
+    </div>
+    <div class="canvas-wrap" id="wrap">
+      <canvas id="view" width="1920" height="1080"></canvas>
+      <div id="tip" class="tip" hidden></div>
+    </div>
+    <div class="animbar" id="animbar">
+      <span class="label" data-i18n="anim.title">Animação</span>
+      <div id="events" class="events" data-i18n-title="anim.tip"></div>
+      <select id="anim-scope">
+        <option value="screen" data-i18n="anim.scope.screen"></option>
+        <option value="item" data-i18n="anim.scope.item"></option>
+      </select>
+      <label class="speed"><span data-i18n="anim.speed"></span>
+        <select id="anim-speed"><option value="0.25">0,25×</option><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      </label>
+      <button id="anim-reset" data-i18n="anim.reset">Repouso</button>
+      <div class="scrub" data-i18n-title="anim.scrub">
+        <span data-i18n="anim.frame">Quadro</span>
+        <input type="range" id="anim-scrub" min="0" max="3.5" step="0.01" value="0">
+        <output id="anim-frame">—</output>
+        <button id="anim-release" data-i18n="anim.release" hidden>Soltar</button>
+      </div>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="content" id="content" hidden></section>
+
+  <aside class="inspect" id="inspect"></aside>
+</main>
+<script src="data/ui.js"></script>
+<script src="data/scenes.js"></script>
+<script src="data/strings.js"></script>
+<script src="data/assets.js"></script>
+<script src="data/models.js"></script>
+<script src="data/tracks.js"></script>
+<script src="i18n.js"></script>
+<script src="viewer.js"></script>
+<script src="content.js"></script>
+<script src="trackview.js"></script>
+<script src="carview.js"></script>
+</body>
+</html>

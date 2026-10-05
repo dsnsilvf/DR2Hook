@@ -40,6 +40,11 @@ class PSSGNode:
         self.attributes: Dict[str, PSSGAttribute] = {}
         self.children: List['PSSGNode'] = []
         self.data: Optional[bytes] = None
+        # Estado de leitura usado pelo serializador: bytes originais do payload (antes de
+        # descomprimir) e o conteudo decodificado, para reaproveitar o original se nada mudou.
+        self._raw_payload: Optional[bytes] = None
+        self._orig_data: Optional[bytes] = None
+        self._compressed = False
 
     def get(self, attr_name: str, default=None):
         attr = self.attributes.get(attr_name)
@@ -103,6 +108,8 @@ class PSSGFile:
         self.node_types: Dict[int, Tuple[str, Dict[int, str]]] = {}
         self.attr_names: Dict[int, str] = {}
         self.root: Optional[PSSGNode] = None
+        self._schema_raw = b""
+        self._tail = b""
 
         if filepath_or_data:
             if isinstance(filepath_or_data, str) or hasattr(filepath_or_data, "read"):
@@ -154,10 +161,14 @@ class PSSGFile:
             self.node_types[node_id] = (node_name, attrs)
 
         schema_end = pos
+        self._schema_raw = data[16:schema_end]
+        self._tail = b""
 
         # 2. Arvore de nos
         if schema_end < len(data):
             self.root = self._parse_node(data, schema_end, len(data))
+            if self.root is not None:
+                self._tail = data[self.root.offset + 8 + self.root.size:]
 
         return self
 
@@ -239,16 +250,77 @@ class PSSGFile:
 
         if payload_len > 0:
             raw_data = data[payload_start:payload_end]
+            node._raw_payload = raw_data
             # Verifica se ha zlib embutido
             if len(raw_data) >= 6 and raw_data[:2] in (b'\x78\x9c', b'\x78\x01', b'\x78\xda', b'\x78\x5e'):
                 try:
                     node.data = zlib.decompress(raw_data)
+                    node._compressed = True
                 except Exception:
                     node.data = raw_data
             else:
                 node.data = raw_data
+            node._orig_data = node.data
 
         return node
+
+    # ---- Escrita ----
+
+    @staticmethod
+    def encode_value(value: Any) -> bytes:
+        """Valor de atributo em bytes: texto (u32 tamanho + utf-8), bytes crus ou inteiro/float de 4 bytes."""
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        if isinstance(value, str):
+            raw = value.encode("utf-8")
+            return struct.pack(">I", len(raw)) + raw
+        if isinstance(value, float):
+            return struct.pack(">f", value)
+        if isinstance(value, int):
+            return struct.pack(">I", value)
+        raise TypeError(f"valor de atributo nao suportado: {type(value).__name__}")
+
+    @staticmethod
+    def set_attr(node: PSSGNode, name: str, value: Any) -> None:
+        """Altera (ou cria) um atributo; o nome precisa existir no esquema do tipo do no."""
+        raw = PSSGFile.encode_value(value)
+        attr = node.attributes.get(name)
+        if attr is not None:
+            attr.raw_value, attr.value = raw, value
+        else:
+            node.attributes[name] = PSSGAttribute(-1, name, raw, value)
+
+    def _attr_id(self, node: PSSGNode, name: str, attr: PSSGAttribute) -> int:
+        if attr.attr_id >= 0:
+            return attr.attr_id
+        for aid, aname in self.node_types.get(node.node_id, ("", {}))[1].items():
+            if aname == name:
+                return aid
+        raise ValueError(f"atributo {name!r} nao existe no esquema de {node.type_name}")
+
+    def _payload(self, node: PSSGNode) -> bytes:
+        if node.children:
+            return b"".join(self._node_bytes(child) for child in node.children)
+        if node.data is None:
+            return b""
+        if node._raw_payload is not None and node.data == node._orig_data:
+            return node._raw_payload
+        return zlib.compress(node.data) if node._compressed else node.data
+
+    def _node_bytes(self, node: PSSGNode) -> bytes:
+        attrs = b"".join(
+            struct.pack(">II", self._attr_id(node, name, attr), len(attr.raw_value)) + attr.raw_value
+            for name, attr in node.attributes.items())
+        payload = self._payload(node)
+        return struct.pack(">III", node.node_id, 4 + len(attrs) + len(payload), len(attrs)) + attrs + payload
+
+    def serialize(self) -> bytes:
+        """Arquivo PSSG completo. Sem alteracoes, devolve os mesmos bytes que foram lidos."""
+        if self.root is None:
+            raise ValueError("arquivo sem arvore de nos")
+        body = self._schema_raw + self._node_bytes(self.root) + self._tail
+        return struct.pack(">4sIII", b"PSSG", self.file_size if self.file_size else len(body) + 8,
+                           self.attr_count, self.node_type_count) + body
 
     def find_nodes(self, predicate) -> List[PSSGNode]:
         results: List[PSSGNode] = []

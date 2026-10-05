@@ -1,4 +1,4 @@
-"""Decifração AES (ECB) em Python puro, por tabelas. Bytes finais fora de um bloco de 16 passam intactos."""
+"""AES (ECB) em Python puro, por tabelas, para decifrar e cifrar. Bytes finais fora de um bloco de 16 passam intactos."""
 
 _SBOX = [0] * 256
 _INV_SBOX = [0] * 256
@@ -76,7 +76,7 @@ def _decryption_keys(key: bytes) -> tuple[list[list[int]], int]:
     return dk, nr
 
 
-def decrypt_ecb(data: bytes, key: bytes) -> bytes:
+def _py_decrypt_ecb(data: bytes, key: bytes) -> bytes:
     dk, nr = _decryption_keys(key)
     t0, t1, t2, t3 = _T
     inv = _INV_SBOX
@@ -104,3 +104,119 @@ def decrypt_ecb(data: bytes, key: bytes) -> bytes:
         )
         out[o : o + 16] = b"".join(v.to_bytes(4, "big") for v in words)
     return bytes(out)
+
+
+_TE = [[0] * 256 for _ in range(4)]
+for _x in range(256):
+    _s = _SBOX[_x]
+    _w = (_mul(_s, 2) << 24) | (_s << 16) | (_s << 8) | _mul(_s, 3)
+    for _k in range(4):
+        _TE[_k][_x] = ((_w >> (8 * _k)) | (_w << (32 - 8 * _k))) & 0xFFFFFFFF
+
+
+def _round_keys(key: bytes) -> tuple[list[list[int]], int]:
+    nk = len(key) // 4
+    nr = nk + 6
+    w = [int.from_bytes(key[4 * i : 4 * i + 4], "big") for i in range(nk)]
+    rc = 1
+    for i in range(nk, 4 * (nr + 1)):
+        t = w[i - 1]
+        if i % nk == 0:
+            t = _sub_word(((t << 8) | (t >> 24)) & 0xFFFFFFFF) ^ (rc << 24)
+            rc = _xtime(rc)
+        elif nk > 6 and i % nk == 4:
+            t = _sub_word(t)
+        w.append(w[i - nk] ^ t)
+    return [w[4 * r : 4 * r + 4] for r in range(nr + 1)], nr
+
+
+def _py_encrypt_ecb(data: bytes, key: bytes) -> bytes:
+    rk, nr = _round_keys(key)
+    t0, t1, t2, t3 = _TE
+    sb = _SBOX
+    out = bytearray(data)
+    for o in range(0, len(data) - 15, 16):
+        k = rk[0]
+        s0 = int.from_bytes(data[o : o + 4], "big") ^ k[0]
+        s1 = int.from_bytes(data[o + 4 : o + 8], "big") ^ k[1]
+        s2 = int.from_bytes(data[o + 8 : o + 12], "big") ^ k[2]
+        s3 = int.from_bytes(data[o + 12 : o + 16], "big") ^ k[3]
+        for r in range(1, nr):
+            k = rk[r]
+            s0, s1, s2, s3 = (
+                t0[s0 >> 24] ^ t1[(s1 >> 16) & 255] ^ t2[(s2 >> 8) & 255] ^ t3[s3 & 255] ^ k[0],
+                t0[s1 >> 24] ^ t1[(s2 >> 16) & 255] ^ t2[(s3 >> 8) & 255] ^ t3[s0 & 255] ^ k[1],
+                t0[s2 >> 24] ^ t1[(s3 >> 16) & 255] ^ t2[(s0 >> 8) & 255] ^ t3[s1 & 255] ^ k[2],
+                t0[s3 >> 24] ^ t1[(s0 >> 16) & 255] ^ t2[(s1 >> 8) & 255] ^ t3[s2 & 255] ^ k[3],
+            )
+        k = rk[nr]
+        words = (
+            ((sb[s0 >> 24] << 24) | (sb[(s1 >> 16) & 255] << 16) | (sb[(s2 >> 8) & 255] << 8) | sb[s3 & 255]) ^ k[0],
+            ((sb[s1 >> 24] << 24) | (sb[(s2 >> 16) & 255] << 16) | (sb[(s3 >> 8) & 255] << 8) | sb[s0 & 255]) ^ k[1],
+            ((sb[s2 >> 24] << 24) | (sb[(s3 >> 16) & 255] << 16) | (sb[(s0 >> 8) & 255] << 8) | sb[s1 & 255]) ^ k[2],
+            ((sb[s3 >> 24] << 24) | (sb[(s0 >> 16) & 255] << 16) | (sb[(s1 >> 8) & 255] << 8) | sb[s2 & 255]) ^ k[3],
+        )
+        out[o : o + 16] = b"".join(v.to_bytes(4, "big") for v in words)
+    return bytes(out)
+
+
+def _load_native():
+    """AES-ECB do libcrypto (OpenSSL) via ctypes; None se a biblioteca não estiver disponível."""
+    import ctypes
+    import ctypes.util
+
+    name = ctypes.util.find_library("crypto")
+    if not name:
+        return None
+    try:
+        lib = ctypes.CDLL(name)
+        lib.EVP_CIPHER_CTX_new.restype = ctypes.c_void_p
+        lib.EVP_CIPHER_CTX_free.argtypes = [ctypes.c_void_p]
+        lib.EVP_CIPHER_CTX_set_padding.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        ciphers = {}
+        for size in (16, 24, 32):
+            fn = getattr(lib, f"EVP_aes_{size * 8}_ecb")
+            fn.restype = ctypes.c_void_p
+            ciphers[size] = fn()
+        init = {True: lib.EVP_EncryptInit_ex, False: lib.EVP_DecryptInit_ex}
+        update = {True: lib.EVP_EncryptUpdate, False: lib.EVP_DecryptUpdate}
+        for fn in (*init.values(),):
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        for fn in (*update.values(),):
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_int]
+    except (OSError, AttributeError):
+        return None
+
+    def run(data: bytes, key: bytes, encrypt: bool) -> bytes:
+        whole = len(data) & ~15
+        if not whole:
+            return bytes(data)
+        ctx = lib.EVP_CIPHER_CTX_new()
+        try:
+            if not init[encrypt](ctx, ciphers[len(key)], None, key, None):
+                raise ValueError("EVP_*Init_ex falhou")
+            lib.EVP_CIPHER_CTX_set_padding(ctx, 0)
+            out = ctypes.create_string_buffer(whole + 16)
+            n = ctypes.c_int(0)
+            if not update[encrypt](ctx, out, ctypes.byref(n), bytes(data[:whole]), whole) or n.value != whole:
+                raise ValueError("EVP_*Update falhou")
+            return out.raw[:whole] + bytes(data[whole:])
+        finally:
+            lib.EVP_CIPHER_CTX_free(ctx)
+
+    return run
+
+
+_NATIVE = _load_native()
+
+
+def decrypt_ecb(data: bytes, key: bytes) -> bytes:
+    if _NATIVE is not None and len(key) in (16, 24, 32):
+        return _NATIVE(data, key, False)
+    return _py_decrypt_ecb(data, key)
+
+
+def encrypt_ecb(data: bytes, key: bytes) -> bytes:
+    if _NATIVE is not None and len(key) in (16, 24, 32):
+        return _NATIVE(data, key, True)
+    return _py_encrypt_ecb(data, key)

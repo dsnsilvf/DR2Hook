@@ -1,0 +1,1698 @@
+"use strict";
+// Car Model Explorer: árvore real do carro (LOD → nó → fatia), viewport 3D e inspector.
+// Lê models/<id>.car.json (hierarquia e metadados) e models/<id>.car.bin (um buffer por
+// RENDERDATASOURCE, enviado à GPU uma vez; cada fatia desenha só o seu intervalo).
+// Os vértices são locais ao osso: cada nó entra com a matriz `world` do PSSG.
+// Somente leitura. O que não foi interpretado aparece como veio em «extra» e «notas».
+
+const CAR_LIST = MODEL_LIST.filter((m) => m.car);
+const cv = {
+  carId: null, loadedId: null, row: null, data: null,
+  nodes: new Map(), slices: new Map(), lodRoots: new Map(),
+  fixes: [], res: new Map(), textures: new Map(), matTex: new Map(), matBlend: new Map(),
+  selected: null,                 // "n:<uid>" ou "s:<chave da fatia>"
+  expanded: new Set(), hidden: new Set(), hiddenSlices: new Set(),
+  lod: "LOD0", solo: false, wire: false, flat: false, flip: false, variant: "tarmac", glass: true,
+  yaw: 0.7, pitch: 0.3, dist: 5, target: [0, 0.5, 0], drag: null,
+  tool: "orbit", gz: null, gzHover: -1, edited: new Set(), hist: [], histPos: 0, histOpen: false, camsOn: true, camView: null,   // ferramenta: orbit | move | rotate
+  gl: null, program: null, grid: null, loc: null, draw: [], dirty: true, gen: 0, status: "",
+};
+const CAR_ACCENT = [1, 0.6, 0.15];
+
+function carLog(...args) { console.info("[car]", ...args); }
+function carKindLabel(m) { return modelKind(m.k); }
+
+// ------------------------------------------------------------ dados
+
+function carIndex(data) {
+  cv.nodes.clear(); cv.slices.clear(); cv.lodRoots.clear();
+  const lodByUid = new Map((data.lods || []).map((l) => [l.uid, l.name]));
+  const walk = (n, parent, lod) => {
+    n._parent = parent;
+    n._lod = lodByUid.has(n.uid) ? lodByUid.get(n.uid) : lod;
+    cv.nodes.set(n.uid, n);
+    let tris = 0, verts = 0;
+    n.slices.forEach((s, i) => {
+      s.key = n.uid + "." + i;
+      s._node = n;
+      cv.slices.set(s.key, s);
+      if (s.ok) { tris += s.tris; verts += s.vc; }
+    });
+    for (const c of n.children) { walk(c, n, n._lod); tris += c._tris; verts += c._verts; }
+    n._tris = tris; n._verts = verts;
+  };
+  walk(data.tree, null, null);
+}
+
+function parseCarRes(buf) {
+  const view = new DataView(buf);
+  if (String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)) !== "DR2C") throw new Error("DR2C");
+  const dec = new TextDecoder();
+  const count = view.getUint32(4, true);
+  let o = 8;
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    const nameLen = view.getUint16(o, true);
+    const verts = view.getUint32(o + 4, true), indices = view.getUint32(o + 8, true), flags = view.getUint32(o + 12, true);
+    o += 16;
+    const id = dec.decode(new Uint8Array(buf, o, nameLen)); o += nameLen;
+    o = (o + 3) & ~3;
+    const pos = new Float32Array(buf, o, verts * 3); o += verts * 12;
+    const uv = new Float32Array(buf, o, verts * 2); o += verts * 8;
+    const wide = !!(flags & 1);
+    const ind = wide ? new Uint32Array(buf, o, indices) : new Uint16Array(buf, o, indices);
+    o += indices * (wide ? 4 : 2);
+    o = (o + 3) & ~3;
+    out.push({ id, verts, pos, uv, ind, wide });
+  }
+  return out;
+}
+
+function carFreeGpu() {
+  const gl = cv.gl;
+  if (gl) {
+    for (const r of cv.res.values()) {
+      gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ub); gl.deleteBuffer(r.ib);
+      if (r.lb) gl.deleteBuffer(r.lb);
+    }
+    for (const f of cv.fixes) {
+      gl.deleteBuffer(f.pb); gl.deleteBuffer(f.ub); gl.deleteBuffer(f.ib);
+      if (f.lb) gl.deleteBuffer(f.lb);
+    }
+  }
+  cv.res.clear();
+  cv.fixes.length = 0;
+}
+
+function carUpload(list) {
+  const gl = cv.gl;
+  carFreeGpu();
+  for (const r of list) {
+    if (r.wide && !gl.getExtension("OES_element_index_uint")) { carLog("buffer 32-bit sem suporte, ignorado:", r.id); continue; }
+    const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, r.pos, gl.STATIC_DRAW);
+    const ub = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ub); gl.bufferData(gl.ARRAY_BUFFER, r.uv, gl.STATIC_DRAW);
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, r.ind, gl.STATIC_DRAW);
+    // Arestas para o wireframe: criadas só quando o usuário liga a opção.
+    cv.res.set(r.id, { id: r.id, verts: r.verts, tris: r.ind.length / 3, wide: r.wide, pb, ub, ib, lb: null, ind: r.ind, pos: r.pos, uv: r.uv });
+  }
+}
+
+function carLines(r) {
+  if (r.lb) return r.lb;
+  const gl = cv.gl;
+  const n = r.ind.length / 3;
+  const lines = r.wide ? new Uint32Array(n * 6) : new Uint16Array(n * 6);
+  for (let t = 0; t < n; t++) {
+    const a = r.ind[t * 3], b = r.ind[t * 3 + 1], c = r.ind[t * 3 + 2];
+    lines.set([a, b, b, c, c, a], t * 6);
+  }
+  r.lb = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.lb);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lines, gl.STATIC_DRAW);
+  return r.lb;
+}
+
+// ------------------------------------------------------------ correções de roda e disco
+// O UV gravado no barril da roda e no disco não serve para o atlas: os mesmos remendos do
+// Modelos (centro aberto, borracha por dentro, UV circular do rotor) rodam aqui, por LOD e
+// material, em coordenadas do carro. Cada fatia recebe um buffer próprio já corrigido, e a
+// malha original no arquivo continua intacta.
+
+function carFixKind(material) {
+  if (/disc_blur/i.test(material)) return null;
+  if (/disc/i.test(material)) return "disc";
+  if (/wheel/i.test(material) && !isTread(material)) return "wheel";
+  return null;
+}
+
+function carWheelMesh(items) {
+  const pos = [], uv = [], ind = [], owner = [];
+  for (const { s, n } of items) {
+    const r = cv.res.get(s.rds);
+    if (!r || !r.pos) continue;
+    const m = n.world;
+    const remap = new Map();
+    for (let k = 0; k < s.ic; k++) {
+      const old = r.ind[s.io + k];
+      let id = remap.get(old);
+      if (id === undefined) {
+        id = pos.length / 3;
+        remap.set(old, id);
+        const x = r.pos[old * 3], y = r.pos[old * 3 + 1], z = r.pos[old * 3 + 2];
+        pos.push(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]);
+        uv.push(r.uv[old * 2], r.uv[old * 2 + 1]);
+      }
+      ind.push(id);
+      if (k % 3 === 2) owner.push(s);
+    }
+  }
+  return { pos: Float32Array.from(pos), uv: Float32Array.from(uv), ind: Uint32Array.from(ind), owner };
+}
+
+// Mesmos cortes de openWheelCenter e rubberizeInnerWheel (content.js), mantendo o dono de cada triângulo.
+function carOpenCenter(mesh) {
+  const { groups, which } = assignWheels(mesh.pos);
+  if (!groups.length) return;
+  const rad = (i, g) => Math.hypot(mesh.pos[i * 3 + 1] - g.y, mesh.pos[i * 3 + 2] - g.z) / g.rmax;
+  const keep = [], owner = [];
+  for (let t = 0; t < mesh.ind.length; t += 3) {
+    const a = mesh.ind[t], b = mesh.ind[t + 1], c = mesh.ind[t + 2];
+    const u = (fract1(mesh.uv[a * 2]) + fract1(mesh.uv[b * 2]) + fract1(mesh.uv[c * 2])) / 3;
+    const v = (fract1(mesh.uv[a * 2 + 1]) + fract1(mesh.uv[b * 2 + 1]) + fract1(mesh.uv[c * 2 + 1])) / 3;
+    const gi = which[a];
+    const g = gi >= 0 && which[b] === gi && which[c] === gi ? groups[gi] : null;
+    const inner = g && g.rmax > 1e-4 && (rad(a, g) + rad(b, g) + rad(c, g)) / 3 < 0.36;
+    if (inner && u < 0.32 && v > 0.75) continue;
+    keep.push(a, b, c); owner.push(mesh.owner[t / 3]);
+  }
+  mesh.ind = Uint32Array.from(keep);
+  mesh.owner = owner;
+}
+
+function carRubberInner(mesh) {
+  const { groups } = assignWheels(mesh.pos);
+  if (!groups.length) return;
+  const n = mesh.pos.length / 3;
+  const which = new Int16Array(n).fill(-1);
+  const depth = new Float32Array(n);
+  groups.forEach((g, gi) => {
+    const side = Math.sign(g.x) || 1;
+    let face = g.x;
+    for (const i of g.ids) {
+      const x = mesh.pos[i * 3];
+      face = side < 0 ? Math.min(face, x) : Math.max(face, x);
+    }
+    for (const i of g.ids) { which[i] = gi; depth[i] = (face - mesh.pos[i * 3]) * side; }
+  });
+  const ind = mesh.ind;
+  const outer = new Uint8Array(n);
+  for (let t = 0; t < ind.length; t += 3) {
+    if (Math.max(depth[ind[t]], depth[ind[t + 1]], depth[ind[t + 2]]) < 0.1) outer[ind[t]] = outer[ind[t + 1]] = outer[ind[t + 2]] = 1;
+  }
+  const rubber = (g, i) => {
+    const dy = mesh.pos[i * 3 + 1] - g.y, dz = mesh.pos[i * 3 + 2] - g.z;
+    const ang = Math.atan2(dz, dy);
+    const r = Math.min(1, Math.hypot(dy, dz) / (g.rmax || 1));
+    return [0.16 + ((ang / (Math.PI * 2) + 1) % 1) * 0.18, 0.855 + r * 0.04];
+  };
+  const pos = Array.from(mesh.pos), uv = Array.from(mesh.uv), keep = [];
+  for (let t = 0; t < ind.length; t += 3) {
+    const tri = [ind[t], ind[t + 1], ind[t + 2]];
+    // Qualquer vértice fundo põe o triângulo inteiro na borracha: os que ligam a borda ao fundo
+    // do barril têm profundidade média baixa e, de outro modo, mostrariam o atlas inteiro.
+    const d = Math.max(depth[tri[0]], depth[tri[1]], depth[tri[2]]);
+    if (d >= 0.1 && tri.every((i) => which[i] >= 0)) {
+      for (let k = 0; k < 3; k++) {
+        const i = tri[k];
+        const rub = rubber(groups[which[i]], i);
+        if (outer[i]) {
+          tri[k] = pos.length / 3;
+          pos.push(mesh.pos[i * 3], mesh.pos[i * 3 + 1], mesh.pos[i * 3 + 2]);
+          uv.push(rub[0], rub[1]);
+        } else { uv[i * 2] = rub[0]; uv[i * 2 + 1] = rub[1]; }
+      }
+    }
+    keep.push(tri[0], tri[1], tri[2]);
+  }
+  mesh.pos = Float32Array.from(pos); mesh.uv = Float32Array.from(uv); mesh.ind = Uint32Array.from(keep);
+}
+
+function carFixWheels() {
+  const gl = cv.gl;
+  if (!gl || !cv.data) return;
+  const groups = new Map();
+  for (const s of cv.slices.values()) {
+    const kind = s.ok && carFixKind(s.material);
+    if (!kind) continue;
+    const key = kind + "|" + (s._node._lod || "") + "|" + s.material;
+    if (!groups.has(key)) groups.set(key, { kind, items: [] });
+    groups.get(key).items.push({ s, n: s._node });
+  }
+  for (const { kind, items } of groups.values()) {
+    const mesh = carWheelMesh(items);
+    if (!mesh.ind.length) continue;
+    if (kind === "disc") mapDiscUv(mesh);
+    else { carOpenCenter(mesh); carRubberInner(mesh); }
+    const tris = new Map(items.map((it) => [it.s, []]));
+    mesh.owner.forEach((s, t) => tris.get(s).push(t));
+    for (const [s, list] of tris) {
+      const remap = new Map(), pos = [], uv = [], ind = [];
+      for (const t of list) for (let k = 0; k < 3; k++) {
+        const old = mesh.ind[t * 3 + k];
+        let id = remap.get(old);
+        if (id === undefined) {
+          id = pos.length / 3; remap.set(old, id);
+          pos.push(mesh.pos[old * 3], mesh.pos[old * 3 + 1], mesh.pos[old * 3 + 2]);
+          uv.push(mesh.uv[old * 2], mesh.uv[old * 2 + 1]);
+        }
+        ind.push(id);
+      }
+      const wide = pos.length / 3 > 65535;
+      const arr = wide ? Uint32Array.from(ind) : Uint16Array.from(ind);
+      const mk = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+      const fix = { wide, ind: arr, pos: Float32Array.from(pos), count: arr.length, lb: null,
+        pb: mk(gl.ARRAY_BUFFER, Float32Array.from(pos)), ub: mk(gl.ARRAY_BUFFER, Float32Array.from(uv)), ib: mk(gl.ELEMENT_ARRAY_BUFFER, arr) };
+      s._fix = fix;
+      cv.fixes.push(fix);
+    }
+  }
+}
+
+// Nós "<peça>_pos_NN" são poses extras de animação (ex.: limpador de para-brisa) sobrepostas à peça base.
+function carHidePoses(n) {
+  if (/_pos_\d+$/.test(n.id || "")) cv.hidden.add(n.uid);
+  for (const c of n.children || []) carHidePoses(c);
+}
+
+function openCar(id) {
+  const row = modelById.get(id);
+  if (!row || !row.car) return;
+  cv.carId = id;
+  cv.loadedId = id;
+  cv.row = row;
+  cv.data = null;
+  cv.edited.clear(); cv.gz = null; cv.hist = []; cv.histPos = 0; cv.camView = null;
+  cv.selected = null; cv.hidden.clear(); cv.hiddenSlices.clear(); cv.expanded.clear(); cv.solo = false;
+  cv.matTex.clear(); cv.matBlend.clear();
+  cv.status = t("car.loading");
+  carStatus(); renderList(); carInspect();
+  fetch(row.car).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((data) => {
+    if (cv.carId !== id) return null;
+    cv.data = data;
+    carIndex(data);
+    carHidePoses(data.tree);
+    carLog(id, "árvore:", data.lods.map((l) => `${l.name}=${l.nodes} nós/${l.slices} fatias/${l.tris} tris`).join(", "),
+      "| buffers:", Object.keys(data.resources).length, "| notas:", data.notes.length);
+    for (const note of data.notes) console.warn("[car]", note);
+    return fetch(data.bin).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); });
+  }).then((buf) => {
+    if (!buf || cv.carId !== id) return;
+    carUpload(parseCarRes(buf));
+    carFixWheels();
+    const lods = cv.data.lods.map((l) => l.name);
+    cv.lod = lods.includes("LOD0") ? "LOD0" : (lods[0] || "ALL");
+    state.filter = cv.lod;
+    const top = cv.data.tree;
+    cv.expanded.add(top.uid);
+    for (const c of top.children) if (!c._lod || c._lod === cv.lod) cv.expanded.add(c.uid);
+    cv.dirty = true;
+    cv.status = "";
+    carFrame(null);
+    renderFilters(); renderList(); carInspect(); carStatus(); carSyncBar();
+  }).catch((err) => {
+    cv.status = String((err && err.message) || err) + " — " + t("car.noload");
+    carStatus();
+  });
+}
+
+// ------------------------------------------------------------ geometria da seleção
+
+function carCorners(bb, m) {
+  const out = [];
+  for (const x of [bb[0], bb[3]]) for (const y of [bb[1], bb[4]]) for (const z of [bb[2], bb[5]]) {
+    out.push([x * m[0] + y * m[4] + z * m[8] + m[12], x * m[1] + y * m[5] + z * m[9] + m[13], x * m[2] + y * m[6] + z * m[10] + m[14]]);
+  }
+  return out;
+}
+function carAabb(n, box) {
+  if (n._lod && cv.lod !== "ALL" && n._lod !== cv.lod) return;
+  if (n.bbox && (n.slices.length || n.type === "MATRIXPALETTEJOINTNODE")) {
+    for (const p of carCorners(n.bbox, n.world)) for (let k = 0; k < 3; k++) { box.min[k] = Math.min(box.min[k], p[k]); box.max[k] = Math.max(box.max[k], p[k]); }
+  }
+  for (const c of n.children) carAabb(c, box);
+}
+function carSelNode() {
+  if (!cv.selected) return null;
+  const [kind, key] = cv.selected.split(":");
+  if (kind === "n") return cv.nodes.get(Number(key)) || null;
+  if (kind === "s") { const s = cv.slices.get(key); return s ? s._node : null; }
+  return null;
+}
+function carFrame(node) {
+  const box = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+  if (node) carAabb(node, box); else if (cv.data) carAabb(cv.data.tree, box);
+  if (!isFinite(box.min[0])) return;
+  const c = [0, 1, 2].map((k) => (box.min[k] + box.max[k]) / 2);
+  const radius = 0.5 * Math.hypot(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]) || 1;
+  cv.target = c;
+  cv.dist = Math.max(0.3, (radius / Math.tan(0.45)) * 1.15);
+}
+function carResetCamera() { cv.yaw = 0.7; cv.pitch = 0.3; carFrame(null); }
+
+// ------------------------------------------------------------ lista (árvore)
+
+// Categorias da árvore: o PSSG despeja dezenas de nós irmãos (`x0_suspension3_fixed_bl`...).
+// A agrupação é só da lista; o modelo continua igual.
+const CAR_GROUPS = [
+  ["interior", /^(main_interior|door_int|steering|seat|dash|int_)/],
+  ["glass", /^window/],
+  ["lights", /^light/],
+  ["wheels", /^(wheel|tyre|disc|hub|caliper|brake)/],
+  ["susp", /^(suspension|wishbone|damper|spring)/],
+  ["engine", /^(engine|exhaust|fan|radiator|turbo)/],
+  ["body", /^(main_body|bonnet|boot|door|bumper|wing|spoiler|mud|under|aerial|mpn|wiper|splitter|diffuser|roof|scoop|vent|mirror|badge|plate|front_panel|canopy)/],
+];
+const CAR_GROUP_MIN = 8;
+function carGroupOf(n) {
+  if (/^LOD\d/i.test(n.id)) return null;
+  const base = n.id.replace(/^x\d+_/i, "").toLowerCase();
+  for (const [key, re] of CAR_GROUPS) if (re.test(base)) return key;
+  return "other";
+}
+// [[categoria, nós]] na ordem fixa, ou null se a lista é curta demais para agrupar.
+function carGroups(kids) {
+  if (kids.length < CAR_GROUP_MIN) return null;
+  const by = new Map();
+  const direct = [];
+  for (const c of kids) {
+    const g = carGroupOf(c);
+    if (!g) { direct.push(c); continue; }
+    if (!by.has(g)) by.set(g, []);
+    by.get(g).push(c);
+  }
+  if (!by.size) return null;
+  const order = [...CAR_GROUPS.map((g) => g[0]), "other"];
+  return { direct, groups: order.filter((k) => by.has(k)).map((k) => [k, by.get(k)]) };
+}
+
+function carNodeMatches(n, q) {
+  if (n.id.toLowerCase().includes(q)) return true;
+  if (n.slices.some((s) => (s.material || "").toLowerCase().includes(q))) return true;
+  return n.children.some((c) => carNodeMatches(c, q));
+}
+function carRows(q) {
+  if (!cv.data) return [`<p class="muted" style="padding:12px">${esc(cv.status || t("car.pick"))}</p>`];
+  const rows = [];
+  const lodOk = (n) => !n._lod || cv.lod === "ALL" || n._lod === cv.lod;
+  const eyeOn = (off) => (off ? "○" : "◉");
+  const visit = (n, depth, hiddenUp) => {
+    if (!lodOk(n)) return;
+    if (q && !carNodeMatches(n, q)) return;
+    const key = "n:" + n.uid;
+    const open = q ? true : cv.expanded.has(n.uid);
+    const has = n.children.length || n.slices.length;
+    const off = hiddenUp || cv.hidden.has(n.uid);
+    const label = n.id + (n.nickname && n.nickname !== n.id ? ` (${n.nickname})` : "");
+    rows.push(`<div class="row tree-row${cv.selected === key ? " on" : ""}${off ? " off" : ""}" data-id="${esc(key)}" style="padding-left:${6 + depth * 14}px">
+      <span class="tw caret" data-act="toggle" data-uid="${n.uid}">${has ? (open ? "▾" : "▸") : ""}</span>
+      <span class="tw eye" data-act="eye" data-uid="${n.uid}" title="${esc(t("car.eye"))}">${eyeOn(cv.hidden.has(n.uid))}</span>
+      <span class="nm" title="${esc(label)}${n._tris ? esc(` · ${n._verts.toLocaleString("pt-BR")} v · ${n._tris.toLocaleString("pt-BR")} △`) : ""}">${esc(label)}</span><span class="cnt">${n._tris ? n._tris.toLocaleString("pt-BR") : ""}</span></div>`);
+    if (!open) return;
+    for (const s of n.slices) {
+      if (q && !carNodeMatches({ id: "", slices: [s], children: [] }, q) && !n.id.toLowerCase().includes(q)) continue;
+      const sk = "s:" + s.key;
+      const soff = off || cv.hiddenSlices.has(s.key);
+      rows.push(`<div class="row tree-row slice${cv.selected === sk ? " on" : ""}${soff ? " off" : ""}${s.ok ? "" : " bad"}" data-id="${esc(sk)}" style="padding-left:${6 + (depth + 1) * 14}px">
+        <span class="tw"></span><span class="tw eye" data-act="seye" data-key="${s.key}" title="${esc(t("car.eye"))}">${eyeOn(cv.hiddenSlices.has(s.key))}</span>
+        <span class="nm" title="${esc(s.material)} · ${s.vc.toLocaleString("pt-BR")} v · ${s.tris.toLocaleString("pt-BR")} △">${esc(s.material)}</span><span class="cnt">${s.tris.toLocaleString("pt-BR")}</span></div>`);
+    }
+    const kids = n.children.filter((c) => lodOk(c) && (!q || carNodeMatches(c, q)));
+    const split = carGroups(kids);
+    if (!split) { for (const c of kids) visit(c, depth + 1, off); return; }
+    for (const c of split.direct) visit(c, depth + 1, off);
+    for (const [cat, members] of split.groups) {
+      const gk = `g:${n.uid}:${cat}`;
+      const gopen = q ? true : cv.expanded.has(gk);
+      const goff = off || members.every((m) => cv.hidden.has(m.uid));
+      const tris = members.reduce((a, m) => a + (m._tris || 0), 0);
+      const label = `${t("car.grp." + cat)} (${members.length})`;
+      rows.push(`<div class="row tree-row group${goff ? " off" : ""}" data-id="${esc(gk)}" style="padding-left:${6 + (depth + 1) * 14}px">
+        <span class="tw caret" data-act="gtoggle" data-gk="${esc(gk)}">${gopen ? "▾" : "▸"}</span>
+        <span class="tw eye" data-act="geye" data-uids="${members.map((m) => m.uid).join(",")}" title="${esc(t("car.eye"))}">${eyeOn(members.every((m) => cv.hidden.has(m.uid)))}</span>
+        <span class="nm" title="${esc(label)}">${esc(label)}</span><span class="cnt">${tris ? tris.toLocaleString("pt-BR") : ""}</span></div>`);
+      if (gopen) for (const c of members) visit(c, depth + 2, off);
+    }
+  };
+  visit(cv.data.tree, 0, false);
+  return rows.length ? rows : [`<p class="muted" style="padding:12px">${esc(t("nothing"))}</p>`];
+}
+
+function carListClick(e) {
+  const act = e.target.closest("[data-act]");
+  const row = e.target.closest(".tree-row");
+  if (!row) return;
+  e.stopPropagation();
+  if (act && act.dataset.act === "toggle") {
+    const uid = Number(act.dataset.uid);
+    if (cv.expanded.has(uid)) cv.expanded.delete(uid); else cv.expanded.add(uid);
+    renderList();
+    return;
+  }
+  if (act && act.dataset.act === "gtoggle") {
+    const gk = act.dataset.gk;
+    if (cv.expanded.has(gk)) cv.expanded.delete(gk); else cv.expanded.add(gk);
+    renderList();
+    return;
+  }
+  if (act && act.dataset.act === "geye") {
+    const uids = act.dataset.uids.split(",").map(Number);
+    const all = uids.every((u) => cv.hidden.has(u));
+    uids.forEach((u) => { if (all) cv.hidden.delete(u); else cv.hidden.add(u); });
+    cv.dirty = true; renderList();
+    return;
+  }
+  if (row.classList.contains("group")) {
+    const gk = row.dataset.id;
+    if (cv.expanded.has(gk)) cv.expanded.delete(gk); else cv.expanded.add(gk);
+    renderList();
+    return;
+  }
+  if (act && act.dataset.act === "eye") { carToggleHidden(Number(act.dataset.uid)); return; }
+  if (act && act.dataset.act === "seye") { carToggleSliceHidden(act.dataset.key); return; }
+  carSelect(row.dataset.id);
+}
+function carSelect(id) {
+  cv.selected = id;
+  cv.dirty = true;
+  renderList();
+  carInspect();
+  inspectEl.scrollTop = 0;
+  carSyncBar(); carStatus();
+}
+function carToggleHidden(uid) {
+  const n = cv.nodes.get(uid), hide = !cv.hidden.has(uid);
+  carViewEdit(`${t(hide ? "car.hist.hide" : "car.hist.show")} ${n ? n.id : uid}`, () => { if (hide) cv.hidden.add(uid); else cv.hidden.delete(uid); });
+}
+function carToggleSliceHidden(key) {
+  const hide = !cv.hiddenSlices.has(key);
+  carViewEdit(`${t(hide ? "car.hist.hide" : "car.hist.show")} ${key}`, () => { if (hide) cv.hiddenSlices.add(key); else cv.hiddenSlices.delete(key); });
+}
+
+// ------------------------------------------------------------ materiais e texturas
+
+function carMaterial(name) { return (cv.data && cv.data.materials[name]) || { id: name, group: "", params: {}, textures: {}, extra: {} }; }
+function carSliceVisible(material) {
+  if (/disc_blur/i.test(material)) return false;
+  const v = meshVariant(material);
+  return v === "base" || cv.variant === "all" || v === cv.variant;
+}
+// A grade (car_grill.fx) usa uma textura de malha em tile que não está nos arquivos do carro: fica em cinza escuro.
+const carIsGrill = (name) => /grill/i.test(carMaterial(name).group);
+function carMatTexId(name) {
+  if (carIsGrill(name)) return null;
+  if (!cv.matTex.has(name)) {
+    const guess = guessTexture(name, (cv.row && cv.row.tex) || []);
+    cv.matTex.set(name, guess ? guess.g + "/" + guess.n : null);
+  }
+  return cv.matTex.get(name);
+}
+function carIsBlend(name) {
+  if (!cv.matBlend.has(name)) cv.matBlend.set(name, /glass/i.test(carMaterial(name).group) || /glass/i.test(name));
+  return cv.matBlend.get(name);
+}
+function carTexture(id) {
+  if (!id) return null;
+  if (cv.textures.has(id)) return cv.textures.get(id);
+  cv.textures.set(id, null);
+  const asset = assetById.get(id);
+  if (!asset || !cv.gl) return null;
+  const image = new Image();
+  const gen = cv.gen;
+  image.onload = () => {
+    const gl = cv.gl;
+    if (!gl || gen !== cv.gen) return;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    cv.textures.set(id, tex);
+  };
+  image.src = asset.p;
+  return null;
+}
+
+// ------------------------------------------------------------ desenho
+
+function carCollect() {
+  const out = [];
+  const [skind, skey] = cv.selected ? cv.selected.split(":") : [null, null];
+  const selUid = skind === "n" ? Number(skey) : null;
+  const visit = (n, hiddenUp, selUp) => {
+    if (n._lod && cv.lod !== "ALL" && n._lod !== cv.lod) return;
+    const off = hiddenUp || cv.hidden.has(n.uid);
+    const inSel = selUp || n.uid === selUid;
+    if (!off) {
+      for (const s of n.slices) {
+        if (!s.ok || cv.hiddenSlices.has(s.key) || !carSliceVisible(s.material)) continue;
+        const sliceSel = skind === "s" && skey === s.key;
+        if (cv.solo && cv.selected && !(inSel || sliceSel)) continue;
+        out.push({ s, n, hi: !cv.solo && (inSel || sliceSel) });
+      }
+    }
+    for (const c of n.children) visit(c, off, inSel);
+  };
+  if (cv.data) visit(cv.data.tree, false, false);
+  return out;
+}
+
+function carGL() {
+  const canvas = document.getElementById("car-view");
+  const gl = canvas.getContext("webgl", { antialias: true, alpha: false });
+  if (!gl) return null;
+  const deriv = gl.getExtension("OES_standard_derivatives");
+  gl.getExtension("OES_element_index_uint");
+  const vs = `attribute vec3 aPos; attribute vec2 aUv; uniform mat4 uVp; uniform mat4 uModel; uniform mat4 uView;
+    varying vec2 vUv; varying vec3 vView;
+    void main() { vec4 w = uModel * vec4(aPos, 1.0); vUv = aUv; vView = (uView * w).xyz; gl_Position = uVp * w; }`;
+  const fs = `${deriv ? "#extension GL_OES_standard_derivatives : enable\n" : ""}
+    precision mediump float; varying vec2 vUv; varying vec3 vView;
+    uniform sampler2D uTex; uniform vec3 uColor; uniform int uHasTex; uniform int uFlip; uniform int uTread;
+    uniform float uHi; uniform float uAlpha; uniform int uLine;
+    void main() {
+      if (uLine == 1) { gl_FragColor = vec4(uColor, 1.0); return; }
+      ${deriv ? "vec3 n = normalize(cross(dFdx(vView), dFdy(vView))); float light = abs(dot(n, normalize(vec3(0.3, 0.85, 0.45)))) * 0.7 + 0.3;" : "float light = 1.0;"}
+      vec2 uv = vUv;
+      if (uTread == 1) uv = vec2(0.125 + fract(vUv.x) * 0.25, 0.848 + fract(vUv.y) * 0.062);
+      else if (uFlip == 1) uv.y = 1.0 - uv.y;
+      vec3 c = uHasTex == 1 ? texture2D(uTex, uv).rgb : uColor;
+      gl_FragColor = vec4(mix(c * light, vec3(1.0, 0.6, 0.15), uHi * 0.45), uAlpha);
+    }`;
+  const compile = (type, src) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  gl.useProgram(program);
+  gl.enable(gl.DEPTH_TEST);
+  gl.disable(gl.CULL_FACE);
+  const grid = gl.createBuffer();
+  const lines = [];
+  for (let i = -4; i <= 4; i++) lines.push(i, 0, -4, i, 0, 4, -4, 0, i, 4, 0, i);
+  gl.bindBuffer(gl.ARRAY_BUFFER, grid);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.STATIC_DRAW);
+  const loc = { pos: gl.getAttribLocation(program, "aPos"), uv: gl.getAttribLocation(program, "aUv") };
+  for (const name of ["uVp", "uModel", "uView", "uTex", "uColor", "uHasTex", "uFlip", "uTread", "uHi", "uAlpha", "uLine"]) loc[name] = gl.getUniformLocation(program, name);
+  Object.assign(cv, { gl, program, grid: { buf: grid, count: lines.length / 3 }, loc });
+
+  const IDENT = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const gen = cv.gen;
+  const frame = () => {
+    if (gen !== cv.gen || !canvas.isConnected) return;
+    requestAnimationFrame(frame);
+    if (state.mode !== "cars") return;
+    if (cv.dirty) { cv.draw = carCollect(); cv.dirty = false; carStatus(); }
+    const w = canvas.clientWidth || 800, h = canvas.clientHeight || 480;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+      canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
+    }
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.05, 0.06, 0.08, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const cam = carCamera();
+    const view = carViewMat(cam);
+    const vp = mat4Mul(mat4Perspective(carFov(), canvas.width / Math.max(1, canvas.height), 0.05, 200), view);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(loc.uVp, false, vp);
+    gl.uniformMatrix4fv(loc.uView, false, view);
+    gl.uniform1i(loc.uFlip, cv.flip ? 1 : 0);
+    gl.uniform1i(loc.uTex, 0);
+    gl.uniform1f(loc.uHi, 0);
+    gl.uniform1f(loc.uAlpha, 1);
+    gl.uniform1i(loc.uTread, 0);
+    gl.uniform1i(loc.uHasTex, 0);
+    gl.uniform1i(loc.uLine, 1);
+    gl.uniform3f(loc.uColor, 0.25, 0.28, 0.32);
+    gl.uniformMatrix4fv(loc.uModel, false, IDENT);
+    gl.bindBuffer(gl.ARRAY_BUFFER, grid);
+    gl.enableVertexAttribArray(loc.pos);
+    gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+    gl.disableVertexAttribArray(loc.uv);
+    gl.vertexAttrib2f(loc.uv, 0, 0);
+    gl.drawArrays(gl.LINES, 0, cv.grid.count);
+    gl.uniform1i(loc.uLine, 0);
+
+    const drawOne = (d, blend) => {
+      const s = d.s;
+      const r = s._fix || cv.res.get(s.rds);
+      if (!r) return;
+      const io = s._fix ? 0 : s.io, ic = s._fix ? s._fix.count : s.ic;
+      gl.bindBuffer(gl.ARRAY_BUFFER, r.pb);
+      gl.enableVertexAttribArray(loc.pos);
+      gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, r.ub);
+      gl.enableVertexAttribArray(loc.uv);
+      gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, 0, 0);
+      if (!d.n._m) d.n._m = new Float32Array(d.n.world);
+      gl.uniformMatrix4fv(loc.uModel, false, s._fix ? carFixModel(d.n) : d.n._m);
+      gl.uniform1f(loc.uHi, d.hi ? 1 : 0);
+      gl.uniform1f(loc.uAlpha, blend ? 0.4 : 1);
+      gl.uniform1i(loc.uTread, isTread(s.material) ? 1 : 0);
+      const tex = cv.flat ? null : carTexture(carMatTexId(s.material));
+      if (tex) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform1i(loc.uHasTex, 1);
+      } else {
+        const c = carIsGrill(s.material) ? [0.16, 0.16, 0.17] : colorOf(s.material);
+        gl.uniform1i(loc.uHasTex, 0);
+        gl.uniform3f(loc.uColor, c[0], c[1], c[2]);
+      }
+      const size = r.wide ? 4 : 2;
+      const type = r.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+      if (cv.wire) {
+        gl.uniform1i(loc.uLine, 1);
+        gl.uniform3f(loc.uColor, d.hi ? 1 : 0.7, d.hi ? 0.6 : 0.8, d.hi ? 0.15 : 0.9);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, carLines(r));
+        gl.drawElements(gl.LINES, ic * 2, type, io * 2 * size);
+        gl.uniform1i(loc.uLine, 0);
+      } else {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.ib);
+        gl.drawElements(gl.TRIANGLES, ic, type, io * size);
+      }
+    };
+    const opaque = [], glass = [];
+    for (const d of cv.draw) (cv.glass && carIsBlend(d.s.material) ? glass : opaque).push(d);
+    for (const d of opaque) drawOne(d, false);
+    if (glass.length) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      for (const d of glass) drawOne(d, true);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
+    carDrawCams(gl, loc);
+    carDrawGizmo(gl, loc, canvas);
+  };
+
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button > 2) return;
+    const pan = e.button === 1 || e.button === 2 || e.shiftKey;
+    if (e.button === 0 && !e.shiftKey && cv.tool !== "orbit") {
+      const axis = carGizmoHit(e, canvas);
+      if (axis >= 0) {
+        carGzStart(axis, e, canvas);
+        canvas.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+    }
+    const cam = carCamera();
+    cv.drag = { x: e.clientX, y: e.clientY, yaw: cv.yaw, pitch: cv.pitch, pan, target: cv.target.slice(), right: cam.right, up: cam.up };
+    canvas.setPointerCapture(e.pointerId);
+    if (pan) e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (cv.gz) { carGzMove(e, canvas); return; }
+    const d = cv.drag;
+    if (!d) {
+      if (cv.tool !== "orbit") {
+        const h = carGizmoHit(e, canvas);
+        if (h !== cv.gzHover) { cv.gzHover = h; canvas.style.cursor = h >= 0 ? "pointer" : ""; }
+      }
+      return;
+    }
+    const dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (d.pan) {
+      const k = cv.dist * 0.0022;
+      for (let i = 0; i < 3; i++) cv.target[i] = d.target[i] + (d.right[i] * dx - d.up[i] * dy) * k;
+      return;
+    }
+    cv.yaw = d.yaw - dx * 0.008;
+    cv.pitch = Math.max(-1.4, Math.min(1.4, d.pitch + dy * 0.008));
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (cv.gz) { carGzEnd(); return; }
+    const d = cv.drag;
+    cv.drag = null;
+    // Com Mover/Girar, clique sem arrastar (e sem pan) seleciona a peça sob o cursor.
+    if (cv.tool !== "orbit" && d && !d.pan && e.button === 0 && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) carPick(e, canvas);
+  });
+  canvas.addEventListener("pointercancel", () => { if (cv.gz) carGzEnd(); cv.drag = null; });
+  canvas.addEventListener("wheel", (e) => {
+    cv.dist = Math.max(0.3, Math.min(60, cv.dist * (e.deltaY > 0 ? 1.08 : 0.92)));
+    e.preventDefault();
+  }, { passive: false });
+  requestAnimationFrame(frame);
+  return gl;
+}
+
+// ------------------------------------------------------------ seleção por clique
+
+// Inversa de uma matriz afim 4x4 em coluna-maior (rotação/escala + translação).
+function carInvAffine(m) {
+  const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-12) return null;
+  const k = 1 / det;
+  const r = [(e * i - f * h) * k, (c * h - b * i) * k, (b * f - c * e) * k,
+    (f * g - d * i) * k, (a * i - c * g) * k, (c * d - a * f) * k,
+    (d * h - e * g) * k, (b * g - a * h) * k, (a * e - b * d) * k];
+  const tx = m[12], ty = m[13], tz = m[14];
+  return { r, t: [-(r[0] * tx + r[1] * ty + r[2] * tz), -(r[3] * tx + r[4] * ty + r[5] * tz), -(r[6] * tx + r[7] * ty + r[8] * tz)] };
+}
+
+// Menor distância de um raio (o, v) a um triângulo da fatia (Möller–Trumbore), ou Infinity.
+function carRaySlice(s, o, v) {
+  const r = s._fix || cv.res.get(s.rds);
+  if (!r || !r.pos || !r.ind) return Infinity;
+  const io = s._fix ? 0 : s.io, ic = s._fix ? s._fix.count : s.ic;
+  const P = r.pos, I = r.ind;
+  let best = Infinity;
+  for (let t = io; t + 2 < io + ic; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
+    const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
+    const px = v[1] * e2z - v[2] * e2y, py = v[2] * e2x - v[0] * e2z, pz = v[0] * e2y - v[1] * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det;
+    const tx = o[0] - P[a], ty = o[1] - P[a + 1], tz = o[2] - P[a + 2];
+    const u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < 0 || u > 1) continue;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+    const w = (v[0] * qx + v[1] * qy + v[2] * qz) * inv;
+    if (w < 0 || u + w > 1) continue;
+    const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    if (dist > 1e-5 && dist < best) best = dist;
+  }
+  return best;
+}
+
+// ------------------------------------------------------------ gizmo (mover / girar)
+
+const CAR_IDENT = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+const CAR_AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+const CAR_AXIS_COL = [[0.93, 0.27, 0.27], [0.45, 0.85, 0.3], [0.3, 0.52, 0.96]];
+const CAR_AXIS_HOT = [1, 0.85, 0.2];
+
+function carInvM(m) {
+  const inv = carInvAffine(m);
+  if (!inv) return CAR_IDENT;
+  const { r, t } = inv;
+  return new Float32Array([r[0], r[3], r[6], 0, r[1], r[4], r[7], 0, r[2], r[5], r[8], 0, t[0], t[1], t[2], 1]);
+}
+// Peças com malha corrigida (rodas, discos) vivem em coordenadas do carro: seguem o nó pela diferença para a pose original.
+function carFixModel(n) { return n._w0 ? mat4Mul(n._m || new Float32Array(n.world), carInvM(new Float32Array(n._w0))) : CAR_IDENT; }
+const carTranslateM = (p) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, p[0], p[1], p[2], 1]);
+function carRotateM(a, th) {
+  const c = Math.cos(th), s = Math.sin(th), k = 1 - c, [x, y, z] = a;
+  return new Float32Array([c + x * x * k, y * x * k + z * s, z * x * k - y * s, 0,
+    x * y * k - z * s, c + y * y * k, z * y * k + x * s, 0,
+    x * z * k + y * s, y * z * k - x * s, c + z * z * k, 0, 0, 0, 0, 1]);
+}
+
+// Aplica uma transformação no espaço do carro ao nó e a todo o ramo; só o nó raiz tem o local recalculado.
+function carApplyDelta(n, D) {
+  const visit = (x) => {
+    if (!x._w0) { x._w0 = x.world.slice(); x._l0 = x.local.slice(); }
+    const w = mat4Mul(D, new Float32Array(x.world));
+    x.world = Array.from(w);
+    x._m = w;
+    cv.edited.add(x);
+    x.children.forEach(visit);
+  };
+  visit(n);
+  const pw = n._parent ? new Float32Array(n._parent.world) : CAR_IDENT;
+  n.local = Array.from(mat4Mul(carInvM(pw), new Float32Array(n.world)));
+  cv.dirty = true;
+}
+function carRestoreEdits() {
+  const nodes = [...cv.edited], before = carSnapList(nodes);
+  for (const x of nodes) { x.world = x._w0; x.local = x._l0; x._m = new Float32Array(x.world); delete x._w0; delete x._l0; }
+  cv.edited.clear();
+  cv.dirty = true;
+  carInspect();
+  const after = carSnapList(nodes);
+  carCommit(t("car.hist.restore"), () => carSetNodes(before), () => carSetNodes(after));
+}
+
+// ------------------------------------------------------------ histórico (desfazer / refazer)
+// Cada entrada guarda o que desfaz e o que refaz; os estados são cópias de referências (world/local são trocados, não mutados).
+const CAR_HIST_MAX = 200;
+function carSnapList(nodes) { return nodes.map((x) => ({ x, world: x.world, local: x.local, w0: x._w0, l0: x._l0 })); }
+function carSnapBranch(root) {
+  const list = [];
+  const visit = (x) => { list.push(x); x.children.forEach(visit); };
+  visit(root);
+  return carSnapList(list);
+}
+function carSetNodes(snap) {
+  for (const e of snap) {
+    const x = e.x;
+    x.world = e.world; x.local = e.local; x._m = new Float32Array(e.world);
+    if (e.w0) { x._w0 = e.w0; x._l0 = e.l0; cv.edited.add(x); } else { delete x._w0; delete x._l0; cv.edited.delete(x); }
+  }
+  cv.dirty = true;
+  carInspect();
+}
+const carSnapView = () => ({ h: new Set(cv.hidden), s: new Set(cv.hiddenSlices), solo: cv.solo });
+function carSetView(v) {
+  cv.hidden = new Set(v.h); cv.hiddenSlices = new Set(v.s); cv.solo = v.solo;
+  cv.dirty = true;
+  renderList();
+}
+const carSameView = (a, b) => a.solo === b.solo && a.h.size === b.h.size && a.s.size === b.s.size && [...a.h].every((k) => b.h.has(k)) && [...a.s].every((k) => b.s.has(k));
+function carViewEdit(label, fn) {
+  const before = carSnapView();
+  fn();
+  const after = carSnapView();
+  cv.dirty = true; renderList();
+  if (!carSameView(before, after)) carCommit(label, () => carSetView(before), () => carSetView(after));
+}
+function carCommit(label, undo, redo) {
+  cv.hist.length = cv.histPos;
+  cv.hist.push({ label, undo, redo });
+  if (cv.hist.length > CAR_HIST_MAX) cv.hist.shift();
+  cv.histPos = cv.hist.length;
+  carHistChanged();
+}
+function carHistChanged() { carSyncBar(); carHistRender(); }
+function carHistGo(pos) {
+  pos = Math.max(0, Math.min(cv.hist.length, pos));
+  while (cv.histPos > pos) cv.hist[--cv.histPos].undo();
+  while (cv.histPos < pos) cv.hist[cv.histPos++].redo();
+  carHistChanged();
+}
+const carUndo = () => { if (!cv.gz) carHistGo(cv.histPos - 1); };
+const carRedo = () => { if (!cv.gz) carHistGo(cv.histPos + 1); };
+function carHistRender() {
+  const el = document.getElementById("car-hist");
+  if (!el) return;
+  el.hidden = !cv.histOpen;
+  if (!cv.histOpen) return;
+  const row = (i, label) => `<button type="button" class="hist-row${i === cv.histPos ? " cur" : ""}${i > cv.histPos ? " future" : ""}" data-hist="${i}"><span>${i}</span>${esc(label)}</button>`;
+  el.innerHTML = `<div class="hist-h">${esc(t("car.hist"))}</div><div class="hist-list">${row(0, t("car.hist.start"))}${cv.hist.map((h, i) => row(i + 1, h.label)).join("")}</div>`;
+  const cur = el.querySelector(".cur");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+function carViewProj(canvas) {
+  const cam = carCamera();
+  const asp = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+  return { cam, vp: mat4Mul(mat4Perspective(carFov(), asp, 0.05, 200), carViewMat(cam)) };
+}
+function carProject(vp, p, w, h) {
+  const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
+  const y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
+  const q = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+  return [(x / q * 0.5 + 0.5) * w, (0.5 - y / q * 0.5) * h, q];
+}
+// Pivô, tamanho e câmera do gizmo, ou null se não há nó editável selecionado.
+function carGizmoFrame(canvas) {
+  if (cv.tool === "orbit") return null;
+  const n = carSelNode();
+  if (!n || !cv.data || (n._lod && cv.lod !== "ALL" && n._lod !== cv.lod)) return null;
+  for (let q = n; q; q = q._parent) if (cv.hidden.has(q.uid)) return null;
+  const m = n._m || (n._m = new Float32Array(n.world));
+  const o = [m[12], m[13], m[14]];
+  const { cam, vp } = carViewProj(canvas);
+  const L = Math.hypot(o[0] - cam.eye[0], o[1] - cam.eye[1], o[2] - cam.eye[2]) * 0.16;
+  return { n, o, L, cam, vp, w: canvas.clientWidth, h: canvas.clientHeight };
+}
+function carRingPoints(o, ax, R, steps) {
+  const a = CAR_AXES[ax], u = CAR_AXES[(ax + 1) % 3], v = CAR_AXES[(ax + 2) % 3];
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2, c = Math.cos(t) * R, s = Math.sin(t) * R;
+    pts.push([o[0] + u[0] * c + v[0] * s, o[1] + u[1] * c + v[1] * s, o[2] + u[2] * c + v[2] * s]);
+  }
+  return pts;
+}
+function carSegDist(px, py, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / l2)) : 0;
+  return Math.hypot(px - (a[0] + dx * t), py - (a[1] + dy * t));
+}
+function carGizmoHit(e, canvas) {
+  const g = carGizmoFrame(canvas);
+  if (!g) return -1;
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = -1, bd = cv.tool === "move" ? 10 : 9;
+  for (let ax = 0; ax < 3; ax++) {
+    let d = Infinity;
+    if (cv.tool === "move") {
+      const a = CAR_AXES[ax];
+      d = carSegDist(mx, my, carProject(g.vp, g.o, g.w, g.h), carProject(g.vp, [g.o[0] + a[0] * g.L, g.o[1] + a[1] * g.L, g.o[2] + a[2] * g.L], g.w, g.h));
+    } else {
+      const pts = carRingPoints(g.o, ax, g.L * 0.9, 48).map((p) => carProject(g.vp, p, g.w, g.h));
+      for (let i = 0; i < 48; i++) d = Math.min(d, carSegDist(mx, my, pts[i], pts[i + 1]));
+    }
+    if (d < bd) { bd = d; best = ax; }
+  }
+  return best;
+}
+
+// Triângulos do gizmo, um conjunto por eixo.
+function carGizmoTris(g, ax) {
+  const o = g.o, L = g.L, a = CAR_AXES[ax], u = CAR_AXES[(ax + 1) % 3], v = CAR_AXES[(ax + 2) % 3];
+  const out = [];
+  const add = (p) => out.push(p[0], p[1], p[2]);
+  const at = (t, du, dv) => [o[0] + a[0] * t + u[0] * du + v[0] * dv, o[1] + a[1] * t + u[1] * du + v[1] * dv, o[2] + a[2] * t + u[2] * du + v[2] * dv];
+  const quad = (p0, p1, p2, p3) => { add(p0); add(p1); add(p2); add(p0); add(p2); add(p3); };
+  const hw = L * 0.014;
+  if (cv.tool === "move") {
+    const s = L * 0.78;
+    quad(at(0, -hw, 0), at(s, -hw, 0), at(s, hw, 0), at(0, hw, 0));
+    quad(at(0, 0, -hw), at(s, 0, -hw), at(s, 0, hw), at(0, 0, hw));
+    const rc = L * 0.06, N = 12;
+    for (let i = 0; i < N; i++) {
+      const t0 = (i / N) * Math.PI * 2, t1 = ((i + 1) / N) * Math.PI * 2;
+      const p0 = at(s, Math.cos(t0) * rc, Math.sin(t0) * rc), p1 = at(s, Math.cos(t1) * rc, Math.sin(t1) * rc);
+      add(p0); add(p1); add(at(L, 0, 0));
+      add(p0); add(at(s, 0, 0)); add(p1);
+    }
+  } else {
+    const R = L * 0.9, N = 48, w = L * 0.016;
+    const ring = (rr) => carRingPoints(o, ax, rr, N);
+    const inner = ring(R - w), outer = ring(R + w);
+    for (let i = 0; i < N; i++) quad(inner[i], outer[i], outer[i + 1], inner[i + 1]);
+    const base = ring(R);
+    for (let i = 0; i < N; i++) {
+      const lift = (p) => [p[0] + a[0] * w, p[1] + a[1] * w, p[2] + a[2] * w];
+      const drop = (p) => [p[0] - a[0] * w, p[1] - a[1] * w, p[2] - a[2] * w];
+      quad(drop(base[i]), lift(base[i]), lift(base[i + 1]), drop(base[i + 1]));
+    }
+  }
+  return new Float32Array(out);
+}
+
+function carDrawGizmo(gl, loc, canvas) {
+  const g = carGizmoFrame(canvas);
+  if (!g) return;
+  if (!cv.gzBuf) cv.gzBuf = gl.createBuffer();
+  gl.disable(gl.DEPTH_TEST);
+  gl.uniform1i(loc.uLine, 1);
+  gl.uniform1f(loc.uAlpha, 1);
+  gl.uniformMatrix4fv(loc.uModel, false, CAR_IDENT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cv.gzBuf);
+  gl.enableVertexAttribArray(loc.pos);
+  gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+  gl.disableVertexAttribArray(loc.uv);
+  gl.vertexAttrib2f(loc.uv, 0, 0);
+  for (let ax = 0; ax < 3; ax++) {
+    const hot = (cv.gz ? cv.gz.axis : cv.gzHover) === ax;
+    const c = hot ? CAR_AXIS_HOT : CAR_AXIS_COL[ax];
+    gl.uniform3f(loc.uColor, c[0], c[1], c[2]);
+    const data = carGizmoTris(g, ax);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, data.length / 3);
+  }
+  gl.uniform1i(loc.uLine, 0);
+  gl.enable(gl.DEPTH_TEST);
+}
+
+function carGzStart(axis, e, canvas) {
+  const g = carGizmoFrame(canvas);
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const c = carProject(g.vp, g.o, g.w, g.h);
+  cv.gz = { axis, mx, my, ang: Math.atan2(my - c[1], mx - c[0]), node: g.n, before: carSnapBranch(g.n), moved: false, tool: cv.tool };
+}
+function carGzMove(e, canvas) {
+  const gz = cv.gz, g = carGizmoFrame(canvas);
+  if (!g) { carGzEnd(); return; }
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const a = CAR_AXES[gz.axis];
+  const c = carProject(g.vp, g.o, g.w, g.h);
+  if (cv.tool === "move") {
+    const p1 = carProject(g.vp, [g.o[0] + a[0], g.o[1] + a[1], g.o[2] + a[2]], g.w, g.h);
+    const sx = p1[0] - c[0], sy = p1[1] - c[1], l2 = sx * sx + sy * sy;
+    if (l2 > 4) {
+      const t = ((mx - gz.mx) * sx + (my - gz.my) * sy) / l2;
+      carApplyDelta(g.n, carTranslateM([a[0] * t, a[1] * t, a[2] * t]));
+      gz.moved = true;
+    }
+  } else {
+    const ang = Math.atan2(my - c[1], mx - c[0]);
+    let da = ang - gz.ang;
+    if (da > Math.PI) da -= Math.PI * 2; else if (da < -Math.PI) da += Math.PI * 2;
+    const toward = a[0] * (g.cam.eye[0] - g.o[0]) + a[1] * (g.cam.eye[1] - g.o[1]) + a[2] * (g.cam.eye[2] - g.o[2]) > 0;
+    const th = toward ? -da : da;
+    carApplyDelta(g.n, mat4Mul(carTranslateM(g.o), mat4Mul(carRotateM(a, th), carTranslateM([-g.o[0], -g.o[1], -g.o[2]]))));
+    gz.ang = ang;
+    gz.moved = true;
+  }
+  gz.mx = mx; gz.my = my;
+  carStatusEdit(g.n);
+}
+function carGzEnd() {
+  const gz = cv.gz;
+  cv.gz = null;
+  carInspect();
+  if (gz && gz.moved) {
+    const before = gz.before, after = carSnapBranch(gz.node);
+    carCommit(`${t(gz.tool === "move" ? "car.hist.move" : "car.hist.rotate")} ${gz.node.id}`, () => carSetNodes(before), () => carSetNodes(after));
+  } else carSyncBar();
+}
+function carStatusEdit(n) {
+  const el = document.getElementById("car-note");
+  if (!el) return;
+  const m = n._m;
+  el.textContent = `${n.id}: x ${m[12].toFixed(3)} · y ${m[13].toFixed(3)} · z ${m[14].toFixed(3)}`;
+}
+
+function carReveal(n) {
+  for (let c = n; c._parent; c = c._parent) {
+    cv.expanded.add(c._parent.uid);
+    const g = carGroupOf(c);
+    if (g) cv.expanded.add(`g:${c._parent.uid}:${g}`);
+  }
+}
+
+function carPick(e, canvas) {
+  if (!cv.data) return;
+  const rect = canvas.getBoundingClientRect();
+  const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  const ny = 1 - ((e.clientY - rect.top) / rect.height) * 2;
+  const cam = carCamera();
+  let f = [cam.look[0] - cam.eye[0], cam.look[1] - cam.eye[1], cam.look[2] - cam.eye[2]];
+  const fl = Math.hypot(...f) || 1; f = f.map((x) => x / fl);
+  let rt = [-f[2], 0, f[0]];
+  const rl = Math.hypot(...rt) || 1; rt = rt.map((x) => x / rl);
+  let up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
+  if (cam.roll) {
+    const c = Math.cos(cam.roll), sn = Math.sin(cam.roll), r0 = rt;
+    rt = [0, 1, 2].map((k) => r0[k] * c - up[k] * sn);
+    up = [0, 1, 2].map((k) => r0[k] * sn + up[k] * c);
+  }
+  const th = Math.tan(carFov() / 2), asp = rect.width / Math.max(1, rect.height);
+  const dir = [0, 1, 2].map((k) => f[k] + rt[k] * nx * th * asp + up[k] * ny * th);
+  let best = null, bestGlass = null;
+  for (const d of cv.draw || []) {
+    const s = d.s;
+    let o = cam.eye, v = dir;
+    const model = s._fix ? (d.n._w0 ? carFixModel(d.n) : null) : (d.n._m || (d.n._m = new Float32Array(d.n.world)));
+    if (model) {
+      const inv = carInvAffine(model);
+      if (!inv) continue;
+      const { r, t } = inv;
+      o = [r[0] * cam.eye[0] + r[1] * cam.eye[1] + r[2] * cam.eye[2] + t[0], r[3] * cam.eye[0] + r[4] * cam.eye[1] + r[5] * cam.eye[2] + t[1], r[6] * cam.eye[0] + r[7] * cam.eye[1] + r[8] * cam.eye[2] + t[2]];
+      v = [r[0] * dir[0] + r[1] * dir[1] + r[2] * dir[2], r[3] * dir[0] + r[4] * dir[1] + r[5] * dir[2], r[6] * dir[0] + r[7] * dir[1] + r[8] * dir[2]];
+    }
+    const dist = carRaySlice(s, o, v);
+    if (!isFinite(dist)) continue;
+    const glass = cv.glass && carIsBlend(s.material);
+    if (glass) { if (!bestGlass || dist < bestGlass.dist) bestGlass = { dist, n: d.n }; }
+    else if (!best || dist < best.dist) best = { dist, n: d.n };
+  }
+  const hit = best || bestGlass;
+  if (!hit) { if (cv.selected) carSelect(null); return; }
+  carReveal(hit.n);
+  carSelect("n:" + hit.n.uid);
+  const row = document.querySelector(`#list .tree-row[data-id="n:${hit.n.uid}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
+// ------------------------------------------------------------ câmeras do jogo (cameras.xml)
+// Fov vertical aproximado: o jogo não o guarda no cameras.xml (vem das opções de vídeo).
+const CAR_CAM_FOV = 1.0;
+const carFov = () => (cv.camView ? CAR_CAM_FOV : 0.9);
+const carCamList = () => (cv.data && cv.data.cameras) || [];
+function carFrontZ() {
+  const box = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+  if (cv.data) carAabb(cv.data.tree, box);
+  return isFinite(box.max[2]) ? box.max[2] : 0;
+}
+// Posição e direção no espaço do carro. yaw gira em Y (0 olha para +Z), pitch positivo olha para baixo;
+// nas câmeras de cabine (head/dash/pillar) o pitch está em graus. Chase: atrás do alvo, um pouco acima.
+function carCamPose(c) {
+  if (c.pos) {
+    const p = c.pos.slice();
+    if (c.params.restrictOffsetToConvexHull) p[2] += carFrontZ();     // para-choque: relativo à frente do casco
+    const pitch = c.fixed ? (c.pitch * Math.PI) / 180 : c.pitch, cp = Math.cos(pitch);
+    return { eye: p, f: [Math.sin(c.yaw) * cp, -Math.sin(pitch), Math.cos(c.yaw) * cp], roll: c.roll || 0 };
+  }
+  const pitch = 0.18, f = [0, -Math.sin(pitch), Math.cos(pitch)], t = c.target, d = c.dist;
+  return { eye: [t[0] - f[0] * d, t[1] - f[1] * d, t[2] - f[2] * d], f, roll: 0 };
+}
+function carViewMat(cam) {
+  const v = mat4Look(cam.eye, cam.look);
+  if (!cam.roll) return v;
+  const c = Math.cos(cam.roll), sn = Math.sin(cam.roll);
+  return mat4Mul(new Float32Array([c, sn, 0, 0, -sn, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), v);
+}
+function carCamLines(c, size) {
+  const { eye, f } = carCamPose(c);
+  let rx = f[2], rz = -f[0];
+  const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+  const r = [rx, 0, rz], u = [f[1] * rz, f[2] * rx - f[0] * rz, -f[1] * rx];
+  const at = (a, b) => [0, 1, 2].map((k) => eye[k] + f[k] * size + r[k] * a * size * 0.6 + u[k] * b * size * 0.36);
+  const q = [at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)], out = [];
+  for (let i = 0; i < 4; i++) out.push(...eye, ...q[i], ...q[i], ...q[(i + 1) % 4]);
+  out.push(...at(-0.4, 1.15), ...at(0.4, 1.15), ...at(0.4, 1.15), ...at(0, 1.6), ...at(0, 1.6), ...at(-0.4, 1.15));
+  if (c.target) out.push(...eye, ...c.target);
+  return out;
+}
+function carDrawCams(gl, loc) {
+  if (!cv.camsOn || cv.camView) return;
+  const cams = carCamList().filter((c) => c.id !== cv.camView);
+  if (!cams.length) return;
+  if (!cv.camBuf) cv.camBuf = gl.createBuffer();
+  gl.disable(gl.DEPTH_TEST);
+  gl.uniform1i(loc.uLine, 1);
+  gl.uniform1f(loc.uAlpha, 1);
+  gl.uniformMatrix4fv(loc.uModel, false, CAR_IDENT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cv.camBuf);
+  gl.enableVertexAttribArray(loc.pos);
+  gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+  gl.disableVertexAttribArray(loc.uv);
+  gl.vertexAttrib2f(loc.uv, 0, 0);
+  for (const c of cams) {
+    const col = c.locked ? [0.62, 0.64, 0.7] : c.target ? [0.75, 0.55, 0.95] : [0.3, 0.85, 0.95];
+    gl.uniform3f(loc.uColor, col[0], col[1], col[2]);
+    const data = new Float32Array(carCamLines(c, c.target ? 0.5 : 0.28));
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.LINES, 0, data.length / 3);
+  }
+  gl.uniform1i(loc.uLine, 0);
+  gl.enable(gl.DEPTH_TEST);
+}
+function carSetCamView(id) {
+  cv.camView = id || null;
+  cv.gzHover = -1;
+  cv.dirty = true;
+  carSyncBar(); carStatus();
+}
+
+function carCamera() {
+  const c = cv.camView && carCamList().find((x) => x.id === cv.camView);
+  if (c) {
+    const { eye, f, roll } = carCamPose(c);
+    return { eye, look: [eye[0] + f[0], eye[1] + f[1], eye[2] + f[2]], right: [1, 0, 0], up: [0, 1, 0], roll };
+  }
+  const cp = Math.cos(cv.pitch), sp = Math.sin(cv.pitch), cy = Math.cos(cv.yaw), sy = Math.sin(cv.yaw);
+  const dir = [sy * cp, sp, cy * cp];
+  const look = cv.target;
+  const eye = [look[0] + dir[0] * cv.dist, look[1] + dir[1] * cv.dist, look[2] + dir[2] * cv.dist];
+  let rx = dir[2], rz = -dir[0];
+  const rl = Math.hypot(rx, rz) || 1;
+  rx /= rl; rz /= rl;
+  const up = [dir[1] * rz, dir[2] * rx - dir[0] * rz, -dir[1] * rx];
+  return { eye, look, right: [rx, 0, rz], up };
+}
+
+// ------------------------------------------------------------ painéis redimensionáveis
+
+// Divisória arrastável reutilizável: controla uma variável CSS de largura de um painel vizinho.
+// o: { root, panel, prop, edge: "left"|"right" (lado do painel), min, max, def, key, other(), reserve }
+function makeResizer(handle, o) {
+  const read = () => { try { return Number(localStorage.getItem(o.key)) || 0; } catch (e) { return 0; } };
+  let last = 0, want = 0;
+  const clamp = (w) => {
+    const room = o.root.clientWidth - (o.other ? o.other() : 0) - o.reserve;
+    return Math.round(Math.max(o.min, Math.min(o.max, room, w)));
+  };
+  const set = (w, save, keep) => {
+    if (!keep) want = w;
+    last = clamp(w);
+    o.root.style.setProperty(o.prop, last + "px");
+    handle.setAttribute("aria-valuenow", String(last));
+    if (save) { try { localStorage.setItem(o.key, String(last)); } catch (e) { /* sem armazenamento */ } }
+  };
+  set(read() || o.def, false);
+  handle.setAttribute("aria-valuemin", String(o.min));
+  handle.setAttribute("aria-valuemax", String(o.max));
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("drag"); document.body.classList.add("rz-drag");
+    const rect = o.root.getBoundingClientRect();
+    const move = (ev) => set(o.edge === "left" ? ev.clientX - rect.left : rect.right - ev.clientX, false);
+    const up = () => {
+      handle.classList.remove("drag"); document.body.classList.remove("rz-drag");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      set(last, true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+  handle.addEventListener("dblclick", () => { set(o.def, false); try { localStorage.removeItem(o.key); } catch (e) { /* ok */ } });
+  handle.addEventListener("keydown", (e) => {
+    const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    set(last + 16 * dir * (o.edge === "left" ? 1 : -1), true);
+  });
+  return { refit: () => set(want || o.def, false, true) };
+}
+
+// ------------------------------------------------------------ barra, palco e inspector
+
+function carSelLabel() {
+  const n = carSelNode();
+  if (!cv.selected || !n) return "";
+  const [kind, key] = cv.selected.split(":");
+  if (kind === "s") { const s = cv.slices.get(key); return `${n.id} › ${s.material}`; }
+  return n.id;
+}
+function carStatus() {
+  const el = document.getElementById("car-note");
+  if (!el) return;
+  const sel = document.getElementById("car-sel");
+  if (sel) { sel.textContent = carSelLabel(); sel.title = sel.textContent; }
+  if (cv.status) { el.textContent = cv.status; return; }
+  const cam = cv.camView && carCamList().find((x) => x.id === cv.camView);
+  if (cam) {
+    const p = carCamPose(cam).eye;
+    el.textContent = `${t("car.cam.in")} ${cam.id} · x ${p[0].toFixed(3)} · y ${p[1].toFixed(3)} · z ${p[2].toFixed(3)} · ${t("car.cam.approx")}`;
+    el.title = el.textContent;
+    return;
+  }
+  const tris = cv.draw.reduce((a, d) => a + d.s.tris, 0);
+  el.textContent = t("car.status", { slices: cv.draw.length, tris: tris.toLocaleString("pt-BR") }) + " · " + t("mdl.drag");
+  el.title = el.textContent;
+}
+
+const CAR_ICONS = {
+  wire: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+  mats: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
+  glass: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 15l6-6M12 17l5-5"/>',
+  flip: '<path d="M8 4v16M8 4L4 8M8 4l4 4M16 20V4M16 20l-4-4M16 20l4-4"/>',
+  reset: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/>',
+  focus: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><circle cx="12" cy="12" r="2"/>',
+  solo: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  show: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  insp: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  tree: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  orbit: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/>',
+  move: '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
+  rotate: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/><circle cx="12" cy="12" r="1.5"/>',
+  restore: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/><path d="M9 12h6"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+  cams: '<path d="M3 8h12v8H3z"/><path d="M15 11l6-3v8l-6-3"/>',
+  hist: '<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
+  expand: '<path d="M6 9l6 6 6-6"/>',
+  collapse: '<path d="M6 15l6-6 6 6"/>',
+};
+const carIco = (k) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CAR_ICONS[k]}</svg>`;
+
+// Ações da toolbar e do overlay do viewport (as mesmas, ligadas por data-car).
+const CAR_ACTS = {
+  wire: { key: "car.wire", toggle: () => { cv.wire = !cv.wire; }, on: () => cv.wire },
+  mats: { key: "car.mats", toggle: () => { cv.flat = !cv.flat; }, on: () => !cv.flat },
+  glass: { key: "car.glass", toggle: () => { cv.glass = !cv.glass; }, on: () => cv.glass },
+  flip: { key: "mdl.flip", toggle: () => { cv.flip = !cv.flip; }, on: () => cv.flip },
+  orbit: { key: "car.tool.orbit", run: () => { cv.tool = "orbit"; cv.gzHover = -1; }, on: () => cv.tool === "orbit" },
+  move: { key: "car.tool.move", run: () => { cv.tool = "move"; }, on: () => cv.tool === "move" },
+  rotate: { key: "car.tool.rotate", run: () => { cv.tool = "rotate"; }, on: () => cv.tool === "rotate" },
+  undo: { key: "car.undo", run: carUndo, avail: () => cv.histPos > 0 },
+  redo: { key: "car.redo", run: carRedo, avail: () => cv.histPos < cv.hist.length },
+  cams: { key: "car.cams", toggle: () => { cv.camsOn = !cv.camsOn; }, on: () => cv.camsOn },
+  hist: { key: "car.hist", toggle: () => { cv.histOpen = !cv.histOpen; carHistRender(); }, on: () => cv.histOpen },
+  restore: { key: "car.tool.restore", run: carRestoreEdits, avail: () => cv.edited.size > 0 },
+  reset: { key: "car.reset", run: carResetCamera },
+  focus: { key: "car.focus", run: () => carFrame(carSelNode()), need: true },
+  solo: { key: "car.solo", run: () => carViewEdit(t("car.hist.solo"), () => { cv.solo = !cv.solo; }), on: () => cv.solo, need: true },
+  show: { key: "car.showall", run: () => carViewEdit(t("car.hist.showall"), () => { cv.hidden.clear(); cv.hiddenSlices.clear(); cv.solo = false; }) },
+};
+const carBtn = (name) => `<button type="button" class="tb-btn" data-car="${name}" title="${esc(t(CAR_ACTS[name].key))}" aria-label="${esc(t(CAR_ACTS[name].key))}">${carIco(name)}</button>`;
+
+function carSyncBar() {
+  document.querySelectorAll("[data-car]").forEach((b) => {
+    const a = CAR_ACTS[b.dataset.car];
+    if (a.on) { b.classList.toggle("on", !!a.on()); b.setAttribute("aria-pressed", String(!!a.on())); }
+    if (a.need) b.disabled = !cv.selected;
+    if (a.avail) b.disabled = !a.avail();
+  });
+  const hu = cv.hist[cv.histPos - 1], hr = cv.hist[cv.histPos];
+  const setTitle = (name, base, h) => document.querySelectorAll(`[data-car="${name}"]`).forEach((b) => { b.title = h ? `${t(base)}: ${h.label}` : t(base); });
+  setTitle("undo", "car.undo", hu); setTitle("redo", "car.redo", hr);
+  const lod = document.getElementById("car-lod");
+  if (lod && cv.data) {
+    lod.innerHTML = [...cv.data.lods.map((l) => l.name), "ALL"].map((n) => `<option value="${esc(n)}"${n === cv.lod ? " selected" : ""}>${esc(n === "ALL" ? t("mdl.all") : n)}</option>`).join("");
+  }
+  const camSel = document.getElementById("car-cam");
+  if (camSel) {
+    const cams = carCamList();
+    camSel.innerHTML = `<option value="">${esc(t("car.camfree"))}</option>` + cams.map((c) => `<option value="${esc(c.id)}"${c.id === cv.camView ? " selected" : ""}>${esc(c.id)}</option>`).join("");
+    camSel.disabled = !cams.length;
+  }
+  const sel = document.getElementById("car-open");
+  if (sel) sel.value = cv.carId || "";
+  const ws = cv.ws;
+  if (ws) {
+    const i = ws.querySelector('[data-pane="insp"]'), tr = ws.querySelector('[data-pane="tree"]');
+    if (i) i.classList.toggle("on", !ws.classList.contains("insp-hidden"));
+    if (tr) tr.classList.toggle("on", !ws.classList.contains("tree-hidden"));
+  }
+}
+
+// Move a árvore (.side) e o inspector (#inspect) para dentro do workspace e de volta ao grid global.
+function carDock(on) {
+  const layout = document.querySelector(".layout");
+  const side = document.querySelector(".side"), insp = document.getElementById("inspect");
+  const ws = cv.ws;
+  if (on && ws && !ws.contains(side)) {
+    const body = ws.querySelector(".car-body");
+    body.prepend(side); body.append(insp);
+    if (!cv.treeTools) {
+      cv.treeTools = document.createElement("div");
+      cv.treeTools.className = "tree-tools";
+      cv.treeTools.innerHTML = `<button type="button" class="tb-btn" data-tree="expand" title="${esc(t("car.tree.expand"))}">${carIco("expand")}</button>
+        <button type="button" class="tb-btn" data-tree="collapse" title="${esc(t("car.tree.collapse"))}">${carIco("collapse")}</button><span class="grow"></span>`;
+      cv.treeTools.addEventListener("click", carTreeTools);
+    }
+    side.insertBefore(cv.treeTools, document.getElementById("list"));
+    layout.classList.add("docked");
+    if (cv.rz) cv.rz.forEach((r) => r.refit());
+  } else if (!on) {
+    layout.classList.remove("docked");
+    if (cv.treeTools) cv.treeTools.remove();
+    if (!layout.contains(side) || ws && ws.contains(side)) { layout.insertBefore(side, layout.firstChild); layout.append(insp); }
+  }
+}
+function carTreeTools(e) {
+  const b = e.target.closest("[data-tree]");
+  if (!b || !cv.data) return;
+  if (b.dataset.tree === "expand") cv.nodes.forEach((n) => {
+    if (n.children.length || n.slices.length) cv.expanded.add(n.uid);
+    const split = carGroups(n.children);
+    if (split) split.groups.forEach(([cat]) => cv.expanded.add(`g:${n.uid}:${cat}`));
+  });
+  else { cv.expanded.clear(); cv.expanded.add(cv.data.tree.uid); }
+  renderList();
+}
+
+function ensureCarStage() {
+  if (document.getElementById("car-view")) return;
+  cv.gen++;
+  cv.gl = null; cv.res.clear(); cv.textures.clear(); cv.loadedId = null;
+  const options = CAR_LIST.map((m) => `<option value="${esc(m.id)}">${esc(m.n)} · ${esc(carKindLabel(m))}</option>`).join("");
+  const paneBtn = (pane, icon, key) => `<button type="button" class="tb-btn" data-pane="${pane}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${carIco(icon)}</button>`;
+  const rz = (id) => `<div class="rz" id="${id}" role="separator" aria-orientation="vertical" tabindex="0" title="${esc(t("car.resize"))}"></div>`;
+  contentEl.innerHTML = `<div class="car-ws" id="car-ws">
+    <div class="car-tb" role="toolbar">
+      ${paneBtn("tree", "tree", "car.tool.tree")}
+      <select id="car-open" title="${esc(t("car.open"))}">${options}</select>
+      <select id="car-lod" title="${esc(t("car.lod"))}"></select>
+      <select id="car-surface" title="${esc(t("mdl.surface"))}">
+        <option value="tarmac">${esc(t("mdl.tarmac"))}</option><option value="gravel">${esc(t("mdl.gravel"))}</option>
+        <option value="snow">${esc(t("mdl.snow"))}</option><option value="all">${esc(t("mdl.all"))}</option>
+      </select>
+      <span class="tb-sep"></span>
+      ${["orbit", "move", "rotate"].map(carBtn).join("")}
+      <span class="tb-sep"></span>
+      ${["undo", "redo", "hist", "restore"].map(carBtn).join("")}
+      <span class="tb-sep"></span>
+      ${carBtn("cams")}
+      <select id="car-cam" title="${esc(t("car.camview"))}"></select>
+      <span class="tb-sep"></span>
+      ${["wire", "mats", "glass", "flip"].map(carBtn).join("")}
+      <span class="tb-sep"></span>
+      ${["reset", "focus", "solo", "show"].map(carBtn).join("")}
+      <span class="tb-grow"></span>
+      ${paneBtn("insp", "insp", "car.tool.insp")}
+    </div>
+    <div class="car-body">
+      ${rz("car-rz1")}
+      <div class="car-vp">
+        <canvas class="gl" id="car-view"></canvas>
+        <div class="vp-tools" role="toolbar" aria-label="${esc(t("car.tool.view"))}">
+          ${["reset", "focus", "solo", "show"].map(carBtn).join("")}<span class="tb-sep"></span>${["wire", "mats"].map(carBtn).join("")}
+        </div>
+        <div class="car-hist" id="car-hist" hidden></div>
+      </div>
+      ${rz("car-rz2")}
+    </div>
+    <div class="car-sb"><span id="car-note"></span><span id="car-sel"></span></div>
+  </div>`;
+  const ws = cv.ws = document.getElementById("car-ws");
+  const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
+  on("car-open", "change", (e) => { openCar(e.target.value); history.replaceState(null, "", "#k=" + encodeURIComponent(e.target.value)); });
+  on("car-lod", "change", (e) => {
+    cv.lod = e.target.value; state.filter = cv.lod; cv.dirty = true;
+    renderFilters(); renderList(); carFrame(null);
+  });
+  on("car-cam", "change", (e) => carSetCamView(e.target.value));
+  on("car-surface", "change", (e) => { cv.variant = e.target.value; cv.dirty = true; });
+  ws.addEventListener("click", (e) => {
+    const hb = e.target.closest("[data-hist]");
+    if (hb) { carHistGo(Number(hb.dataset.hist)); return; }
+    const pane = e.target.closest("[data-pane]");
+    if (pane) { ws.classList.toggle(pane.dataset.pane === "tree" ? "tree-hidden" : "insp-hidden"); carSyncBar(); return; }
+    const b = e.target.closest("[data-car]");
+    if (!b || b.disabled) return;
+    const a = CAR_ACTS[b.dataset.car];
+    if (a.toggle) a.toggle(); else a.run();
+    carSyncBar();
+  });
+
+  // larguras e breakpoints: viewport absorve; abaixo de 860px o inspector vira drawer, abaixo de 640px a árvore também
+  const body = ws.querySelector(".car-body");
+  const side = document.querySelector(".side"), insp = document.getElementById("inspect");
+  const inFlow = (el) => (el.isConnected && el.offsetParent && getComputedStyle(el).position !== "absolute" ? el.offsetWidth : 0);
+  cv.rz = [
+    makeResizer(document.getElementById("car-rz1"), { root: body, panel: side, prop: "--tree-w", edge: "left", min: 200, max: 480, def: 300, key: "car.treeW", reserve: 240 + 12, other: () => inFlow(insp) }),
+    makeResizer(document.getElementById("car-rz2"), { root: body, panel: insp, prop: "--insp-w", edge: "right", min: 300, max: 550, def: 400, key: "car.inspW", reserve: 240 + 12, other: () => inFlow(side) }),
+  ];
+  const mqI = window.matchMedia("(max-width: 860px)"), mqT = window.matchMedia("(max-width: 640px)");
+  const adapt = () => {
+    ws.classList.toggle("idrawer", mqI.matches);
+    ws.classList.toggle("tdrawer", mqT.matches);
+    ws.classList.toggle("insp-hidden", mqI.matches);
+    ws.classList.toggle("tree-hidden", mqT.matches);
+    cv.rz.forEach((r) => r.refit()); carSyncBar();
+  };
+  mqI.addEventListener("change", adapt); mqT.addEventListener("change", adapt);
+  window.addEventListener("resize", () => cv.rz.forEach((r) => r.refit()));
+  adapt();
+  try { carGL(); } catch (err) { document.getElementById("car-note").textContent = String((err && err.message) || err); }
+}
+
+// ------------------------------------------------------------ inspector
+
+const carNum = (v, d = 4) => (typeof v === "number" ? String(Math.round(v * 10 ** d) / 10 ** d) : String(v));
+const carInt = (v) => (typeof v === "number" ? v.toLocaleString("pt-BR") : String(v));
+// Linha rótulo/valor. mode: "mono", "mono ell" (uma linha, ellipsis + tooltip), "mono wrap" (até 3 linhas), "html".
+function carKv(k, v, mode = "") {
+  const text = v == null || v === "" ? "—" : String(v);
+  if (mode === "html") return `<div class="k" title="${esc(k)}">${esc(k)}</div><div class="v">${text}</div>`;
+  return `<div class="k" title="${esc(k)}">${esc(k)}</div><div class="v${mode ? " " + mode : ""}" title="${esc(text)}">${esc(text)}</div>`;
+}
+const carKvs = (rows) => `<div class="kv">${rows.join("")}</div>`;
+function carMatrix(m) {
+  const rows = [];
+  for (let r = 0; r < 4; r++) rows.push(m.slice(r * 4, r * 4 + 4).map((v) => carNum(v, 4).padStart(9)).join(" "));
+  return `<pre class="xml">${esc(rows.join("\n"))}</pre>`;
+}
+function carExtra(extra) {
+  const keys = Object.keys(extra || {});
+  return keys.length ? carKvs(keys.map((k) => carKv(k, JSON.stringify(extra[k]), "mono wrap"))) : `<p class="muted small">—</p>`;
+}
+function carNodeOff(n) {
+  for (let p = n; p; p = p._parent) if (cv.hidden.has(p.uid)) return true;
+  return false;
+}
+
+// Preview de textura: altura fixa, fit/zoom, fundo xadrez para alpha. Os botões usam delegação (carTexClick).
+function carTexHtml(asset) {
+  const btn = (act, label, key) => `<button type="button" data-tex="${act}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${label}</button>`;
+  return `<div class="tex fit" data-bg="0" data-zoom="1">
+    <div class="tex-bar">${btn("fit", "⤢", "car.tex.fit")}${btn("actual", "1:1", "car.tex.actual")}${btn("out", "−", "car.tex.out")}${btn("in", "+", "car.tex.in")}${btn("bg", "▦", "car.tex.bg")}<span class="tex-info mono"></span></div>
+    <div class="tex-box bg-checker"><img src="${esc(asset.p)}" alt="${esc(asset.n)}" loading="lazy"></div></div>`;
+}
+const CAR_TEX_BG = ["bg-checker", "bg-dark", "bg-light"];
+function carTexUpdate(box) {
+  const img = box.querySelector("img"), info = box.querySelector(".tex-info");
+  const fit = box.classList.contains("fit");
+  const zoom = Number(box.dataset.zoom) || 1;
+  if (fit) { img.style.width = img.style.height = ""; }
+  else if (img.naturalWidth) { img.style.width = img.naturalWidth * zoom + "px"; img.style.height = img.naturalHeight * zoom + "px"; }
+  const dim = img.naturalWidth ? `${img.naturalWidth}×${img.naturalHeight}` : "";
+  info.textContent = fit ? dim : `${dim} · ${Math.round(zoom * 100)}%`;
+  box.querySelector('[data-tex="fit"]').classList.toggle("on", fit);
+  const pane = box.querySelector(".tex-box");
+  CAR_TEX_BG.forEach((c, i) => pane.classList.toggle(c, i === Number(box.dataset.bg)));
+}
+function carTexClick(e) {
+  const b = e.target.closest("[data-tex]");
+  if (!b) return;
+  const box = b.closest(".tex");
+  const act = b.dataset.tex;
+  let zoom = Number(box.dataset.zoom) || 1;
+  if (act === "fit") box.classList.add("fit");
+  else if (act === "actual") { box.classList.remove("fit"); zoom = 1; }
+  else if (act === "in" || act === "out") {
+    const img = box.querySelector("img");
+    if (box.classList.contains("fit") && img.naturalWidth) zoom = img.clientWidth / img.naturalWidth;
+    box.classList.remove("fit");
+    zoom = Math.max(0.1, Math.min(8, zoom * (act === "in" ? 1.5 : 1 / 1.5)));
+  } else if (act === "bg") box.dataset.bg = String((Number(box.dataset.bg) + 1) % CAR_TEX_BG.length);
+  box.dataset.zoom = String(zoom);
+  carTexUpdate(box);
+}
+
+function carMaterialHtml(name) {
+  const m = carMaterial(name);
+  const params = Object.entries(m.params || {}).map(([k, v]) => carKv(k, JSON.stringify(v), "mono ell"));
+  const parts = [carKvs([
+    carKv(t("car.shader"), m.group, "mono ell"),
+    carKv(t("car.params"), m.paramCount == null ? "—" : `${m.savedCount}/${m.paramCount}`),
+    carKv(t("car.blend"), carIsBlend(name) ? t("car.yes") : t("car.no")),
+  ])];
+  if (params.length) parts.push(`<h4>${esc(t("car.shaderparams"))}</h4>${carKvs(params)}`);
+  const extra = Object.keys(m.extra || {}).length ? carExtra(m.extra) : "";
+  return parts.join("") + extra;
+}
+function carTexturesHtml(names) {
+  const seen = new Set(), out = [];
+  for (const name of names) {
+    const tid = carMatTexId(name);
+    const asset = tid && assetById.get(tid);
+    const declared = Object.entries(carMaterial(name).textures || {});
+    out.push(`<h4 title="${esc(name)}">${esc(name)}</h4>`);
+    if (asset && !seen.has(tid)) {
+      seen.add(tid);
+      out.push(carKvs([carKv(t("mdl.textures"), asset.n, "mono ell"), carKv("", t("car.guessed"), "")]), carTexHtml(asset));
+    } else if (asset) out.push(carKvs([carKv(t("mdl.textures"), asset.n, "mono ell")]));
+    else out.push(`<p class="muted small">${esc(t("car.tex.none"))}</p>`);
+    if (declared.length) out.push(carKvs(declared.map(([k, v]) => carKv(k, v, "mono ell"))));
+    else out.push(`<p class="muted small">${esc(t("car.nodeclared"))}</p>`);
+  }
+  return out.join("");
+}
+function carLodHtml(node) {
+  const lods = cv.data.lods;
+  const cur = cv.lod === "ALL" ? { nodes: lods.reduce((a, l) => a + l.nodes, 0), slices: lods.reduce((a, l) => a + l.slices, 0), tris: lods.reduce((a, l) => a + l.tris, 0) } : lods.find((l) => l.name === cv.lod);
+  const rows = [carKv(t("car.current"), cv.lod === "ALL" ? t("mdl.all") : cv.lod)];
+  if (node && node._lod) rows.push(carKv(t("car.lod"), node._lod));
+  if (cur) rows.push(carKv(t("car.meshes"), carInt(cur.nodes)), carKv(t("car.slices"), carInt(cur.slices)), carKv(t("mdl.tris"), carInt(cur.tris)));
+  return carKvs(rows) + `<h4>${esc(t("car.lods"))}</h4>` + carKvs(lods.map((l) => carKv(l.name, `${carInt(l.nodes)} / ${carInt(l.slices)} / ${carInt(l.tris)}`, "mono")));
+}
+function carSourceRows() {
+  const src = cv.data.source || {};
+  return [carKv(t("mdl.package"), src.package, "mono ell"), carKv(t("mdl.path"), src.path, "mono wrap"),
+    carKv(t("car.buffers"), Object.keys(cv.data.resources).length), carKv(t("car.materials"), Object.keys(cv.data.materials).length)];
+}
+function carBufferText(rds) {
+  const r = cv.data.resources[rds];
+  return r ? `${rds} (${carInt(r.verts)} v, ${carInt(r.tris)} t)` : rds;
+}
+
+function carInspect() {
+  const el = inspectEl;
+  rememberSections(el);
+  const d = cv.data;
+  if (!d) { el.innerHTML = `<p class="muted" style="padding-top:12px">${esc(cv.status || t("car.pick"))}</p>`; return; }
+  const node = carSelNode();
+  const sel = carSelLabel();
+  const head = `<div class="insp-head"><h2 title="${esc(cv.row ? cv.row.n : d.id)}">${esc(cv.row ? cv.row.n : d.id)}</h2><div class="sub" title="${esc(sel)}">${esc(sel || t("car.hint"))}</div></div>`;
+  const notes = d.notes.length ? section("car.notes", `<div class="mono small">${d.notes.map(esc).join("<br>")}</div>`, false) : "";
+  let body;
+  if (!node) {
+    const mats = Object.keys(d.materials).map((n) => carKv(n, d.materials[n].group, "mono ell"));
+    body = section("car.sec.car", carKvs(carSourceRows()), true) + section("car.sec.lod", carLodHtml(null), true)
+      + section("car.sec.mats", carKvs(mats), false);
+  } else {
+    const [kind, key] = cv.selected.split(":");
+    const off = carNodeOff(node);
+    if (kind === "s") {
+      const s = cv.slices.get(key);
+      const hidden = off || cv.hiddenSlices.has(s.key);
+      body = section("car.sec.object", carKvs([
+        carKv(t("car.slice"), s.id, "mono ell"), carKv(t("car.owner"), node.id, "mono ell"),
+        carKv(t("car.state"), (s.ok ? "OK" : `<span class="warn">${esc(t("car.badslice"))}</span>`) + ` · ${esc(hidden ? t("car.hidden") : t("car.visible"))}`, "html"),
+      ]), true)
+      + section("car.sec.geometry", carKvs([
+        carKv(t("car.buffer"), carBufferText(s.rds), "mono ell"), carKv(t("car.vrange"), `${s.vo} + ${s.vc}`, "mono"),
+        carKv(t("car.irange"), `${s.io} + ${s.ic}`, "mono"), carKv(t("mdl.tris"), carInt(s.tris)),
+      ]), true)
+      + section("car.sec.material", `<h4 title="${esc(s.material)}">${esc(s.material)}</h4>` + carMaterialHtml(s.material), true)
+      + section("car.sec.textures", carTexturesHtml([s.material]), true)
+      + section("car.sec.lod", carLodHtml(node), false)
+      + section("car.sec.technical", carKvs([carKv("jointID", s.joint, "mono"), carKv("uid", node.uid, "mono"), ...carSourceRows()]) + carExtra(s.extra), false);
+    } else {
+      const matNames = [...new Set(node.slices.map((s) => s.material))];
+      const buffers = [...new Set(node.slices.map((s) => s.rds))];
+      const bb = node.bbox;
+      body = section("car.sec.object", carKvs([
+        carKv(t("car.mesh"), node.id, "mono ell"), carKv(t("car.pssgtype"), node.type, "mono ell"),
+        carKv(t("car.nickname"), node.nickname, "mono ell"), carKv(t("car.parent"), node._parent ? node._parent.id : "", "mono ell"),
+        carKv(t("car.children"), node.children.length), carKv(t("car.state"), off ? t("car.hidden") : t("car.visible")),
+      ]), true)
+      + section("car.sec.geometry", carKvs([
+        carKv(t("car.slices"), carInt(node.slices.length)), carKv(t("mdl.verts"), carInt(node._verts)), carKv(t("mdl.tris"), carInt(node._tris)),
+        carKv(t("car.bbox"), bb ? bb.map((v) => carNum(v, 3)).join(", ") : "", "mono wrap"),
+        ...buffers.map((b) => carKv(t("car.buffer"), carBufferText(b), "mono ell")),
+      ]) + (node.slices.length ? `<h4>${esc(t("car.slices"))}</h4>` + node.slices.map((s) => `<div class="beh"><div class="desc mono">${esc(s.id)} · ${esc(s.material)}</div><div class="raw">${esc(s.rds)} v ${s.vo}+${s.vc} i ${s.io}+${s.ic} · ${s.tris} ${esc(t("car.tris.short"))}</div></div>`).join("") : ""), true)
+      + (matNames.length ? section("car.sec.material", matNames.map((n) => `<details class="mat"><summary class="mono" title="${esc(n)}">${esc(n)}</summary>${carMaterialHtml(n)}</details>`).join(""), true) : "")
+      + (matNames.length ? section("car.sec.textures", carTexturesHtml(matNames), true) : "")
+      + section("car.sec.lod", carLodHtml(node), false)
+      + section("car.sec.technical", carKvs([carKv("uid", node.uid, "mono"), ...carSourceRows()])
+        + `<h4>${esc(t("car.local"))}</h4>${carMatrix(node.local)}${node.identity ? `<p class="muted small">${esc(t("car.identity"))}</p>` : ""}`
+        + `<h4>${esc(t("car.world"))}</h4>${carMatrix(node.world)}<h4>${esc(t("car.extra"))}</h4>${carExtra(node.extra)}`, false);
+    }
+  }
+  el.innerHTML = head + body + notes;
+  restoreSections(el);
+  el.querySelectorAll(".tex").forEach((box) => {
+    const img = box.querySelector("img");
+    if (img.complete) carTexUpdate(box); else img.addEventListener("load", () => carTexUpdate(box), { once: true });
+    carTexUpdate(box);
+  });
+}
+
+MODES.cars = {
+  stage: false, hash: "k", defaultFilter: "LOD0",
+  filters() {
+    const lods = cv.data ? cv.data.lods.map((l) => l.name) : ["LOD0"];
+    return [...lods.map((n) => [n, n]), ["ALL", t("mdl.all")]];
+  },
+  list: (q) => carRows(q),
+  current: () => cv.carId,
+  select(id) {
+    if (modelById.has(id) && modelById.get(id).car) cv.carId = id;
+  },
+  onFilter() {
+    if (!cv.data) return;
+    cv.lod = state.filter; cv.dirty = true;
+    renderList(); carFrame(null); carSyncBar();
+  },
+  show() {
+    ensureCarStage();
+    carDock(true);
+    if (!cv.carId) { const first = CAR_LIST.find((m) => m.k === "carro") || CAR_LIST[0]; if (first) cv.carId = first.id; }
+    if (cv.carId && cv.loadedId !== cv.carId) openCar(cv.carId);
+    carSyncBar(); carInspect(); carStatus();
+  },
+};
+document.getElementById("list").addEventListener("click", (e) => { if (state.mode === "cars") carListClick(e); }, true);
+document.addEventListener("keydown", (e) => {
+  if (state.mode !== "cars" || /INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || "")) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === "z") { e.preventDefault(); if (e.shiftKey) carRedo(); else carUndo(); }
+    else if (k === "y") { e.preventDefault(); carRedo(); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tool = { q: "orbit", w: "move", e: "rotate" }[e.key.toLowerCase()];
+  if (tool) { CAR_ACTS[tool].run(); carSyncBar(); }
+  else if (e.key === "f" || e.key === "F") carFrame(carSelNode());
+  else if ((e.key === "h" || e.key === "H") && cv.selected) {
+    const [kind, key] = cv.selected.split(":");
+    if (kind === "n") carToggleHidden(Number(key)); else carToggleSliceHidden(key);
+  }
+});
+
+// Fora da aba Carros, árvore e inspector voltam ao grid global antes de qualquer outra aba escrever em #content.
+const _refreshCars = refresh;
+refresh = function () {
+  if (state.mode !== "cars") carDock(false);
+  _refreshCars();
+};
+document.getElementById("inspect").addEventListener("click", carTexClick);
+
+// content.js e este arquivo registram as abas; só agora a página inicia.
+start();
