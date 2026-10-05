@@ -1343,6 +1343,49 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
                 static_cast<unsigned long long>(c->R8), static_cast<unsigned long long>(c->R9),
                 static_cast<unsigned long long>(c->Rsp));
   Logger::Error(buf);
+  std::snprintf(buf, sizeof(buf),
+                "GhostLab[crash]: rbp=%llx r10=%llx r11=%llx r12=%llx r13=%llx r14=%llx r15=%llx",
+                static_cast<unsigned long long>(c->Rbp), static_cast<unsigned long long>(c->R10),
+                static_cast<unsigned long long>(c->R11), static_cast<unsigned long long>(c->R12),
+                static_cast<unsigned long long>(c->R13), static_cast<unsigned long long>(c->R14),
+                static_cast<unsigned long long>(c->R15));
+  Logger::Error(buf);
+  // Contexto do crash de "participante com ponteiro lixo" (exe+0x463af2): a funcao
+  // do chamador (0x1404a6xxx) copia [rbp+0x590]+0x240 para [rbp+0x380]. Registra o
+  // elemento de origem (rsi), o elemento anterior e o ponteiro [rbp+0x590].
+  auto dumpAt = [&](const char *what, uintptr_t addr, size_t size) {
+    if (!Readable(addr, size)) {
+      Logger::Error(std::string("GhostLab[crash]: ") + what + " ilegivel");
+      return;
+    }
+    for (size_t off = 0; off < size; off += 32) {
+      char hex[120];
+      int n = std::snprintf(hex, sizeof(hex), "GhostLab[crash]: %s+%03zx:", what, off);
+      for (size_t i = 0; i < 32 && off + i < size; ++i) {
+        n += std::snprintf(hex + n, sizeof(hex) - n, "%s%02x", i % 8 == 0 ? " " : "",
+                           *reinterpret_cast<const uint8_t *>(addr + off + i));
+      }
+      Logger::Error(hex);
+    }
+  };
+  if (c->Rip - base == 0x463af2) {
+    dumpAt("rsi(origem)", c->Rsi, 0x40);
+    dumpAt("rsi+0x100", c->Rsi + 0x100, 0x40);
+    if (c->Rsi >= 0x240) dumpAt("rsi-0x240(anterior)", c->Rsi - 0x240, 0x40);
+    if (Readable(c->Rbp + 0x590, 8)) {
+      const uintptr_t arr = *reinterpret_cast<const uintptr_t *>(c->Rbp + 0x590);
+      char t[80];
+      std::snprintf(t, sizeof(t), "GhostLab[crash]: [rbp+0x590]=%llx", static_cast<unsigned long long>(arr));
+      Logger::Error(t);
+      dumpAt("[rbp+0x590]", arr, 0x40);
+      for (int k = 1; k <= 4; ++k) {
+        char w[40];
+        std::snprintf(w, sizeof(w), "elem%d@+0x%x", k, k * 0x240);
+        dumpAt(w, arr + k * 0x240, 0x20);
+      }
+    }
+    dumpAt("rbp+0x360", c->Rbp + 0x360, 0x40);
+  }
   const NT_TIB *tib = reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
   const uintptr_t top = reinterpret_cast<uintptr_t>(tib->StackBase);
   std::string chain = "GhostLab[crash]: pilha (retornos no exe):";
