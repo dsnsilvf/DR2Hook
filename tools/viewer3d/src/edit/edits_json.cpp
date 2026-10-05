@@ -27,19 +27,24 @@ std::string floats(const float* v) {
 
 }  // namespace
 
-std::string edits_json(const Track& track, const Route& route, const Instances& inst, std::size_t* count) {
+std::string edits_json(const Track& track, const std::vector<RouteEdits>& routes, std::size_t* count) {
     std::string out = "{\"format\":\"dr2-track-edits\",\"version\":1,\"track\":" + json::quote(track.id) +
                       ",\"src\":" + json::quote(track.src) + ",\"edits\":[";
     std::size_t n = 0;
-    for (std::size_t i = 0; i < inst.n; ++i) {
-        if (!changed(inst, i)) continue;
-        const std::string& name = track.types.at(inst.type[i]).name;
-        const std::string kind = name.substr(0, 1);
-        const std::string type = name.size() > 2 ? name.substr(2) : std::string();
-        if (n++) out += ',';
-        out += "\n{\"route\":" + json::quote(route.name) + ",\"kind\":" + json::quote(kind) + ",\"type\":" + json::quote(type) +
-               ",\"index\":" + std::to_string(inst.idnum[i]) + ",\"deleted\":" + (inst.hidden[i] ? "true" : "false") +
-               ",\"m\":" + floats(inst.matrix(i)) + ",\"m0\":" + floats(&inst.m0[i * kInstFloats]) + "}";
+    for (const RouteEdits& re : routes) {
+        const Instances& inst = *re.inst;
+        for (std::size_t i = 0; i < inst.n; ++i) {
+            const bool added = inst.idnum[i] >= kAdded;
+            if (added ? inst.hidden[i] != 0 : !changed(inst, i)) continue;
+            const std::string& name = track.types.at(inst.type[i]).name;
+            const std::string kind = name.substr(0, 1);
+            const std::string type = name.size() > 2 ? name.substr(2) : std::string();
+            if (n++) out += ',';
+            out += "\n{\"route\":" + json::quote(re.route->name) + ",\"kind\":" + json::quote(kind) + ",\"type\":" + json::quote(type);
+            if (added) out += ",\"added\":true,\"src\":" + std::to_string(inst.idnum[i] - kAdded) + ",\"index\":-1,\"deleted\":false";
+            else out += ",\"index\":" + std::to_string(inst.idnum[i]) + ",\"deleted\":" + (inst.hidden[i] ? "true" : "false");
+            out += ",\"m\":" + floats(inst.matrix(i)) + ",\"m0\":" + floats(&inst.m0[i * kInstFloats]) + "}";
+        }
     }
     out += "\n]}\n";
     if (count) *count = n;

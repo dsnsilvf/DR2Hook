@@ -14,6 +14,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <map>
 #include <memory>
 #include <string>
 
@@ -43,6 +44,8 @@ public:
     // Grava o edits.json; devolve o número de edições.
     std::size_t save();
     const Instances& instances() const { return inst_; }
+    // Troca para a rota seguinte (+1) ou anterior (-1), guardando as edições da atual.
+    void switch_route(int step);
     // Corta pela câmera atual e desenha.
     void draw(const glm::mat4& view_proj, const render::OrbitCamera& cam);
     std::string title() const;
@@ -51,7 +54,11 @@ public:
 
 private:
     Track track_;
+    std::string dir_;
     const Route* route_ = nullptr;
+    std::size_t route_index_ = 0;
+    std::string terrain_file_;
+    std::vector<Mesh> library_;
     render::TrackShader shader_;
     std::unique_ptr<render::Terrain> terrain_;
     std::unique_ptr<render::RouteLines> lines_;
@@ -65,6 +72,12 @@ private:
     Tool tool_ = Tool::Navigate;
     int sel_ = -1;
     edit::History hist_;
+    struct Saved {
+        Instances inst;
+        edit::History hist;
+    };
+    std::map<std::size_t, Saved> saved_;  // rotas abertas antes, com edições e histórico
+    void load_route(std::size_t index);
     struct EditDrag {
         bool active = false;
         std::uint32_t i = 0;

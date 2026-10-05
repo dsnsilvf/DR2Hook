@@ -63,8 +63,12 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Ferramentas | **1** Navegar, **2** Mover (arrastar no chão; Shift sobe e desce), **3** Girar (arrastar para os lados) |
 | Selecionar | clique sem arrastar; clique no vazio ou **Esc** tira a seleção |
 | Apagar | **Delete** |
+| Duplicar | **Ctrl+D**: cópia 2 m adiante em x, já selecionada (só objetos `e:` de `objects.ens`, como no web) |
+| Girar no teclado | **E** +15°, **Q** −15°; com **Shift**, ±90° |
+| Restaurar | **R** volta o selecionado à matriz do arquivo e o mostra |
+| Rota | **Tab** próxima, **Shift+Tab** anterior; cada rota guarda as próprias edições e histórico |
 | Histórico | **Ctrl+Z** desfaz; **Ctrl+Y** ou **Ctrl+Shift+Z** refaz (300 passos) |
-| Gravar | **Ctrl+S** grava o `edits.json` (o plano diz **S**, mas **S** já é andar para trás) |
+| Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás) |
 | Enquadrar | **F**: o selecionado, ou a rota sem seleção (na cena de teste, volta ao início) |
 | Camadas | **F1** terreno, **F2** objetos, **F3** árvores, **F4** terreno distante, **G** portões, **I** linha da IA |
 | Distância de desenho | **[** e **]** (100 a 4000 m, padrão 700 m) |
@@ -105,6 +109,7 @@ Neste ambiente não há GPU nem jogo: tudo rodou no Mesa llvmpipe sob Xvfb, com 
 | 3 | `camera_test OK`; cubo e grade; com `xdotool`, orbitar, roda, pan e `D` mudam o quadro e `F` volta ao quadro inicial byte a byte |
 | 4 e 5 | `core_tests --track`: 164 malhas / 151 989 vértices / 263 862 triângulos iguais ao `unpack_geom`; leitura 0,007 s (5,3 MB), envio 0,009 s; 5 texturas do terreno; mesmo quadro e mesmas texturas que o web |
 | 6 | 1011 instâncias; nas mesmas câmeras do web, 995, 935 e 980 visíveis, os mesmos números do web; ~20 fps no llvmpipe |
+| 7+ | duplicar, restaurar, ±15°/±90° e troca de rota (pista sintética com `route_1`): sessão com `xdotool` → 3 edições em duas rotas (giro de 105°, cópia `added`, apagar na `route_1`), aprovadas pelo `edit_roundtrip.py` |
 | 7 | `edit_test OK`; sessão com `xdotool`: mover, girar, apagar, Ctrl+Z ×2, Ctrl+Y, Ctrl+S → 2 edições (x/z de uma barreira, linhas da matriz de outra); segunda sessão com apagar barreira, apagar árvore e mover árvore → 3 edições; as duas passam no `edit_roundtrip.py` |
 
 Falta, na máquina do dono, com a Montalegre:
@@ -114,10 +119,8 @@ Falta, na máquina do dono, com a Montalegre:
 
 ## O que ficou de fora
 
-- **Duplicar** objetos (o web faz, com **Ctrl+D**; o Python aceita).
-- Outras rotas além da primeira.
-- Edição numérica de posição e os botões de ±15° e ±90°.
-- Restaurar o original de um objeto.
+- Edição numérica da posição (o web tem campos X/Y/Z).
+- As linhas de portões e da IA mostram só a rota atual (o web desenha as de todas as rotas).
 - ImGui, PSSG em C++, Polônia, Windows.
 
 ## Ideias

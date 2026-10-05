@@ -11,6 +11,10 @@ namespace dr2 {
 // mundo = p.x * linha0 + p.y * linha1 + p.z * linha2 + posição.
 constexpr std::size_t kInstFloats = 12;
 
+// idnum de uma cópia feita na sessão: kAdded + idnum da instância copiada (como TV_ADDED no web).
+// O arquivo exportado nunca tem valores assim.
+constexpr std::uint32_t kAdded = 0x80000000u;
+
 struct Instances {
     std::uint32_t n = 0;
     std::vector<std::uint16_t> type;   // índice em type_order

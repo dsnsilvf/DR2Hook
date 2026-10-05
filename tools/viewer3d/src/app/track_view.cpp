@@ -28,50 +28,84 @@ std::string thousands(std::size_t n) {
 }  // namespace
 
 TrackView::TrackView(const std::string& dir, std::string out)
-    : track_(read_track(dir)), textures_(dir, track_.materials), out_(std::move(out)) {
-    route_ = &track_.routes.front();
+    : track_(read_track(dir)), dir_(dir), textures_(dir, track_.materials), out_(std::move(out)) {
     if (out_.empty()) out_ = "build/uiview/saves/" + track_.id + ".edits.json";
     if (edit::inside_game_folder(out_)) throw std::runtime_error("--out " + out_ + " fica dentro da pasta do jogo");
-    if (route_->terrain_file.empty()) throw std::runtime_error("track.json: a rota " + route_->name + " não tem terreno");
 
-    auto t0 = std::chrono::steady_clock::now();
-    const std::vector<std::uint8_t> bytes = read_file(join_path(dir, route_->terrain_file));
-    const std::vector<Mesh> meshes = read_dr2m(bytes);
-    const double read_s = seconds_since(t0);
-    const MeshTotals tot = totals(meshes);
-    if (tot.verts > 5'000'000)
-        std::fprintf(stderr, "viewer3d: aviso: %s tem %zu vértices; o MVP não otimiza pistas desse tamanho\n",
-                     route_->terrain_file.c_str(), tot.verts);
-
-    t0 = std::chrono::steady_clock::now();
-    terrain_ = std::make_unique<render::Terrain>(meshes);
-    glFinish();
-    const double upload_s = seconds_since(t0);
-    lines_ = std::make_unique<render::RouteLines>(*route_);
-
-    t0 = std::chrono::steady_clock::now();
-    const std::vector<Mesh> lib = read_dr2m(read_file(join_path(dir, "objects.bin")));
-    inst_ = read_dr2i(read_file(join_path(dir, "inst_" + route_->name + ".bin")), track_.types.size());
-    objects_ = std::make_unique<render::InstanceRenderer>(track_, lib, inst_);
+    const auto t0 = std::chrono::steady_clock::now();
+    library_ = read_dr2m(read_file(join_path(dir, "objects.bin")));
+    objects_ = std::make_unique<render::InstanceRenderer>(track_, library_, Instances{});
     glFinish();
     std::size_t with_mesh = 0;
     for (const auto& ty : objects_->types()) with_mesh += !ty.empty;
-    std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha), %u instâncias; %.3f s\n", lib.size(),
-                 objects_->types().size(), with_mesh, inst_.n, seconds_since(t0));
+    std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha); %.3f s\n", library_.size(),
+                 objects_->types().size(), with_mesh, seconds_since(t0));
+    load_route(0);
+}
 
-    // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
-    t0 = std::chrono::steady_clock::now();
-    for (const auto& part : terrain_->parts()) textures_.for_material(part.material);
-    glFinish();
-    const double tex_s = seconds_since(t0);
+void TrackView::load_route(std::size_t index) {
+    route_index_ = index;
+    route_ = &track_.routes.at(index);
+    if (route_->terrain_file.empty()) throw std::runtime_error("track.json: a rota " + route_->name + " não tem terreno");
 
-    std::fprintf(stderr,
-                 "viewer3d: %s %s: %zu malhas, %zu vértices, %zu triângulos; leitura %.3f s (%.1f MB), envio à GPU %.3f s\n",
-                 track_.id.c_str(), route_->terrain_file.c_str(), tot.meshes, tot.verts, tot.tris, read_s,
-                 static_cast<double>(bytes.size()) / 1e6, upload_s);
-    std::fprintf(stderr, "viewer3d: texturas do terreno: %zu criadas (%zu falharam), %.1f MB RGBA, %.3f s (decodificação %.3f s)\n",
-                 textures_.created(), textures_.failed(), static_cast<double>(textures_.bytes_rgba()) / 1e6, tex_s,
-                 textures_.decode_seconds());
+    // rotas com a mesma seleção de terreno dividem o arquivo: só relê se mudou
+    if (route_->terrain_file != terrain_file_) {
+        auto t0 = std::chrono::steady_clock::now();
+        const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route_->terrain_file));
+        const std::vector<Mesh> meshes = read_dr2m(bytes);
+        const double read_s = seconds_since(t0);
+        const MeshTotals tot = totals(meshes);
+        if (tot.verts > 5'000'000)
+            std::fprintf(stderr, "viewer3d: aviso: %s tem %zu vértices; o MVP não otimiza pistas desse tamanho\n",
+                         route_->terrain_file.c_str(), tot.verts);
+        t0 = std::chrono::steady_clock::now();
+        terrain_.reset();
+        terrain_ = std::make_unique<render::Terrain>(meshes);
+        glFinish();
+        const double upload_s = seconds_since(t0);
+        terrain_file_ = route_->terrain_file;
+
+        // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
+        const std::size_t before = textures_.created();
+        t0 = std::chrono::steady_clock::now();
+        for (const auto& part : terrain_->parts()) textures_.for_material(part.material);
+        glFinish();
+        const double tex_s = seconds_since(t0);
+        std::fprintf(stderr,
+                     "viewer3d: %s %s: %zu malhas, %zu vértices, %zu triângulos; leitura %.3f s (%.1f MB), envio à GPU %.3f s\n",
+                     track_.id.c_str(), route_->terrain_file.c_str(), tot.meshes, tot.verts, tot.tris, read_s,
+                     static_cast<double>(bytes.size()) / 1e6, upload_s);
+        std::fprintf(stderr, "viewer3d: texturas do terreno: %zu novas (%zu falharam no total), %.1f MB RGBA no total, %.3f s\n",
+                     textures_.created() - before, textures_.failed(), static_cast<double>(textures_.bytes_rgba()) / 1e6, tex_s);
+    }
+    lines_ = std::make_unique<render::RouteLines>(*route_);
+
+    if (auto it = saved_.find(index); it != saved_.end()) {
+        inst_ = std::move(it->second.inst);
+        hist_ = std::move(it->second.hist);
+        saved_.erase(it);
+    } else {
+        inst_ = read_dr2i(read_file(join_path(dir_, "inst_" + route_->name + ".bin")), track_.types.size());
+        hist_ = edit::History{};
+        if (inst_.n != route_->instances)
+            std::fprintf(stderr, "viewer3d: aviso: inst_%s.bin tem %u instâncias e o track.json diz %zu\n", route_->name.c_str(),
+                         inst_.n, route_->instances);
+    }
+    objects_->regroup(inst_);
+    sel_ = -1;
+    drag_ = EditDrag{};
+    ++edit_rev_;
+    std::fprintf(stderr, "viewer3d: rota %s (%zu de %zu), %u instâncias\n", route_->name.c_str(), index + 1, track_.routes.size(),
+                 inst_.n);
+}
+
+void TrackView::switch_route(int step) {
+    const std::size_t n = track_.routes.size();
+    if (n < 2 || drag_.active) return;
+    const std::size_t next = (route_index_ + n + static_cast<std::size_t>(step % static_cast<int>(n) + static_cast<int>(n))) % n;
+    if (next == route_index_) return;
+    saved_[route_index_] = Saved{std::move(inst_), std::move(hist_)};
+    load_route(next);
 }
 
 void TrackView::frame_route(render::OrbitCamera& cam) const {
@@ -94,6 +128,14 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
             if (!drag_.active && hist_.redo(inst_)) ++edit_rev_;
             return true;
         case SDLK_S: save(); return true;
+        case SDLK_D:
+            // duplicar só vale para objetos de objects.ens (ornamentos e árvores têm contagem fixa)
+            if (sel_ >= 0 && !drag_.active && track_.types[inst_.type[static_cast<std::size_t>(sel_)]].name[0] == 'e') {
+                sel_ = static_cast<int>(edit::duplicate(inst_, hist_, static_cast<std::uint32_t>(sel_)));
+                objects_->regroup(inst_);
+                ++edit_rev_;
+            }
+            return true;
         default: return false;
         }
     }
@@ -106,6 +148,21 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_2: tool_ = Tool::Move; return true;
     case SDLK_3: tool_ = Tool::Rotate; return true;
     case SDLK_DELETE: delete_selected(); return true;
+    case SDLK_TAB: switch_route((mod & SDL_KMOD_SHIFT) ? -1 : 1); return true;
+    case SDLK_R:
+        if (sel_ >= 0 && !drag_.active) {
+            edit::restore(inst_, hist_, static_cast<std::uint32_t>(sel_));
+            ++edit_rev_;
+        }
+        return true;
+    case SDLK_Q:
+    case SDLK_E:
+        if (sel_ >= 0 && !drag_.active) {
+            const float deg = ((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f);
+            edit::turn(inst_, hist_, static_cast<std::uint32_t>(sel_), deg);
+            ++edit_rev_;
+        }
+        return true;
     case SDLK_F1: show_terrain_ = !show_terrain_; return true;
     case SDLK_F2: layers_.obj = !layers_.obj; return true;
     case SDLK_F3: layers_.tree = !layers_.tree; return true;
@@ -202,8 +259,14 @@ void TrackView::click(float x, float y, float w, float h, const render::OrbitCam
 }
 
 std::size_t TrackView::save() {
+    // todas as rotas abertas, como o web (tvEditList percorre o cache de rotas)
+    std::vector<edit::RouteEdits> routes;
+    for (std::size_t k = 0; k < track_.routes.size(); ++k) {
+        if (k == route_index_) routes.push_back({route_, &inst_});
+        else if (auto it = saved_.find(k); it != saved_.end()) routes.push_back({&track_.routes[k], &it->second.inst});
+    }
     std::size_t count = 0;
-    const std::string text = edit::edits_json(track_, *route_, inst_, &count);
+    const std::string text = edit::edits_json(track_, routes, &count);
     edit::write_text(out_, text);
     std::printf("gravado %s (%zu edições)\n", out_.c_str(), count);
     std::fflush(stdout);
@@ -218,7 +281,9 @@ std::string TrackView::title() const {
         const std::string& name = track_.types[inst_.type[i]].name;
         const float* m = inst_.matrix(i);
         char buf[200];
-        std::snprintf(buf, sizeof buf, " | %s | kind %c | %u | %.2f %.2f %.2f", name.substr(2).c_str(), name[0], inst_.idnum[i],
+        const std::uint32_t id = inst_.idnum[i];
+        const std::string who = id >= kAdded ? "cópia de " + std::to_string(id - kAdded) : std::to_string(id);
+        std::snprintf(buf, sizeof buf, " | %s | kind %c | %s | %.2f %.2f %.2f", name.substr(2).c_str(), name[0], who.c_str(),
                       static_cast<double>(m[9]), static_cast<double>(m[10]), static_cast<double>(m[11]));
         sel = buf;
     }

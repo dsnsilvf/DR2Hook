@@ -125,6 +125,43 @@ void test_edits_json() {
           "edits: nada alterado, lista vazia");
 }
 
+void test_duplicate_restore_turn() {
+    const Track track = make_track();
+    Instances inst = make_instances(3);
+    edit::History h;
+    const std::uint32_t c = edit::duplicate(inst, h, 0);
+    check(c == 3 && inst.n == 4 && inst.idnum[3] == kAdded + 100 && inst.hidden[3] == 0, "duplicar: cópia no fim, visível");
+    check(inst.matrix(3)[9] == inst.matrix(0)[9] + 2.0f && inst.m0[3 * 12 + 9] == inst.matrix(3)[9], "duplicar: 2 m em x, m0 = cópia");
+    std::size_t count = 0;
+    auto doc = json::parse(edit::edits_json(track, track.routes[0], inst, &count));
+    check(count == 1 && doc["edits"][0]["added"].as_bool() && doc["edits"][0]["src"].as_number() == 100 &&
+              doc["edits"][0]["index"].as_number() == -1 && !doc["edits"][0]["deleted"].as_bool(),
+          "duplicar: added, src = idnum copiado, index -1");
+    const std::uint32_t c2 = edit::duplicate(inst, h, 3);  // cópia da cópia aponta para o original
+    check(inst.idnum[c2] == kAdded + 100, "duplicar: cópia da cópia mantém o src original");
+    check(h.undo(inst) && h.undo(inst) && inst.hidden[3] == 1 && inst.hidden[4] == 1, "duplicar: desfazer esconde as cópias");
+    edit::edits_json(track, track.routes[0], inst, &count);
+    check(count == 0, "duplicar: cópia desfeita não entra no JSON");
+
+    edit::turn(inst, h, 1, 90.0f);
+    edit::turn(inst, h, 1, 90.0f);
+    check(std::fabs(inst.matrix(1)[0] + 1.0f) < 1e-5f && std::fabs(inst.matrix(1)[8] + 1.0f) < 1e-5f, "girar: 90 + 90 = 180 graus");
+    inst.hidden[1] = 1;
+    edit::restore(inst, h, 1);
+    check(std::memcmp(inst.matrix(1), &inst.m0[12], 48) == 0 && inst.hidden[1] == 0, "restaurar: matriz do arquivo e visível");
+    check(h.undo(inst) && inst.hidden[1] == 1, "restaurar: desfazer volta ao estado anterior");
+
+    Track two = make_track();
+    two.routes.push_back({});
+    two.routes[1].name = "route_1";
+    Instances a = make_instances(2), b = make_instances(2);
+    a.hidden[0] = 1;
+    b.matrix(1)[9] += 1.0f;
+    doc = json::parse(edit::edits_json(two, {{&two.routes[0], &a}, {&two.routes[1], &b}}, &count));
+    check(count == 2 && doc["edits"][0]["route"].as_string() == "route_0" && doc["edits"][1]["route"].as_string() == "route_1",
+          "edits: junta as rotas abertas");
+}
+
 void test_game_folder() {
     check(edit::inside_game_folder("/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0/x.json"), "pasta do jogo: dentro");
     check(edit::inside_game_folder("/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0"), "pasta do jogo: a própria");
@@ -145,6 +182,7 @@ int main() {
     test_history();
     test_spin();
     test_edits_json();
+    test_duplicate_restore_turn();
     test_game_folder();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;

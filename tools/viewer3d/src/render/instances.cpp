@@ -66,7 +66,7 @@ InstanceRenderer::InstanceRenderer(const Track& track, const std::vector<Mesh>& 
         ty.empty = ty.parts.empty();
         if (ty.empty) ty.lo = ty.hi = glm::vec3(0.0f);
     }
-    for (std::uint32_t i = 0; i < inst.n; ++i) types_[inst.type[i]].group.push_back(i);
+    regroup(inst);
 
     // um VAO por tipo: malha (por vértice) + instâncias (divisor 1); o IBO é o mesmo
     vaos_.resize(types_.size());
@@ -98,6 +98,12 @@ InstanceRenderer::InstanceRenderer(const Track& track, const std::vector<Mesh>& 
     if (types_.empty()) ibo_.upload(GL_ELEMENT_ARRAY_BUFFER, idx.data(), idx.size() * sizeof(std::uint32_t));
     else glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_.id());
     glBindVertexArray(0);
+}
+
+void InstanceRenderer::regroup(const Instances& inst) {
+    for (Type& ty : types_) ty.group.clear();
+    for (std::uint32_t i = 0; i < inst.n; ++i) types_[inst.type[i]].group.push_back(i);
+    key_.clear();
 }
 
 bool InstanceRenderer::passes(const Instances& inst, std::size_t i, const glm::vec3& target, float draw_dist,

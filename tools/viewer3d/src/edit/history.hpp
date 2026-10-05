@@ -49,4 +49,14 @@ void spin(float* m, const float* base, float th);
 // A instância difere do arquivo (alguma das 12 floats) ou foi apagada?
 bool changed(const Instances& inst, std::size_t i);
 
+// Copia a instância `src` para o fim, 2 m adiante em x, como tvDuplicateSel: a cópia nasce oculta e o
+// passo de histórico a revela (desfazer a esconde de novo). Devolve o índice da cópia.
+std::uint32_t duplicate(Instances& inst, History& hist, std::uint32_t src);
+
+// Volta a instância à matriz do arquivo e a mostra (tvRestoreSel), com passo de histórico.
+void restore(Instances& inst, History& hist, std::uint32_t i);
+
+// Gira em torno de Y por `deg` graus (tvTurnSel), com passo de histórico.
+void turn(Instances& inst, History& hist, std::uint32_t i, float deg);
+
 }  // namespace dr2::edit

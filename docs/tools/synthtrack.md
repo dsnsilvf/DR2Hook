@@ -25,22 +25,23 @@ Leva ~2 s e ~6 MB. Grava `build/uiview/tracks/synthetic__dr2hook_ring/` e atuali
 | Ornamentos `o:` | Cones na curva mais fechada e placas de frenagem de 100 e 50 m |
 | Árvores `t:` | ~420 pinheiros e bétulas de cartão (alfa) e uma serra distante `mnt_dist_*` (camada "Terreno distante") |
 | Traçado de IA e limites | Portões a cada 20 m e duas linhas de IA (`default` e `wide`) |
+| Rotas | `route_0` completa; `route_1` usa o mesmo terreno, sem pórtico, arquibancadas e alambrado, com uma chicane de cones na reta (995 instâncias) |
 | Texturas | 16 procedurais, lados em potência de dois (64 a 256 px); 3 com alfa |
 
-Contagens com a semente 7: 164 malhas de terreno, 151 989 vértices, 263 862 triângulos, 12 tipos e 1011 instâncias. O `expected.json` guarda os números que o leitor Python (`unpack_geom`) lê de volta.
+Contagens com a semente 7: 164 malhas de terreno, 151 989 vértices, 263 862 triângulos, 12 tipos, 1011 instâncias na `route_0` e 995 na `route_1`. O `expected.json` guarda os números que o leitor Python (`unpack_geom`) lê de volta.
 
 ## O que grava
 
 ```
 tracks/synthetic__dr2hook_ring/
-  track.json  terrain_0.bin  objects.bin  inst_route_0.bin  tex/*.webp     formato exportado (viewers)
+  track.json  terrain_0.bin  objects.bin  inst_route_{0,1}.bin  tex/*.webp  formato exportado (viewers)
   expected.json                                                           contagens do oráculo Python
   source/textures/*.png                                                   texturas sem perda
-  source/route_0/objects.ens  ornaments.bin  trees.bin                     formato de origem do jogo
+  source/route_{0,1}/objects.ens  ornaments.bin  trees.bin                formato de origem do jogo
   source/layout.json                                                      traçado amostrado (posição, tangente, curvatura)
 ```
 
-O formato exportado está em [`plans/viewer3d/formatos.md`](../plans/viewer3d/formatos.md). Os arquivos de `source/route_0/` seguem o que `tools/uiview/track/export.py` lê e `track/edit.py` escreve:
+O formato exportado está em [`plans/viewer3d/formatos.md`](../plans/viewer3d/formatos.md). Os arquivos de `source/route_N/` seguem o que `tools/uiview/track/export.py` lê e `track/edit.py` escreve:
 
 - O `objects.ens` tem uma `TEMPLATEENTITYINSTANCE` por objeto `e:` com `uri="route_objecttypes.pssg#<tipo>"`, e sobra espaço livre no último bloco de 64 KiB para cópias.
 - No `ornaments.bin` e no `trees.bin`, os registros ficam no layout de `BIN_LAYOUT`. O hash do tipo é um FNV-1a do nome, só um identificador estável: o jogo usa o `reference_id` dos `*_references.xml`.

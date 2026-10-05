@@ -50,6 +50,8 @@ public:
     InstanceRenderer(const InstanceRenderer&) = delete;
     InstanceRenderer& operator=(const InstanceRenderer&) = delete;
 
+    // Refaz os grupos por tipo (outra rota, ou cópias novas) e força o próximo corte.
+    void regroup(const Instances& inst);
     // Refaz os buffers só se a chave mudou (alvo e distância em passos de 8 m, raio, camadas, revisão de edição).
     void cull(const Instances& inst, const glm::vec3& target, float cam_dist, float draw_dist, const Layers& layers,
               unsigned edit_rev);

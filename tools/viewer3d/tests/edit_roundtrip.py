@@ -46,16 +46,22 @@ def main(edits_path: str, track_dir: str) -> int:
             # um apagado sai do texto: os índices seguintes descem; confere pelos que restam
             after = track.instances(new)
             before = track.instances(old)
-            removed = sorted(e["index"] for e in edits if e["deleted"])
+            removed = sorted(e["index"] for e in edits if e["deleted"] and not e.get("added"))
+            copies = [e for e in edits if e.get("added")]
+            for e in copies:
+                assert e["index"] == -1 and isinstance(e["src"], int), e
+                flat = lambda m: [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14]]  # noqa: E731
+                assert any(all(abs(a - b) < 1e-3 for a, b in zip(flat(x["m"]), e["m"])) for x in after), ("cópia sumiu", e)
+                checked += 1
             for e in edits:
-                if e["deleted"]:
+                if e["deleted"] or e.get("added"):
                     continue
                 pos = e["index"] - sum(1 for r in removed if r < e["index"])
                 m = after[pos]["m"]
                 got = [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14]]
                 assert all(abs(a - b) < 1e-3 for a, b in zip(got, e["m"])), (e["index"], got, e["m"])
                 checked += 1
-            assert len(after) == len(before) - len(removed), "contagem de instâncias depois de apagar"
+            assert len(after) == len(before) - len(removed) + len(copies), "contagem de instâncias depois de apagar e copiar"
             checked += len(removed)
         else:
             layout = track_edit.BIN_LAYOUT[kind]

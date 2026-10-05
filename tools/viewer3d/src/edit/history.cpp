@@ -68,6 +68,38 @@ void spin(float* m, const float* base, float th) {
     for (int k = 9; k < 12; ++k) m[k] = base[k];
 }
 
+std::uint32_t duplicate(Instances& inst, History& hist, std::uint32_t src) {
+    const std::uint32_t n = inst.n;
+    inst.type.push_back(inst.type[src]);
+    inst.idnum.push_back(inst.idnum[src] >= kAdded ? inst.idnum[src] : kAdded + inst.idnum[src]);
+    const float* m = inst.matrix(src);
+    std::vector<float> copy(m, m + kInstFloats);
+    copy[9] += 2.0f;
+    inst.m.insert(inst.m.end(), copy.begin(), copy.end());
+    inst.m0.insert(inst.m0.end(), copy.begin(), copy.end());
+    inst.hidden.push_back(1);
+    inst.n = n + 1;
+    auto before = snapshot(inst, {n});
+    inst.hidden[n] = 0;
+    hist.commit("Duplicar", std::move(before), snapshot(inst, {n}));
+    return n;
+}
+
+void restore(Instances& inst, History& hist, std::uint32_t i) {
+    auto before = snapshot(inst, {i});
+    std::memcpy(inst.matrix(i), &inst.m0[i * kInstFloats], sizeof(float) * kInstFloats);
+    inst.hidden[i] = 0;
+    hist.commit("Restaurar", std::move(before), snapshot(inst, {i}));
+}
+
+void turn(Instances& inst, History& hist, std::uint32_t i, float deg) {
+    auto before = snapshot(inst, {i});
+    float base[kInstFloats];
+    std::memcpy(base, inst.matrix(i), sizeof base);
+    spin(inst.matrix(i), base, deg * 3.14159265358979f / 180.0f);
+    hist.commit("Girar", std::move(before), snapshot(inst, {i}));
+}
+
 bool changed(const Instances& inst, std::size_t i) {
     if (inst.hidden[i]) return true;
     const float* a = inst.matrix(i);

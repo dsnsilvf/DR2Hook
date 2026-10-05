@@ -6,12 +6,22 @@
 #include "core/track.hpp"
 
 #include <string>
+#include <vector>
 
 namespace dr2::edit {
 
-// Uma entrada por instância movida ou apagada da rota (cópias não existem no viewer nativo).
+struct RouteEdits {
+    const Route* route;
+    const Instances* inst;
+};
+
+// Uma entrada por instância movida ou apagada, e uma por cópia visível (added, src = idnum copiado,
+// index = -1), de todas as rotas dadas (como tvEditList, que junta as rotas abertas).
 // Floats com "%.9g": ida e volta exata de float32.
-std::string edits_json(const Track& track, const Route& route, const Instances& inst, std::size_t* count = nullptr);
+std::string edits_json(const Track& track, const std::vector<RouteEdits>& routes, std::size_t* count = nullptr);
+inline std::string edits_json(const Track& track, const Route& route, const Instances& inst, std::size_t* count = nullptr) {
+    return edits_json(track, std::vector<RouteEdits>{{&route, &inst}}, count);
+}
 
 // Caminho dentro da pasta de instalação do jogo? (".../steamapps/common/DiRT Rally 2.0/..."); a
 // comparação ignora maiúsculas e aceita barra invertida.

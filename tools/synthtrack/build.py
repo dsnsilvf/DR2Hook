@@ -29,6 +29,7 @@ TRACK_ID = "synthetic__dr2hook_ring"
 SRC = "locations/synthetic__dr2hook_ring.nefs"
 BASE = "tracks/locations/synthetic/dr2hook_ring/"
 ROUTE = "route_0"
+ROUTE_ALT = "route_1"   # variante: sem pórtico, arquibancadas e alambrado; chicane de cones na reta
 
 TERRAIN_STEP = 4.0      # metros entre vértices do terreno detalhado
 BLOCK = 100.0           # lado de um bloco de terreno
@@ -253,6 +254,25 @@ def build(out: str, seed: int = 7, log=print) -> dict:
     with open(os.path.join(dest, f"inst_{ROUTE}.bin"), "wb") as fh:
         fh.write(pack_instances(items, type_index))
 
+    # rota 1: mesmo terreno (mesmo terrain_0.bin), objetos próprios, idnum próprio por arquivo de origem
+    drop = {"e:synth_start_arch", "e:synth_grandstand", "e:synth_fence"}
+    alt = [dict(i) for i in items if i["type"] not in drop]
+    for k in range(30, 62, 4):
+        q = pts[k]
+        off = (2.5 if (k // 4) % 2 else -2.5)
+        x, z = q.p[0] + q.n[0] * off, q.p[2] + q.n[1] * off
+        alt.append({"type": "o:synth_cone", "m": meshes.yaw_matrix(0.0, (x, ground(x, z), z))})
+    alt_counters = {"e": 0, "o": 0, "t": 0}
+    alt_ids: list[str] = []
+    for i in alt:
+        kind = i["type"][0]
+        i["idnum"] = alt_counters[kind]
+        if kind == "e":
+            alt_ids.append(f"{i['type'][2:].split('~')[0]}_{alt_counters[kind]:04d}")
+        alt_counters[kind] += 1
+    with open(os.path.join(dest, f"inst_{ROUTE_ALT}.bin"), "wb") as fh:
+        fh.write(pack_instances(alt, type_index))
+
     # ── track.json ─────────────────────────────────────────────────────────
     gates = []
     for k in range(0, len(pts), 10):
@@ -283,21 +303,26 @@ def build(out: str, seed: int = 7, log=print) -> dict:
         "terrain": {"file": "terrain_0.bin", "meshes": len(terrain), "verts": sum(len(m["positions"]) for m in terrain)},
         "instances": len(items),
     }
+    route_alt = dict(route, name=ROUTE_ALT, ens_ids=alt_ids, instances=len(alt), ai=[route["ai"][0]])
+    route_alt["progress"] = {"routes": [{"id": 1, "direction": "forward", "splits": [{"type": "joker", "gate": 3}]}],
+                             "gates": gates}
     doc = {
         "id": TRACK_ID, "src": SRC, "base": BASE,
         "terrain": {"meshes": len(terrain), "verts": sum(len(m["positions"]) for m in terrain)},
-        "routes": [route], "types": types, "type_order": type_order, "materials": materials,
+        "routes": [route, route_alt], "types": types, "type_order": type_order, "materials": materials,
         "textures": {"wanted": len(set(materials.values())), "found": len(set(materials.values()))},
         "synthetic": {"seed": seed, "length_m": round(length, 1), "generator": "tools.synthtrack"},
     }
     with open(os.path.join(dest, "track.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, separators=(",", ":"))
 
-    _write_sources(dest, items, pts)
-    expected = _expected(dest, items, type_order, materials)
+    _write_sources(dest, items, ROUTE)
+    _write_sources(dest, alt, ROUTE_ALT)
+    _write_layout(dest, pts)
+    expected = _expected(dest, items, type_order, materials, {ROUTE: len(items), ROUTE_ALT: len(alt)})
     write_index(out)
     log(f"{TRACK_ID}: {expected['terrain']['meshes']} malhas de terreno ({expected['terrain']['verts']} vértices), "
-        f"{len(type_order)} tipos, {len(items)} instâncias, {len(tex)} texturas -> {dest}")
+        f"{len(type_order)} tipos, {len(items)} + {len(alt)} instâncias (route_0 + route_1), {len(tex)} texturas -> {dest}")
     return expected
 
 
@@ -314,9 +339,9 @@ def _inside(box, x: float, z: float, pad: float = 0.0) -> bool:
     return box[0] - pad <= x <= box[2] + pad and box[1] - pad <= z <= box[3] + pad
 
 
-def _write_sources(dest: str, items: list[dict], pts: list[layout.Sample]) -> None:
-    """Arquivos de origem: um registro por instância, na ordem do idnum, no layout que export.py lê."""
-    src = os.path.join(dest, "source", ROUTE)
+def _write_sources(dest: str, items: list[dict], route: str) -> None:
+    """Arquivos de origem da rota: um registro por instância, na ordem do idnum, no layout que export.py lê."""
+    src = os.path.join(dest, "source", route)
     os.makedirs(src, exist_ok=True)
     by_kind: dict[str, list[dict]] = {"e": [], "o": [], "t": []}
     for i in items:
@@ -348,6 +373,9 @@ def _write_sources(dest: str, items: list[dict], pts: list[layout.Sample]) -> No
             struct.pack_into("<3f", buf, o + pos_at, m[12], m[13], m[14])
         with open(os.path.join(src, fname), "wb") as fh:
             fh.write(bytes(buf))
+
+
+def _write_layout(dest: str, pts: list[layout.Sample]) -> None:
     with open(os.path.join(dest, "source", "layout.json"), "w", encoding="utf-8") as fh:
         json.dump({"step_m": layout.STEP, "road_half_m": layout.ROAD_HALF, "control_xz": layout.CONTROL,
                    "samples": [{"s": round(p.s, 3), "p": [round(v, 4) for v in p.p], "t": [round(v, 6) for v in p.t],
@@ -362,7 +390,7 @@ def _hash(name: str) -> int:
     return h
 
 
-def _expected(dest: str, items: list[dict], type_order: list[str], materials: dict) -> dict:
+def _expected(dest: str, items: list[dict], type_order: list[str], materials: dict, by_route: dict[str, int]) -> dict:
     with open(os.path.join(dest, "terrain_0.bin"), "rb") as fh:
         back = unpack_geom(fh.read())
     with open(os.path.join(dest, "objects.bin"), "rb") as fh:
@@ -375,6 +403,7 @@ def _expected(dest: str, items: list[dict], type_order: list[str], materials: di
         "objects": {"meshes": len(objs), "verts": sum(len(m["positions"]) for m in objs),
                     "tris": sum(len(m["indices"]) // 3 for m in objs)},
         "instances": len(items),
+        "instances_by_route": by_route,
         "types": len(type_order),
         "materials": len(materials),
         "first_mesh": {"name": back[0]["name"], "material": back[0]["material"], "verts": len(back[0]["positions"]),
