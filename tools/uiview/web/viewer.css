@@ -310,3 +310,15 @@ body.rz-drag .car-vp canvas { pointer-events: none; }
   max-width: none; box-shadow: 12px 0 28px rgba(0, 0, 0, .5); transition: transform .16s ease; }
 .car-ws.tdrawer.tree-hidden .side { transform: translateX(-105%); visibility: hidden; transition: transform .16s ease, visibility 0s .16s; }
 .car-ws:not(.tdrawer).tree-hidden .side, .car-ws:not(.tdrawer).tree-hidden #car-rz1 { display: none; }
+
+.car-hist { position: absolute; top: 46px; left: 8px; width: 240px; max-height: 50%; display: flex; flex-direction: column;
+  background: rgba(15, 17, 21, .9); border: 1px solid var(--line); border-radius: 6px; backdrop-filter: blur(4px); font-size: 12px; }
+.car-hist[hidden] { display: none; }
+.hist-h { padding: 5px 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.hist-list { overflow-y: auto; padding: 3px; }
+.hist-row { display: flex; gap: 8px; width: 100%; padding: 3px 6px; background: transparent; border: 0; border-radius: 4px;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.hist-row span { flex: none; width: 22px; color: var(--muted); text-align: right; }
+.hist-row:hover { background: var(--panel-2); }
+.hist-row.cur { background: #3a2c10; color: #ffd08a; }
+.hist-row.future { opacity: .5; }

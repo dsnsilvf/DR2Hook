@@ -14,7 +14,7 @@ const cv = {
   expanded: new Set(), hidden: new Set(), hiddenSlices: new Set(),
   lod: "LOD0", solo: false, wire: false, flat: false, flip: false, variant: "tarmac", glass: true,
   yaw: 0.7, pitch: 0.3, dist: 5, target: [0, 0.5, 0], drag: null,
-  tool: "orbit", gz: null, gzHover: -1, edited: new Set(),   // ferramenta: orbit | move | rotate
+  tool: "orbit", gz: null, gzHover: -1, edited: new Set(), hist: [], histPos: 0, histOpen: false,   // ferramenta: orbit | move | rotate
   gl: null, program: null, grid: null, loc: null, draw: [], dirty: true, gen: 0, status: "",
 };
 const CAR_ACCENT = [1, 0.6, 0.15];
@@ -271,7 +271,7 @@ function openCar(id) {
   cv.loadedId = id;
   cv.row = row;
   cv.data = null;
-  cv.edited.clear(); cv.gz = null;
+  cv.edited.clear(); cv.gz = null; cv.hist = []; cv.histPos = 0;
   cv.selected = null; cv.hidden.clear(); cv.hiddenSlices.clear(); cv.expanded.clear(); cv.solo = false;
   cv.matTex.clear(); cv.matBlend.clear();
   cv.status = t("car.loading");
@@ -470,12 +470,12 @@ function carSelect(id) {
   carSyncBar(); carStatus();
 }
 function carToggleHidden(uid) {
-  if (cv.hidden.has(uid)) cv.hidden.delete(uid); else cv.hidden.add(uid);
-  cv.dirty = true; renderList();
+  const n = cv.nodes.get(uid), hide = !cv.hidden.has(uid);
+  carViewEdit(`${t(hide ? "car.hist.hide" : "car.hist.show")} ${n ? n.id : uid}`, () => { if (hide) cv.hidden.add(uid); else cv.hidden.delete(uid); });
 }
 function carToggleSliceHidden(key) {
-  if (cv.hiddenSlices.has(key)) cv.hiddenSlices.delete(key); else cv.hiddenSlices.add(key);
-  cv.dirty = true; renderList();
+  const hide = !cv.hiddenSlices.has(key);
+  carViewEdit(`${t(hide ? "car.hist.hide" : "car.hist.show")} ${key}`, () => { if (hide) cv.hiddenSlices.add(key); else cv.hiddenSlices.delete(key); });
 }
 
 // ------------------------------------------------------------ materiais e texturas
@@ -820,10 +820,73 @@ function carApplyDelta(n, D) {
   cv.dirty = true;
 }
 function carRestoreEdits() {
-  for (const x of cv.edited) { x.world = x._w0; x.local = x._l0; x._m = new Float32Array(x.world); delete x._w0; delete x._l0; }
+  const nodes = [...cv.edited], before = carSnapList(nodes);
+  for (const x of nodes) { x.world = x._w0; x.local = x._l0; x._m = new Float32Array(x.world); delete x._w0; delete x._l0; }
   cv.edited.clear();
   cv.dirty = true;
   carInspect();
+  const after = carSnapList(nodes);
+  carCommit(t("car.hist.restore"), () => carSetNodes(before), () => carSetNodes(after));
+}
+
+// ------------------------------------------------------------ histórico (desfazer / refazer)
+// Cada entrada guarda o que desfaz e o que refaz; os estados são cópias de referências (world/local são trocados, não mutados).
+const CAR_HIST_MAX = 200;
+function carSnapList(nodes) { return nodes.map((x) => ({ x, world: x.world, local: x.local, w0: x._w0, l0: x._l0 })); }
+function carSnapBranch(root) {
+  const list = [];
+  const visit = (x) => { list.push(x); x.children.forEach(visit); };
+  visit(root);
+  return carSnapList(list);
+}
+function carSetNodes(snap) {
+  for (const e of snap) {
+    const x = e.x;
+    x.world = e.world; x.local = e.local; x._m = new Float32Array(e.world);
+    if (e.w0) { x._w0 = e.w0; x._l0 = e.l0; cv.edited.add(x); } else { delete x._w0; delete x._l0; cv.edited.delete(x); }
+  }
+  cv.dirty = true;
+  carInspect();
+}
+const carSnapView = () => ({ h: new Set(cv.hidden), s: new Set(cv.hiddenSlices), solo: cv.solo });
+function carSetView(v) {
+  cv.hidden = new Set(v.h); cv.hiddenSlices = new Set(v.s); cv.solo = v.solo;
+  cv.dirty = true;
+  renderList();
+}
+const carSameView = (a, b) => a.solo === b.solo && a.h.size === b.h.size && a.s.size === b.s.size && [...a.h].every((k) => b.h.has(k)) && [...a.s].every((k) => b.s.has(k));
+function carViewEdit(label, fn) {
+  const before = carSnapView();
+  fn();
+  const after = carSnapView();
+  cv.dirty = true; renderList();
+  if (!carSameView(before, after)) carCommit(label, () => carSetView(before), () => carSetView(after));
+}
+function carCommit(label, undo, redo) {
+  cv.hist.length = cv.histPos;
+  cv.hist.push({ label, undo, redo });
+  if (cv.hist.length > CAR_HIST_MAX) cv.hist.shift();
+  cv.histPos = cv.hist.length;
+  carHistChanged();
+}
+function carHistChanged() { carSyncBar(); carHistRender(); }
+function carHistGo(pos) {
+  pos = Math.max(0, Math.min(cv.hist.length, pos));
+  while (cv.histPos > pos) cv.hist[--cv.histPos].undo();
+  while (cv.histPos < pos) cv.hist[cv.histPos++].redo();
+  carHistChanged();
+}
+const carUndo = () => { if (!cv.gz) carHistGo(cv.histPos - 1); };
+const carRedo = () => { if (!cv.gz) carHistGo(cv.histPos + 1); };
+function carHistRender() {
+  const el = document.getElementById("car-hist");
+  if (!el) return;
+  el.hidden = !cv.histOpen;
+  if (!cv.histOpen) return;
+  const row = (i, label) => `<button type="button" class="hist-row${i === cv.histPos ? " cur" : ""}${i > cv.histPos ? " future" : ""}" data-hist="${i}"><span>${i}</span>${esc(label)}</button>`;
+  el.innerHTML = `<div class="hist-h">${esc(t("car.hist"))}</div><div class="hist-list">${row(0, t("car.hist.start"))}${cv.hist.map((h, i) => row(i + 1, h.label)).join("")}</div>`;
+  const cur = el.querySelector(".cur");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
 }
 
 function carViewProj(canvas) {
@@ -947,7 +1010,7 @@ function carGzStart(axis, e, canvas) {
   const r = canvas.getBoundingClientRect();
   const mx = e.clientX - r.left, my = e.clientY - r.top;
   const c = carProject(g.vp, g.o, g.w, g.h);
-  cv.gz = { axis, mx, my, ang: Math.atan2(my - c[1], mx - c[0]) };
+  cv.gz = { axis, mx, my, ang: Math.atan2(my - c[1], mx - c[0]), node: g.n, before: carSnapBranch(g.n), moved: false, tool: cv.tool };
 }
 function carGzMove(e, canvas) {
   const gz = cv.gz, g = carGizmoFrame(canvas);
@@ -962,6 +1025,7 @@ function carGzMove(e, canvas) {
     if (l2 > 4) {
       const t = ((mx - gz.mx) * sx + (my - gz.my) * sy) / l2;
       carApplyDelta(g.n, carTranslateM([a[0] * t, a[1] * t, a[2] * t]));
+      gz.moved = true;
     }
   } else {
     const ang = Math.atan2(my - c[1], mx - c[0]);
@@ -971,14 +1035,19 @@ function carGzMove(e, canvas) {
     const th = toward ? -da : da;
     carApplyDelta(g.n, mat4Mul(carTranslateM(g.o), mat4Mul(carRotateM(a, th), carTranslateM([-g.o[0], -g.o[1], -g.o[2]]))));
     gz.ang = ang;
+    gz.moved = true;
   }
   gz.mx = mx; gz.my = my;
   carStatusEdit(g.n);
 }
 function carGzEnd() {
+  const gz = cv.gz;
   cv.gz = null;
   carInspect();
-  carSyncBar();
+  if (gz && gz.moved) {
+    const before = gz.before, after = carSnapBranch(gz.node);
+    carCommit(`${t(gz.tool === "move" ? "car.hist.move" : "car.hist.rotate")} ${gz.node.id}`, () => carSetNodes(before), () => carSetNodes(after));
+  } else carSyncBar();
 }
 function carStatusEdit(n) {
   const el = document.getElementById("car-note");
@@ -1129,7 +1198,10 @@ const CAR_ICONS = {
   orbit: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/>',
   move: '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
   rotate: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/><circle cx="12" cy="12" r="1.5"/>',
-  restore: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  restore: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/><path d="M9 12h6"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+  hist: '<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
   expand: '<path d="M6 9l6 6 6-6"/>',
   collapse: '<path d="M6 15l6-6 6 6"/>',
 };
@@ -1144,11 +1216,14 @@ const CAR_ACTS = {
   orbit: { key: "car.tool.orbit", run: () => { cv.tool = "orbit"; cv.gzHover = -1; }, on: () => cv.tool === "orbit" },
   move: { key: "car.tool.move", run: () => { cv.tool = "move"; }, on: () => cv.tool === "move" },
   rotate: { key: "car.tool.rotate", run: () => { cv.tool = "rotate"; }, on: () => cv.tool === "rotate" },
+  undo: { key: "car.undo", run: carUndo, avail: () => cv.histPos > 0 },
+  redo: { key: "car.redo", run: carRedo, avail: () => cv.histPos < cv.hist.length },
+  hist: { key: "car.hist", toggle: () => { cv.histOpen = !cv.histOpen; carHistRender(); }, on: () => cv.histOpen },
   restore: { key: "car.tool.restore", run: carRestoreEdits, avail: () => cv.edited.size > 0 },
   reset: { key: "car.reset", run: carResetCamera },
   focus: { key: "car.focus", run: () => carFrame(carSelNode()), need: true },
-  solo: { key: "car.solo", run: () => { cv.solo = !cv.solo; cv.dirty = true; }, on: () => cv.solo, need: true },
-  show: { key: "car.showall", run: () => { cv.hidden.clear(); cv.hiddenSlices.clear(); cv.solo = false; cv.dirty = true; renderList(); } },
+  solo: { key: "car.solo", run: () => carViewEdit(t("car.hist.solo"), () => { cv.solo = !cv.solo; }), on: () => cv.solo, need: true },
+  show: { key: "car.showall", run: () => carViewEdit(t("car.hist.showall"), () => { cv.hidden.clear(); cv.hiddenSlices.clear(); cv.solo = false; }) },
 };
 const carBtn = (name) => `<button type="button" class="tb-btn" data-car="${name}" title="${esc(t(CAR_ACTS[name].key))}" aria-label="${esc(t(CAR_ACTS[name].key))}">${carIco(name)}</button>`;
 
@@ -1159,6 +1234,9 @@ function carSyncBar() {
     if (a.need) b.disabled = !cv.selected;
     if (a.avail) b.disabled = !a.avail();
   });
+  const hu = cv.hist[cv.histPos - 1], hr = cv.hist[cv.histPos];
+  const setTitle = (name, base, h) => document.querySelectorAll(`[data-car="${name}"]`).forEach((b) => { b.title = h ? `${t(base)}: ${h.label}` : t(base); });
+  setTitle("undo", "car.undo", hu); setTitle("redo", "car.redo", hr);
   const lod = document.getElementById("car-lod");
   if (lod && cv.data) {
     lod.innerHTML = [...cv.data.lods.map((l) => l.name), "ALL"].map((n) => `<option value="${esc(n)}"${n === cv.lod ? " selected" : ""}>${esc(n === "ALL" ? t("mdl.all") : n)}</option>`).join("");
@@ -1226,7 +1304,9 @@ function ensureCarStage() {
         <option value="snow">${esc(t("mdl.snow"))}</option><option value="all">${esc(t("mdl.all"))}</option>
       </select>
       <span class="tb-sep"></span>
-      ${["orbit", "move", "rotate", "restore"].map(carBtn).join("")}
+      ${["orbit", "move", "rotate"].map(carBtn).join("")}
+      <span class="tb-sep"></span>
+      ${["undo", "redo", "hist", "restore"].map(carBtn).join("")}
       <span class="tb-sep"></span>
       ${["wire", "mats", "glass", "flip"].map(carBtn).join("")}
       <span class="tb-sep"></span>
@@ -1241,6 +1321,7 @@ function ensureCarStage() {
         <div class="vp-tools" role="toolbar" aria-label="${esc(t("car.tool.view"))}">
           ${["reset", "focus", "solo", "show"].map(carBtn).join("")}<span class="tb-sep"></span>${["wire", "mats"].map(carBtn).join("")}
         </div>
+        <div class="car-hist" id="car-hist" hidden></div>
       </div>
       ${rz("car-rz2")}
     </div>
@@ -1255,6 +1336,8 @@ function ensureCarStage() {
   });
   on("car-surface", "change", (e) => { cv.variant = e.target.value; cv.dirty = true; });
   ws.addEventListener("click", (e) => {
+    const hb = e.target.closest("[data-hist]");
+    if (hb) { carHistGo(Number(hb.dataset.hist)); return; }
     const pane = e.target.closest("[data-pane]");
     if (pane) { ws.classList.toggle(pane.dataset.pane === "tree" ? "tree-hidden" : "insp-hidden"); carSyncBar(); return; }
     const b = e.target.closest("[data-car]");
@@ -1486,6 +1569,12 @@ MODES.cars = {
 document.getElementById("list").addEventListener("click", (e) => { if (state.mode === "cars") carListClick(e); }, true);
 document.addEventListener("keydown", (e) => {
   if (state.mode !== "cars" || /INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || "")) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === "z") { e.preventDefault(); if (e.shiftKey) carRedo(); else carUndo(); }
+    else if (k === "y") { e.preventDefault(); carRedo(); }
+    return;
+  }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tool = { q: "orbit", w: "move", e: "rotate" }[e.key.toLowerCase()];
   if (tool) { CAR_ACTS[tool].run(); carSyncBar(); }
