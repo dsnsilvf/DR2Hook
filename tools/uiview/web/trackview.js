@@ -6,7 +6,7 @@ const tv = {
   terrain: [], texs: new Map(), types: new Map(), typeList: [], inst: null, route: null, lines: [], ext: null, editRev: 0, scratch: new Float32Array(12 * 4096), drawDist: 700, vis: null, visKey: "",
   sel: -1, showTerrain: true, showObjects: true, showTrees: true, showDist: false, showGates: true, showAi: true, wire: false,
   yaw: 0.8, pitch: 0.6, dist: 400, target: [0, 1430, -430], drag: null, keys: new Set(),
-  dirty: true, status: "", busy: false,
+  dirty: true, status: "", busy: false, tool: "orbit", cache: new Map(),
 };
 
 function tvLog(...a) { console.info("[track]", ...a); }
@@ -159,7 +159,7 @@ function tvParseInst(buf) {
   const type = new Uint16Array(buf, o, n); o += n * 2; o = (o + 3) & ~3;
   const idnum = new Uint32Array(buf, o, n); o += n * 4;
   const m = new Float32Array(buf, o, n * 12);
-  return { n, type, idnum, m, hidden: new Uint8Array(n) };
+  return { n, type, idnum, m, m0: new Float32Array(m), hidden: new Uint8Array(n), hist: [], histPos: 0 };
 }
 
 async function tvOpen(id) {
@@ -170,7 +170,7 @@ async function tvOpen(id) {
     const [data, objs] = await Promise.all([tvFetch(base + "track.json", "json"), tvFetch(base + "objects.bin")]);
     if (gen !== tv.gen) return;
     tvFree();
-    tv.data = data; tv.loadedId = id; tv.terrainFile = null;
+    tv.data = data; tv.loadedId = id; tv.terrainFile = null; tv.cache.clear();
     await tvLoadTerrain(data.routes[0].name, gen);
     const lib = tvUpload(tvParse(objs), [0.8, 0.75, 0.7]);
     tv.typeList = data.type_order.map((name, n) => {
@@ -197,7 +197,7 @@ async function tvOpen(id) {
     tv.status = t("trk.noload") + " " + String((err && err.message) || err);
   } finally {
     tv.busy = false;
-    tvRouteSelect(); tvStatus(); tvInspect();
+    tvRouteSelect(); tvStatus(); tvInspect(); tvEdited();
   }
 }
 
@@ -216,10 +216,15 @@ async function tvLoadTerrain(route, gen) {
 
 async function tvLoadRoute(name, gen) {
   await tvLoadTerrain(name, gen);
-  const buf = await tvFetch(`tracks/${encodeURIComponent(tv.id)}/inst_${name}.bin`);
-  if (gen !== undefined && gen !== tv.gen) return;
+  let inst = tv.cache.get(name);
+  if (!inst) {
+    const buf = await tvFetch(`tracks/${encodeURIComponent(tv.id)}/inst_${name}.bin`);
+    if (gen !== undefined && gen !== tv.gen) return;
+    inst = tvParseInst(buf);
+    tv.cache.set(name, inst);
+  }
   tv.route = name;
-  tv.inst = tvParseInst(buf);
+  tv.inst = inst;
   tv.sel = -1;
   tv.visKey = "";
   tvGroups();
@@ -421,13 +426,46 @@ function tvGL() {
   el.addEventListener("contextmenu", (e) => e.preventDefault());
   el.addEventListener("pointerdown", (e) => {
     el.setPointerCapture(e.pointerId);
-    tv.drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey, moved: 0, button: e.button };
+    const pan = e.button === 2 || e.button === 1 || e.shiftKey && tv.tool === "orbit";
+    tv.drag = { x: e.clientX, y: e.clientY, pan, moved: 0, button: e.button, mode: "orbit" };
+    if (e.button === 0 && !pan && tv.tool !== "orbit" && tv.inst) {
+      const hit = tvPickIndex(e, canvas);
+      if (hit >= 0) {
+        tvSelect(hit);
+        const o = hit * 12, m = tv.inst.m;
+        tv.drag.mode = tv.tool;
+        tv.drag.i = hit;
+        tv.drag.before = tvSnap([hit]);
+        tv.drag.base = m.slice(o, o + 12);
+        tv.drag.start = tvGround(e, canvas, m[o + 10]);
+        tv.drag.sy = e.clientY;
+        tv.drag.ex = e.clientX;
+      }
+    }
   });
   el.addEventListener("pointermove", (e) => {
     const d = tv.drag;
     if (!d) return;
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
-    d.x = e.clientX; d.y = e.clientY; d.moved += Math.abs(dx) + Math.abs(dy);
+    d.moved += Math.abs(dx) + Math.abs(dy);
+    if (d.mode === "move" || d.mode === "rotate") {
+      const o = d.i * 12, m = tv.inst.m;
+      if (d.mode === "move") {
+        if (e.shiftKey) {
+          m[o + 10] = d.base[10] - (e.clientY - d.sy) * Math.max(0.02, tv.dist * 0.002);
+        } else if (d.start) {
+          const p = tvGround(e, canvas, d.base[10]);
+          if (p) { m[o + 9] = d.base[9] + p[0] - d.start[0]; m[o + 11] = d.base[11] + p[2] - d.start[2]; m[o + 10] = d.base[10]; }
+        }
+      } else {
+        const full = new Float32Array(tv.inst.m.length); full.set(d.base, o);
+        tvSpin(m, full, o, (e.clientX - d.ex) * 0.01);
+      }
+      tv.visKey = "";
+      tvStatus();
+      return;
+    }
+    d.x = e.clientX; d.y = e.clientY;
     if (d.pan) {
       const k = tv.dist * 0.0016;
       const rx = Math.cos(tv.yaw), rz = -Math.sin(tv.yaw);
@@ -440,7 +478,13 @@ function tvGL() {
   });
   el.addEventListener("pointerup", (e) => {
     const d = tv.drag; tv.drag = null;
-    if (d && d.moved < 5 && d.button === 0) tvPick(e, canvas);
+    if (!d) return;
+    if (d.mode === "move" || d.mode === "rotate") {
+      tvCommit(d.mode === "move" ? t("trk.hist.move") : t("trk.hist.rotate"), d.before, tvSnap([d.i]));
+      tvEdited();
+      return;
+    }
+    if (d.moved < 5 && d.button === 0) tvPick(e, canvas);
   });
   el.addEventListener("wheel", (e) => { e.preventDefault(); tv.dist = Math.max(2, Math.min(15000, tv.dist * Math.exp(e.deltaY * 0.0012))); }, { passive: false });
   return gl;
@@ -472,6 +516,15 @@ function tvRay(e, canvas) {
   const dl = Math.hypot(...d);
   return { o: cam.eye, d: d.map((v) => v / dl) };
 }
+// ponto do raio do mouse no plano horizontal y = h (null se o raio não desce até ele)
+function tvGround(e, canvas, h) {
+  const ray = tvRay(e, canvas);
+  if (Math.abs(ray.d[1]) < 1e-6) return null;
+  const t = (h - ray.o[1]) / ray.d[1];
+  if (t < 0) return null;
+  return [ray.o[0] + ray.d[0] * t, h, ray.o[2] + ray.d[2] * t];
+}
+
 function tvInvAffine(m) {
   const a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5], g = m[6], h = m[7], i = m[8];
   const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g) || 1;
@@ -479,8 +532,9 @@ function tvInvAffine(m) {
   // linhas de m = base; o inverso do bloco 3×3 (vetor-linha) é a transposta do inverso usual
   return r;
 }
-function tvPick(e, canvas) {
-  if (!tv.inst) return;
+function tvPick(e, canvas) { tvSelect(tvPickIndex(e, canvas)); }
+function tvPickIndex(e, canvas) {
+  if (!tv.inst) return -1;
   const ray = tvRay(e, canvas), inst = tv.inst, R2 = tv.drawDist * tv.drawDist;
   let best = -1, bt = Infinity;
   for (const ty of tv.typeList) {
@@ -505,7 +559,105 @@ function tvPick(e, canvas) {
       if (ok && t0 < bt) { bt = t0; best = i; }
     }
   }
-  tvSelect(best);
+  return best;
+}
+
+// ------------------------------------------------------------ edição e histórico
+
+const TV_HIST_MAX = 300;
+const tvSnap = (list) => list.map((i) => ({ i, m: tv.inst.m.slice(i * 12, i * 12 + 12), h: tv.inst.hidden[i] }));
+function tvApplySnap(snap) {
+  for (const s of snap) { tv.inst.m.set(s.m, s.i * 12); tv.inst.hidden[s.i] = s.h; }
+  tv.visKey = "";
+}
+function tvCommit(label, before, after) {
+  const inst = tv.inst;
+  if (JSON.stringify(before.map((b) => [...b.m, b.h])) === JSON.stringify(after.map((b) => [...b.m, b.h]))) return;
+  inst.hist.length = inst.histPos;
+  inst.hist.push({ label, before, after });
+  if (inst.hist.length > TV_HIST_MAX) inst.hist.shift();
+  inst.histPos = inst.hist.length;
+  tvEdited();
+}
+function tvHistGo(pos) {
+  const inst = tv.inst;
+  pos = Math.max(0, Math.min(inst.hist.length, pos));
+  while (inst.histPos > pos) tvApplySnap(inst.hist[--inst.histPos].before);
+  while (inst.histPos < pos) tvApplySnap(inst.hist[inst.histPos++].after);
+  tvEdited();
+}
+const tvUndo = () => { if (!tv.drag) tvHistGo(tv.inst.histPos - 1); };
+const tvRedo = () => { if (!tv.drag) tvHistGo(tv.inst.histPos + 1); };
+
+// instâncias que diferem do arquivo original (movidas, giradas ou apagadas), de todas as rotas abertas
+function tvEditList() {
+  const out = [];
+  for (const [route, inst] of tv.cache) {
+    for (let i = 0; i < inst.n; i++) {
+      const o = i * 12;
+      let moved = false;
+      for (let k = 0; k < 12 && !moved; k++) if (inst.m[o + k] !== inst.m0[o + k]) moved = true;
+      if (!moved && !inst.hidden[i]) continue;
+      const name = tv.data.type_order[inst.type[i]];
+      out.push({ route, kind: name[0], type: name.slice(2), index: inst.idnum[i], deleted: !!inst.hidden[i], m: [...inst.m.slice(o, o + 12)], m0: [...inst.m0.slice(o, o + 12)] });
+    }
+  }
+  return out;
+}
+function tvEdited() {
+  tvStatus(); tvInspect();
+  const u = document.getElementById("trk-undo"), r = document.getElementById("trk-redo"), x = document.getElementById("trk-export");
+  if (u) u.disabled = !tv.inst || tv.inst.histPos <= 0;
+  if (r) r.disabled = !tv.inst || tv.inst.histPos >= tv.inst.hist.length;
+  if (x) x.disabled = !tv.cache.size || [...tv.cache.values()].every((i) => !i.histPos && !i.hist.length);
+}
+function tvExport() {
+  const edits = tvEditList();
+  const blob = new Blob([JSON.stringify({ format: "dr2-track-edits", version: 1, track: tv.id, src: (TRACKS.find((r) => r.id === tv.id) || {}).src, edits }, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${tv.id}.edits.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// roda a matriz 3×3 em torno do eixo Y (vetor-linha: v' = v · R)
+function tvSpin(m, base, o, th) {
+  const c = Math.cos(th), s = Math.sin(th);
+  for (let r = 0; r < 3; r++) {
+    const x = base[o + r * 3], z = base[o + r * 3 + 2];
+    m[o + r * 3] = x * c + z * s;
+    m[o + r * 3 + 2] = -x * s + z * c;
+  }
+}
+
+function tvDeleteSel() {
+  if (tv.sel < 0) return;
+  const before = tvSnap([tv.sel]);
+  tv.inst.hidden[tv.sel] = 1; tv.visKey = "";
+  const after = tvSnap([tv.sel]);
+  tvCommit(t("trk.hist.delete"), before, after);
+  tv.sel = -1;
+  tvEdited();
+}
+function tvSetPos(axis, value) {
+  if (tv.sel < 0 || !Number.isFinite(value)) return;
+  const before = tvSnap([tv.sel]);
+  tv.inst.m[tv.sel * 12 + 9 + axis] = value; tv.visKey = "";
+  tvCommit(t("trk.hist.move"), before, tvSnap([tv.sel]));
+}
+function tvTurnSel(deg) {
+  if (tv.sel < 0 || !Number.isFinite(deg)) return;
+  const before = tvSnap([tv.sel]);
+  tvSpin(tv.inst.m, tv.inst.m.slice(), tv.sel * 12, deg * Math.PI / 180);
+  tv.visKey = "";
+  tvCommit(t("trk.hist.rotate"), before, tvSnap([tv.sel]));
+}
+function tvRestoreSel() {
+  if (tv.sel < 0) return;
+  const before = tvSnap([tv.sel]);
+  tv.inst.m.set(tv.inst.m0.subarray(tv.sel * 12, tv.sel * 12 + 12), tv.sel * 12); tv.inst.hidden[tv.sel] = 0; tv.visKey = "";
+  tvCommit(t("trk.hist.restore"), before, tvSnap([tv.sel]));
 }
 
 function tvSelect(n) {
@@ -550,14 +702,37 @@ function tvInspect() {
     </div>
     ${f ? `<h3>${esc(t("trk.selected"))}</h3><div class="kv">
       ${kv("id", f.id)}${kv(t("trk.type"), tvName(f.ty.name))}${kv(t("trk.kind"), t("trk.kind." + f.ty.kind))}
-      ${kv(t("trk.pos"), f.pos.map((v) => v.toFixed(2)).join(", "))}
       ${kv(t("trk.meshes"), f.ty.empty ? t("trk.nomesh") : f.ty.meshes.length)}
-    </div>` : `<p class="muted">${esc(t("trk.hint"))}</p>`}`;
+    </div>
+    <div class="trk-edit">
+      ${["x", "y", "z"].map((a, k) => `<label>${a.toUpperCase()}<input type="number" step="0.1" data-trk-pos="${k}" value="${f.pos[k].toFixed(2)}"></label>`).join("")}
+    </div>
+    <div class="trk-edit">
+      <button type="button" data-trk-turn="-15">-15°</button><button type="button" data-trk-turn="15">+15°</button>
+      <button type="button" data-trk-turn="-90">-90°</button><button type="button" data-trk-turn="90">+90°</button>
+      <button type="button" data-trk-act="delete">${esc(t("trk.delete"))}</button>
+      <button type="button" data-trk-act="restore">${esc(t("trk.restore"))}</button>
+    </div>
+    ${tv.inst.hidden[tv.sel] ? "" : `<p class="muted small">${esc(t("trk.collision"))}</p>`}` : `<p class="muted">${esc(t("trk.hint"))}</p>`}
+    ${tvDirtyHtml()}`;
+}
+
+function tvDirtyHtml() {
+  if (!tv.cache.size) return "";
+  const n = tvEditList().length;
+  return n ? `<h3>${esc(t("trk.edits"))}</h3><p class="mono">${n} ${esc(t("trk.edited"))}</p>` : "";
 }
 
 const TV_ACTS = [
   ["showTerrain", "trk.show.terrain"], ["showObjects", "trk.show.objects"], ["showTrees", "trk.show.trees"], ["showDist", "trk.show.dist"], ["showGates", "trk.show.gates"], ["showAi", "trk.show.ai"],
 ];
+
+function tvTool(k) {
+  tv.tool = k;
+  document.querySelectorAll("[data-trk-tool]").forEach((b) => b.classList.toggle("on", b.dataset.trkTool === k));
+  const c = document.getElementById("trk-view");
+  if (c) c.style.cursor = k === "orbit" ? "" : k === "move" ? "move" : "ew-resize";
+}
 
 function tvRouteSelect() {
   const el = document.getElementById("trk-route");
@@ -578,13 +753,22 @@ function ensureTrackStage() {
       <label class="trk-opt" title="${esc(t("trk.dist"))}">${esc(t("trk.dist"))} <input type="range" id="trk-dd" min="100" max="4000" step="50" value="${tv.drawDist}"> <span id="trk-ddv">${tv.drawDist} m</span></label>
       ${TV_ACTS.map(([k, key]) => `<label class="trk-opt"><input type="checkbox" data-trk="${k}" ${tv[k] ? "checked" : ""}> ${esc(t(key))}</label>`).join("")}
       <button type="button" class="tb-btn" id="trk-frame" title="${esc(t("trk.frame"))}">${esc(t("trk.frame"))}</button>
+      <span class="tb-sep"></span>
+      ${[["orbit", "trk.tool.orbit"], ["move", "trk.tool.move"], ["rotate", "trk.tool.rotate"]].map(([k, key]) => `<button type="button" class="tb-btn trk-tool${tv.tool === k ? " on" : ""}" data-trk-tool="${k}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${carIco(k)}</button>`).join("")}
+      <button type="button" class="tb-btn" id="trk-undo" title="${esc(t("car.undo"))}" aria-label="${esc(t("car.undo"))}" disabled>${carIco("undo")}</button>
+      <button type="button" class="tb-btn" id="trk-redo" title="${esc(t("car.redo"))}" aria-label="${esc(t("car.redo"))}" disabled>${carIco("redo")}</button>
+      <button type="button" class="tb-btn" id="trk-export" title="${esc(t("trk.export"))}" disabled>${esc(t("trk.export"))}</button>
     </div>
     <div class="trk-vp"><canvas class="gl" id="trk-view"></canvas></div>
     <div class="car-sb"><span id="trk-note"></span><span id="trk-sel"></span></div>
   </div>`;
   document.getElementById("trk-open").addEventListener("change", (e) => { tv.id = e.target.value; history.replaceState(null, "", "#p=" + encodeURIComponent(tv.id)); tvOpen(tv.id); });
-  document.getElementById("trk-route").addEventListener("change", async (e) => { tv.busy = true; await tvLoadRoute(e.target.value); tv.busy = false; tvFrameRoute(); tvStatus(); tvInspect(); });
+  document.getElementById("trk-route").addEventListener("change", async (e) => { tv.busy = true; await tvLoadRoute(e.target.value); tv.busy = false; tvFrameRoute(); tvStatus(); tvInspect(); tvEdited(); });
   document.getElementById("trk-dd").addEventListener("input", (e) => { tv.drawDist = Number(e.target.value); document.getElementById("trk-ddv").textContent = tv.drawDist + " m"; });
+  contentEl.querySelectorAll("[data-trk-tool]").forEach((b) => b.addEventListener("click", () => tvTool(b.dataset.trkTool)));
+  document.getElementById("trk-undo").addEventListener("click", tvUndo);
+  document.getElementById("trk-redo").addEventListener("click", tvRedo);
+  document.getElementById("trk-export").addEventListener("click", tvExport);
   document.getElementById("trk-frame").addEventListener("click", () => { if (tv.data) tvFrameRoute(); });
   contentEl.querySelectorAll("[data-trk]").forEach((c) => c.addEventListener("change", () => { tv[c.dataset.trk] = c.checked; }));
   try { tvGL(); } catch (err) { document.getElementById("trk-note").textContent = String((err && err.message) || err); }
@@ -614,10 +798,33 @@ MODES.tracks = {
 document.addEventListener("keydown", (e) => {
   if (state.mode !== "tracks" || /INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || "")) return;
   const k = e.key.toLowerCase();
-  if (TV_WASD[k] || k === "shift") tv.keys.add(k);
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    if (k === "z") { e.preventDefault(); if (e.shiftKey) tvRedo(); else tvUndo(); }
+    else if (k === "y") { e.preventDefault(); tvRedo(); }
+    return;
+  }
+  if (k === "1") tvTool("orbit");
+  else if (k === "2") tvTool("move");
+  else if (k === "3") tvTool("rotate");
+  else if (k === "delete") tvDeleteSel();
+  else if (TV_WASD[k] || k === "shift") tv.keys.add(k);
   else if (k === "f" && tv.sel >= 0) tvFrameInst(tv.sel);
-  else if (k === "h" && tv.sel >= 0) { tv.inst.hidden[tv.sel] = 1; tv.visKey = ""; tvSelect(-1); }
+  else if (k === "h" && tv.sel >= 0) { tvDeleteSel(); }
   else if (k === "escape") tvSelect(-1);
 });
 document.addEventListener("keyup", (e) => tv.keys.delete(e.key.toLowerCase()));
 window.addEventListener("blur", () => tv.keys.clear());
+
+// painel de edição do objeto selecionado
+inspectEl.addEventListener("click", (e) => {
+  if (state.mode !== "tracks") return;
+  const turn = e.target.closest("[data-trk-turn]");
+  if (turn) { tvTurnSel(Number(turn.dataset.trkTurn)); return; }
+  const act = e.target.closest("[data-trk-act]");
+  if (act) { if (act.dataset.trkAct === "delete") tvDeleteSel(); else tvRestoreSel(); }
+});
+inspectEl.addEventListener("change", (e) => {
+  if (state.mode !== "tracks") return;
+  const pos = e.target.closest("[data-trk-pos]");
+  if (pos) tvSetPos(Number(pos.dataset.trkPos), Number(e.target.value));
+});

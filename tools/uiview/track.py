@@ -145,7 +145,7 @@ def pack_instances(items: list[dict[str, Any]], type_index: dict[str, int]) -> b
 
         char[4] "DR2I", uint32 n
         uint16[n] índice do tipo (preenchido até múltiplo de 4)
-        uint32[n] identificador (índice em `ens_ids` para tipos `e:`, número do registro nos demais)
+        uint32[n] identificador: posição do registro no arquivo de origem (`objects.ens`, `ornaments.bin` ou `trees.bin`)
         float32[n * 12] linhas 0..2 da matriz 3×3 (com escala) e a posição
     """
     n = len(items)
@@ -453,12 +453,12 @@ def export_track(game: str, rel: str, out: str, log=print) -> dict[str, Any]:
             orn_refs = references(arc.read(base + "ornaments_references.xml"))
         except (KeyError, FileNotFoundError, ET.ParseError, struct.error):
             orn, orn_refs = [], {}
-        for r in orn:
+        for n, r in enumerate(orn):
             fn = orn_refs.get(r["hash"], f"#{r['hash']}")
             key = "o:" + fn
             plain = fn.split("~")[0]
             resolve(key, [fn + " Root", fn + "_physics", fn, plain + " Root", plain + "_physics", plain], nicks, objs.root, idx, "o|")
-            route_inst[name].append({"idnum": r["id"], "type": key, "m": r["m"]})
+            route_inst[name].append({"idnum": n, "type": key, "m": r["m"]})
         try:
             trees = trees_bin(arc.read(prefix + "trees.bin"))
         except (KeyError, FileNotFoundError, struct.error):
@@ -469,11 +469,11 @@ def export_track(game: str, rel: str, out: str, log=print) -> dict[str, Any]:
                 tree_lib = (tp, nick_index(tp.root), mesh._index(tp.root), references(arc.read(base + "trees_references.xml")))
                 material_tex.update({"t|" + k: v for k, v in shader_textures(tp.root).items()})
             tp, tnicks, tidx, tree_refs = tree_lib
-            for r in trees:
+            for n, r in enumerate(trees):
                 fn = tree_refs.get(r["hash"], f"#{r['hash']}")
                 key = "t:" + fn
                 resolve(key, [fn + "_x0", fn, fn + "_fo"], tnicks, tp.root, tidx, "t|")
-                route_inst[name].append({"idnum": r["id"], "type": key, "m": r["m"]})
+                route_inst[name].append({"idnum": n, "type": key, "m": r["m"]})
     with open(os.path.join(dest, "objects.bin"), "wb") as fh:
         fh.write(_pack_meshes(lib_meshes))
     terrain_files: dict[tuple[int, ...], str] = {}

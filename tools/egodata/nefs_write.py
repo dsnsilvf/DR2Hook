@@ -45,19 +45,25 @@ def encode_blocks(data: bytes, key: bytes, encrypted: bool) -> list[bytes]:
 
 def replace_file(arc: NefsArchive, path: str, data: bytes, out_path: str) -> dict[str, int]:
     """Grava em `out_path` uma cópia do pacote com `path` trocado por `data`."""
-    entry = arc._by_path[path]
-    if not entry.is_file or entry.id not in arc._items:
-        raise ValueError(f"{path} não é um arquivo com dados")
-    old_blocks = (entry.size + BLOCK_SIZE - 1) // BLOCK_SIZE
-    new_blocks = (len(data) + BLOCK_SIZE - 1) // BLOCK_SIZE
-    if new_blocks != old_blocks:
-        raise ValueError(f"{path}: {new_blocks} blocos contra {old_blocks} originais; o cabeçalho cresceria")
+    return replace_files(arc, {path: data}, out_path)[path]
+
+
+def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) -> dict[str, dict[str, int]]:
+    """Grava em `out_path` uma cópia do pacote com vários arquivos trocados, copiando o volume uma vez só."""
+    entries = {}
+    for path, data in changes.items():
+        entry = arc._by_path[path]
+        if not entry.is_file or entry.id not in arc._items:
+            raise ValueError(f"{path} não é um arquivo com dados")
+        old_blocks = (entry.size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        new_blocks = (len(data) + BLOCK_SIZE - 1) // BLOCK_SIZE
+        if new_blocks != old_blocks:
+            raise ValueError(f"{path}: {new_blocks} blocos contra {old_blocks} originais; o cabeçalho cresceria")
+        entries[path] = entry
 
     header = bytearray(arc.header)
     p1, _p6, p2, _p7, p3, p4, _p5, _p8 = struct.unpack_from("<8I", header, 0x84)
-    encrypted = _is_encrypted(arc, entry.id)
-    blocks = encode_blocks(data, arc.key, encrypted)
-
+    results: dict[str, dict[str, int]] = {}
     shutil.copyfile(arc.data_path, out_path)
     with open(out_path, "r+b") as fh:
         fh.seek(0, 2)
@@ -65,24 +71,31 @@ def replace_file(arc: NefsArchive, path: str, data: bytes, out_path: str) -> dic
         start += -start % 16
         fh.truncate(start)
         fh.seek(start)
-        ends, total = [], 0
-        for block in blocks:
-            fh.write(block)
-            total += len(block)
-            ends.append(total)
+        for path, data in changes.items():
+            entry = entries[path]
+            encrypted = _is_encrypted(arc, entry.id)
+            blocks = encode_blocks(data, arc.key, encrypted)
+            fh.write(b"\0" * (-fh.tell() % 16))
+            start = fh.tell()
+            ends, total = [], 0
+            for block in blocks:
+                fh.write(block)
+                total += len(block)
+                ends.append(total)
 
-        for i in range((p2 - p1) // 20):
-            if struct.unpack_from("<QIII", header, p1 + i * 20)[3] == entry.id:
-                _o, p2i, p4i, item_id = struct.unpack_from("<QIII", header, p1 + i * 20)
-                struct.pack_into("<QIII", header, p1 + i * 20, start, p2i, p4i, item_id)
-                break
-        else:
-            raise ValueError("item sem linha em P1")
-        struct.pack_into(f"<{len(ends)}I", header, p4 + p4i * 4, *ends)
-        for i in range((p3 - p2) // 20):
-            if struct.unpack_from("<5I", header, p2 + i * 20)[4] == entry.id:
-                struct.pack_into("<I", header, p2 + i * 20 + 12, len(data))
-                break
+            for i in range((p2 - p1) // 20):
+                if struct.unpack_from("<QIII", header, p1 + i * 20)[3] == entry.id:
+                    _o, p2i, p4i, item_id = struct.unpack_from("<QIII", header, p1 + i * 20)
+                    struct.pack_into("<QIII", header, p1 + i * 20, start, p2i, p4i, item_id)
+                    break
+            else:
+                raise ValueError("item sem linha em P1")
+            struct.pack_into(f"<{len(ends)}I", header, p4 + p4i * 4, *ends)
+            for i in range((p3 - p2) // 20):
+                if struct.unpack_from("<5I", header, p2 + i * 20)[4] == entry.id:
+                    struct.pack_into("<I", header, p2 + i * 20 + 12, len(data))
+                    break
+            results[path] = {"offset": start, "blocks": len(blocks), "bytes": total, "encrypted": int(encrypted)}
 
         plain_header = bytes(header)
         if arc.header[:4] == MAGIC and _intro_is_plain(arc.data_path):
@@ -93,7 +106,7 @@ def replace_file(arc: NefsArchive, path: str, data: bytes, out_path: str) -> dic
             stored = fh_intro(arc.data_path) + encrypt_ecb(rest + b"\0" * pad, arc.key)[: len(rest)]
         fh.seek(0)
         fh.write(stored)
-    return {"offset": start, "blocks": len(blocks), "bytes": total, "encrypted": int(encrypted)}
+    return results
 
 
 def _intro_is_plain(path: str) -> bool:
