@@ -101,9 +101,9 @@ Em ordem provável: (1) **Polônia** com LOD e streaming de blocos; (2) portar P
 
 | Etapa | Estado |
 | --- | --- |
-| 1 | não iniciada |
-| 2 | não iniciada |
-| 3 | não iniciada |
+| 1 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
+| 2 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
+| 3 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
 | 4 | não iniciada |
 | 5 | não iniciada |
 | 6 | não iniciada |
