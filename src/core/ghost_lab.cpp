@@ -737,6 +737,57 @@ void DetourSpawnVehicles(void *ctx) {
   LogStageEntries("depois do spawn");
 }
 
+// Diagnostico de crash: registra violacoes de acesso (e afins) com o RIP, o
+// endereco acessado e os retornos do jogo na pilha. Nao trata a excecao.
+void *g_crashHandler = nullptr;
+std::atomic<int> g_crashLogged{0};
+
+LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
+  const DWORD code = info->ExceptionRecord->ExceptionCode;
+  if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+      code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
+      code != EXCEPTION_PRIV_INSTRUCTION) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  if (g_crashLogged.fetch_add(1) >= 12) return EXCEPTION_CONTINUE_SEARCH;
+  const CONTEXT *c = info->ContextRecord;
+  const uintptr_t base = g_gameBase;
+  char buf[320];
+  std::snprintf(buf, sizeof(buf),
+                "GhostLab[crash]: excecao 0x%08lx rip=0x%llx (exe+0x%llx) acesso=0x%llx tipo=%llu thread=%lu",
+                static_cast<unsigned long>(code),
+                static_cast<unsigned long long>(c->Rip),
+                static_cast<unsigned long long>(c->Rip - base),
+                static_cast<unsigned long long>(info->ExceptionRecord->NumberParameters > 1 ? info->ExceptionRecord->ExceptionInformation[1] : 0),
+                static_cast<unsigned long long>(info->ExceptionRecord->NumberParameters > 0 ? info->ExceptionRecord->ExceptionInformation[0] : 0),
+                static_cast<unsigned long>(GetCurrentThreadId()));
+  Logger::Error(buf);
+  std::snprintf(buf, sizeof(buf),
+                "GhostLab[crash]: rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx rsp=%llx",
+                static_cast<unsigned long long>(c->Rax), static_cast<unsigned long long>(c->Rbx),
+                static_cast<unsigned long long>(c->Rcx), static_cast<unsigned long long>(c->Rdx),
+                static_cast<unsigned long long>(c->Rsi), static_cast<unsigned long long>(c->Rdi),
+                static_cast<unsigned long long>(c->R8), static_cast<unsigned long long>(c->R9),
+                static_cast<unsigned long long>(c->Rsp));
+  Logger::Error(buf);
+  const NT_TIB *tib = reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
+  const uintptr_t top = reinterpret_cast<uintptr_t>(tib->StackBase);
+  std::string chain = "GhostLab[crash]: pilha (retornos no exe):";
+  int found = 0;
+  for (uintptr_t sp = c->Rsp; sp + 8 <= top && sp < c->Rsp + 0x8000 && found < 24; sp += 8) {
+    const uintptr_t v = *reinterpret_cast<const uintptr_t *>(sp);
+    if (v < base + 0x1000 || v >= base + 0x1099000) continue;
+    const uint8_t *ret = reinterpret_cast<const uint8_t *>(v);
+    if (ret[-5] != 0xe8 && !(ret[-6] == 0xff && ret[-5] == 0x15) && ret[-2] != 0xff) continue;
+    char one[40];
+    std::snprintf(one, sizeof(one), " 0x%llx", static_cast<unsigned long long>(v));
+    chain += one;
+    ++found;
+  }
+  Logger::Error(chain);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
 bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
           void **original, void **target, const char *name) {
   void *fn = reinterpret_cast<void *>(g_gameBase + rva);
@@ -795,6 +846,10 @@ bool GhostLab::Install(uintptr_t gameBase) {
        reinterpret_cast<void *>(&DetourSpawnVehicles),
        reinterpret_cast<void **>(&g_originalSpawn), &g_spawnTarget,
        "SpawnStageVehicles");
+  if (g_crashHandler == nullptr) {
+    g_crashHandler = AddVectoredExceptionHandler(1, CrashLogger);
+    g_crashLogged.store(0);
+  }
   const bool sleep = Hook(
       kBodySleepRva, kBodySleepPrologue, sizeof(kBodySleepPrologue),
       reinterpret_cast<void *>(&DetourBodySleep),
@@ -818,6 +873,10 @@ void GhostLab::Shutdown() {
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
                        g_submitTarget, g_bodySleepTarget, g_spawnTarget}) {
     if (target != nullptr) MH_DisableHook(target);
+  }
+  if (g_crashHandler != nullptr) {
+    RemoveVectoredExceptionHandler(g_crashHandler);
+    g_crashHandler = nullptr;
   }
   for (int waited = 0; g_inFlight.load() > 0 && waited < 2000; ++waited) {
     Sleep(1);
