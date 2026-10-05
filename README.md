@@ -32,6 +32,8 @@ Long rally stages make corner repetition painful. Checkpoints capture pose and v
 | **F6** | Restore using the overlay’s selected mode (**Normal** or **With Momentum**). |
 | **F7** | Restore **With Momentum** (linear and angular velocity from the save). |
 | **F8** | Reload `dr2hook_core.dll` from disk. The game stays open; the in-memory C++ checkpoint is cleared and Lua restarts (`onInit` runs again). |
+| **F9** | Toggle the free camera on a stage. Mouse looks. WASD moves, Space/Q go up and down. Hold Ctrl to freeze keyboard movement; the mouse keeps looking. + and − (main row or numpad) raise and lower the keyboard speed. Shift multiplies that speed by 4. The game pause menu gives the cursor back and freezes the fly camera until it closes. Insert still opens the overlay and pauses the fly camera. |
+| **F11** | Insta crash: destroys the car on a stage (offline only) so the terminal-damage flow can be studied. Esc during the sequence opens the pause menu with Restart. See `docs/reverse_engineering/terminal_damage.md`. |
 
 The **Practice Mode** tab and the shipped mod `mods/practice_mode/` expose the same shortcuts. The overlay tab uses the C++ `SavestateManager`. The mod keeps its own Lua checkpoint via `Player.getState` / `Player.setState` and adds options under **Pause → DR2 Hook → Mods** (`Menu` API).
 

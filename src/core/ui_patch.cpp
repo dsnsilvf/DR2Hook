@@ -286,6 +286,69 @@ bool BuildHost(const Node &templateScreen, Node &out, std::string &error) {
   return true;
 }
 
+
+// Dano terminal (docs/reverse_engineering/terminal_damage.md): StateRace sai da
+// pilha e os estados terminais nao tem link `pause`. Cada um (cutscene de
+// inicio, freeze e cutscene de fim) ganha um `pause` para o menu de pausa
+// original da mesma arvore, o de maior prefixo de caminho em comum, o mesmo
+// alvo que StateOsdCountDown usa. Um menu filho da cutscene foi empilhado mas
+// nao desenhado (travou o jogo em 2026-10-03).
+constexpr const char *kTerminalStates[] = {"1461673396", "2859882945",
+                                           "1591963405"};
+constexpr const char *kPauseMenuState = "314506569";
+
+size_t CommonPrefix(const Path &a, const Path &b) {
+  size_t n = 0;
+  while (n < a.size() && n < b.size() && a[n] == b[n]) ++n;
+  return n;
+}
+
+size_t PatchTerminalPause(Node &root) {
+  struct Menu {
+    Path path;
+    std::string id;
+  };
+  std::vector<Menu> menus;
+  std::vector<Path> terminals;
+  Walk(root, [&](const Node &node, const Path &path) {
+    if (node.name != "node") return;
+    const std::string *state = node.Attribute("state");
+    const std::string *id = node.Attribute("id");
+    if (state == nullptr || id == nullptr) return;
+    if (std::find(std::begin(kTerminalStates), std::end(kTerminalStates), *state) !=
+        std::end(kTerminalStates)) {
+      for (const Node &child : node.children) {
+        if (child.name == "link" && AttributeIs(child, "id", "pause")) return;
+      }
+      terminals.push_back(path);
+    } else if (*state == kPauseMenuState) {
+      for (const Node &child : node.children) {
+        if (child.name == "link" && AttributeIs(child, "id", "restart_race")) {
+          menus.push_back({path, *id});
+          break;
+        }
+      }
+    }
+  });
+  size_t patched = 0;
+  for (const Path &path : terminals) {
+    const Menu *best = nullptr;
+    size_t bestLen = 0;
+    for (const Menu &menu : menus) {
+      const size_t len = CommonPrefix(path, menu.path);
+      if (best == nullptr || len > bestLen) {
+        best = &menu;
+        bestLen = len;
+      }
+    }
+    if (best == nullptr) continue;
+    At(root, path).children.push_back(
+        MakeNode("link", {{"id", "pause"}, {"target", best->id}}));
+    ++patched;
+  }
+  return patched;
+}
+
 } // namespace
 
 bool PatchStates(Node &root, std::string &error) {
@@ -420,6 +483,7 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
       parentNode.children.push_back(std::move(modsHub));
     }
   }
+  PatchTerminalPause(patched);
   root = std::move(patched);
   linkedNodes = origins.size();
   return true;

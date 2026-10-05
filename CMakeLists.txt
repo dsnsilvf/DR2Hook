@@ -93,7 +93,10 @@ add_library(dr2hook_core SHARED
     src/core/savestate.cpp
     src/core/physics_tick_harness.cpp
     src/core/cutscene_probe.cpp
+    src/core/free_camera.cpp
     src/core/ghost_lab.cpp
+    src/core/terminal_damage.cpp
+    src/core/remote_commands.cpp
     src/core/net_dialog.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
@@ -414,6 +417,16 @@ endif()
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_physics_tick_harness PRIVATE m)
+endif()
+
+add_executable(test_free_camera
+    tests/test_free_camera.cpp
+)
+
+target_include_directories(test_free_camera PRIVATE include)
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_free_camera PRIVATE m)
 endif()
 
 add_executable(test_auto_stage

@@ -6,7 +6,7 @@ namespace dr2hook {
 
 // Carros fantasma (docs/reverse_engineering/ghosts.md). Hooks no core, para
 // iterar com F8: EvaluateGhostState (posicao de cada fantasma a cada frame)
-// e a troca de materiais do carro fantasma (opaco).
+// e o packer de GhostCarValues (opacidade do fantasma solido).
 class GhostLab {
 public:
   static bool Install(uintptr_t gameBase);
@@ -15,6 +15,15 @@ public:
   // Chamado a cada frame pelo core: projeta jogador e fantasma no trajeto
   // gravado e atualiza a diferenca.
   static void Update();
+
+  // Eventos de especial (core_module). Carregar e largar desligam o
+  // experimento de colisao com os fantasmas.
+  static void OnStageLoad();
+  static void OnStageStart();
+
+  // Sem tecla (F11 virou insta crash): liga/desliga a colisao com os fantasmas (aplicada no proximo
+  // frame da especial; pausar desliga). Devolve o novo estado.
+  static bool ToggleCollision();
 
   struct Status {
     bool active = false;      // fantasma avaliado ha pouco e trajeto lido
@@ -35,8 +44,16 @@ public:
   // clones (estado do slot volta a 0).
   static void RequestClones(int count, float stepSeconds);
 
-  // Pula a troca para os materiais *_ghost na criacao do carro fantasma:
-  // carro solido e com sombra. Vale a partir do proximo carregamento.
+  // Teste de limite (F7): pede mais uma copia a cada chamada (mesmo
+  // espacamento da ultima, 1 s se nunca houve) e registra no log a contagem
+  // antes de aplicar, para saber quantas existiam se o jogo cair. A conta (copias existentes + 1) e feita na
+  // thread do jogo, entao o Reiniciar zera sozinha.
+  static int SpawnClone();
+
+  // Fantasma solido na hora: GhostCarValues.x volta a 1, o fator de
+  // esmaecimento fica abaixo de 1 (com 1,0 o desenho descarta o carro colado
+  // no jogador) e, so durante a submissao do desenho, o tipo do fantasma
+  // entra no passe opaco. Desligar devolve o esmaecimento.
   static void SetOpaque(bool opaque);
   static bool IsOpaque();
 

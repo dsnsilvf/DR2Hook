@@ -20,6 +20,9 @@ namespace dr2hook {
 namespace {
 
 std::atomic<bool> g_opaque{false};
+// Experimento de colisao: ToggleCollision faz os fantasmas virarem carros fisicos.
+// Carregar, largar e pausar desligam.
+std::atomic<bool> g_collide{false};
 std::atomic<bool> g_hud{false};
 
 // Trajeto do fantasma de referencia, copiado na thread do jogo.
@@ -35,6 +38,8 @@ const void *g_pathSlot = nullptr;
 uint32_t g_pathCount = 0;
 float g_ghostPos[3] = {};
 uint64_t g_lastEvalTick = 0;
+// Qualquer fantasma avaliado (todo frame da especial, pausa nao).
+std::atomic<uint64_t> g_anyEvalTick{0};
 int g_slotCount = 0;
 int g_readyCount = 0;
 GhostLab::Status g_status;
@@ -117,6 +122,13 @@ constexpr uint8_t kMakeGhostMaterialsPrologue[] = {
 
 // CopyGhostLapData(dest, src, realocar): copia estado e canais; aloca com o
 // alocador do jogo (0x1409cd610) se faltar capacidade.
+// SpawnStageVehicles: cria os carros da especial a partir da lista de entradas
+// da sessao ([0x1416951e8]+0x30, contagem +0x40). Hook so de diagnostico.
+constexpr uintptr_t kSpawnVehiclesRva = 0x14046b320 - kImageBase;
+constexpr uint8_t kSpawnVehiclesPrologue[] = {0x40, 0x56, 0x41, 0x54, 0x48, 0x83,
+                                              0xec, 0x38, 0x4c, 0x8b, 0xe1};
+constexpr uintptr_t kSessionGlobalRva = 0x1416951e8 - kImageBase;
+
 constexpr uintptr_t kCopyLapRva = 0x1409cfd30 - kImageBase;
 constexpr uint8_t kCopyLapPrologue[] = {
     0x48, 0x89, 0x5c, 0x24, 0x08, // mov [rsp+8], rbx
@@ -152,15 +164,63 @@ constexpr size_t kControllerOwner = 0x08;
 constexpr size_t kControllerSlot = 0x28;
 constexpr size_t kControllerDraw = 0x62;
 
+// Empacota GhostCarValues em objeto+0x4f80. Chamado em 0x1409655b1 com edx = 0.
+// x = clamp(1 - [objeto+0x5058], 0, 1). w = 0 se x == 1, senao 1.
+// O valor em +0x5058 e o maximo de veiculo+0x88..+0x9c; no fantasma so +0x94
+// fica diferente de zero (0,5 longe, sobe para 1 perto).
+constexpr uintptr_t kPackOpacityRva = 0x140bd7500 - kImageBase;
+constexpr uint8_t kPackOpacityPrologue[] = {
+    0xf3, 0x0f, 0x10, 0x05, 0xb0, 0x07, 0x62, 0x00, // movss xmm0, [1.0]
+};
+constexpr size_t kGhostCarValues = 0x4f80;
+// Fator de esmaecimento lido pelo getter 0x140bcf9d0. As funcoes de desenho
+// (0x1409535fd, 0x140953a92, 0x140955dca) pulam o carro quando ele vale
+// exatamente 1,0, o que so acontece colado no jogador (<= 5 m).
+constexpr size_t kFadeFactor = 0x5058;
+constexpr float kFadeBelowHidden = 0.999f;
+
+// Submissao do carro. Le veiculo+0xbc: 0 desenha o passe opaco, qualquer
+// outro (3 = fantasma) cai no passe transparente, que e a aura de 5–50 m.
+// O campo so e trocado por 0 durante esta chamada e restaurado antes do
+// retorno, para a fisica continuar vendo o tipo fantasma.
+constexpr uintptr_t kSubmitCarRva = 0x140986320 - kImageBase;
+constexpr uint8_t kSubmitCarPrologue[] = {
+    0x48, 0x89, 0x5c, 0x24, 0x18, // mov [rsp+18h], rbx
+    0x55,                         // push rbp
+    0x56,                         // push rsi
+    0x57,                         // push rdi
+};
+constexpr uintptr_t kVehicleVtableRva = 0x14127cc00 - kImageBase;
+constexpr size_t kVehicleType = 0xbc;
+constexpr uint32_t kVehicleTypeGhost = 3;
+// 0x140dad720: corpo+0xf0 = 0, +0xf2 = 1 ("fantasma" no proximo passo).
+constexpr uintptr_t kBodySleepRva = 0x140dad720 - kImageBase;
+constexpr uint8_t kBodySleepPrologue[] = {
+    0xc6, 0x81, 0xf0, 0x00, 0x00, 0x00, 0x00, // mov byte [rcx+0F0h], 0
+    0xc6, 0x81, 0xf2, 0x00, 0x00, 0x00, 0x01, // mov byte [rcx+0F2h], 1
+};
+
+
 using EvaluateFn = int (*)(uint8_t *owner, void *time, void *arg, uint8_t *out);
 using MakeGhostMaterialsFn = void (*)(void *self, void *model);
 using CopyLapFn = void (*)(uint8_t *dest, const uint8_t *src, bool realloc);
+using PackOpacityFn = void (*)(uint8_t *renderObj, int channel);
+using SubmitCarFn = void (*)(uint8_t *renderObj, uint8_t *context, void *pass,
+                             void *extra);
 
 uintptr_t g_gameBase = 0;
 EvaluateFn g_originalEvaluate = nullptr;
 MakeGhostMaterialsFn g_originalMakeGhost = nullptr;
+PackOpacityFn g_originalPack = nullptr;
+SubmitCarFn g_originalSubmit = nullptr;
 void *g_evaluateTarget = nullptr;
 void *g_makeGhostTarget = nullptr;
+void *g_packTarget = nullptr;
+void *g_submitTarget = nullptr;
+using SpawnVehiclesFn = void (*)(void *ctx);
+SpawnVehiclesFn g_originalSpawn = nullptr;
+void *g_spawnTarget = nullptr;
+bool g_opacityLogged = false;
 
 std::atomic<int> g_inFlight{0};
 struct InFlight {
@@ -170,7 +230,13 @@ struct InFlight {
 
 // -1 = nada pendente.
 std::atomic<int> g_cloneCount{-1};
+bool g_collideApplied = false;
+// Carros com a colisao ligada: a thread do jogo poe, o Update desfaz na pausa.
+std::mutex g_collideMutex;
+std::vector<uint8_t *> g_collidingVehicles;
+
 std::atomic<int> g_cloneStepMs{0};
+std::atomic<bool> g_spawnPending{false}; // F7: +1 copia sobre as que existem
 
 // Uma volta e reconhecida pelo conteudo, nao pelo slot: o jogo reorganiza
 // os slots na largada e o F8 apaga o estado do core. Copias = mesma volta
@@ -289,6 +355,18 @@ bool IsClone(const uint8_t *slot) {
 
 void ApplyClones(int count, int stepMs) {
   const std::vector<uint8_t *> slots = CollectSlots();
+  {
+    // Antes de mexer: se o jogo cair daqui, o log mostra quantas eram.
+    int ready = 0, linked = 0, vehicles = 0;
+    for (uint8_t *slot : slots) ready += IsReady(slot) ? 1 : 0;
+    char pre[200];
+    std::snprintf(pre, sizeof(pre),
+                  "GhostLab[limite]: aplicando %d copia(s) (slots=%zu prontos=%d).",
+                  count, slots.size(), ready);
+    (void)linked;
+    (void)vehicles;
+    Logger::Info(pre);
+  }
   uint8_t *source = ResolveSource(slots);
   if (source == nullptr) {
     Logger::Warn("GhostLab: nenhum slot com fantasma pronto para clonar.");
@@ -318,11 +396,17 @@ void ApplyClones(int count, int stepMs) {
     copyLap(dest, source, false);
     ShiftTimes(dest, static_cast<int64_t>(made) * stepMs);
   }
-  char msg[160];
+  char msg[200];
   std::snprintf(msg, sizeof(msg),
                 "GhostLab: %d copia(s) a cada %.1f s (slots no gerenciador: %zu).",
                 made, stepMs / 1000.0, slots.size());
   Logger::Info(msg);
+  if (made < count) {
+    std::snprintf(msg, sizeof(msg),
+                  "GhostLab[limite]: pedidas %d, feitas %d: sem slot livre (limite do gerenciador).",
+                  count, made);
+    Logger::Warn(msg);
+  }
 }
 
 // Na thread do jogo: le o trajeto do slot de referencia quando ele muda.
@@ -361,6 +445,10 @@ void CapturePath(const uint8_t *slot) {
   Logger::Info(msg);
 }
 
+bool UsablePointer(uintptr_t p) {
+  return p >= 0x10000 && p < 0x0000800000000000ULL && (p & 7) == 0;
+}
+
 // O jogo cria 2 carros fantasma, mas o controlador do segundo fica com
 // +0x62 = 0: sem 0x1409da680 o carro nunca e desenhado. Ligando a flag, a
 // copia aparece (validado em 2026-10-02 com o jogo recem-aberto).
@@ -372,12 +460,134 @@ void LinkCloneVehicle(uint8_t *owner) {
   controller[kControllerDraw] = 1;
 }
 
+// Colisao com o fantasma (2026-10-03). No corpo fisico, f0 e o pedido de
+// "carro solido", f1 o estado aplicado e f2 o "aplique no proximo passo": o
+// passo da fisica (0x140dbc500) copia f0 para f1 e, se mudou, monta as formas
+// de contato (0x140da94c0, forma em corpo+0xc98) ou desmonta (0x140da6770).
+// Desligar e so f0 = 0 + f2 = 1 (zerar f1 junto travava a forma montada).
+// O tipo do veiculo (+0xbc = 3) fica intocado: trocar no meio da gravacao
+// quebra o replay (crash em 0x140adb33e). Mas o tipo 3 chama 0x140dad720 a
+// cada frame (f0 = 0), entao o hook dela ignora os corpos com colisao.
+// O bit 4 das flags em corpo+0x190 (dword alto guardado multiplicado por
+// 0x45fa8d8d) e apagado na criacao do fantasma e vai junto.
+constexpr size_t kVehicleBody = 0x30;
+constexpr size_t kBodyFlagsHigh = 0x194;
+constexpr uint32_t kBodyFlagsEncode = 0x45fa8d8d;
+constexpr uint32_t kBodyFlagsDecode = 0x6427d45;
+constexpr uint32_t kBodyFlagCollides = 4;
+constexpr size_t kBodySolidRequest = 0xf0;
+constexpr size_t kBodySolidDirty = 0xf2;
+// 3 = grade de contato de carro (5x7); o fantasma nasce com 2 (1x1).
+constexpr size_t kBodyContactMode = 0x198;
+constexpr uint32_t kBodyContactModeCar = 3;
+
+// Corpos com colisao ligada, lidos pelo hook de 0x140dad720 (thread do jogo).
+constexpr size_t kMaxSolidBodies = 8;
+std::atomic<uint8_t *> g_solidBodies[kMaxSolidBodies] = {};
+
+bool IsSolidBody(const uint8_t *body) {
+  for (const auto &slot : g_solidBodies) {
+    if (slot.load() == body) return true;
+  }
+  return false;
+}
+
+void MarkSolidBody(uint8_t *body, bool solid) {
+  for (auto &slot : g_solidBodies) {
+    uint8_t *expected = solid ? nullptr : body;
+    if (slot.compare_exchange_strong(expected, solid ? body : nullptr)) return;
+  }
+}
+
+void SetVehicleCollision(uint8_t *vehicle, bool collide) {
+  uint8_t *body = Read<uint8_t *>(vehicle, kVehicleBody);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(body))) return;
+  MarkSolidBody(body, collide);
+  uint32_t flags = Read<uint32_t>(body, kBodyFlagsHigh) * kBodyFlagsDecode;
+  flags = collide ? (flags | kBodyFlagCollides) : (flags & ~kBodyFlagCollides);
+  const uint32_t stored = flags * kBodyFlagsEncode;
+  std::memcpy(body + kBodyFlagsHigh, &stored, sizeof(stored));
+  if (collide) {
+    std::memcpy(body + kBodyContactMode, &kBodyContactModeCar,
+                sizeof(kBodyContactModeCar));
+  }
+  body[kBodySolidRequest] = collide ? 1 : 0;
+  body[kBodySolidDirty] = 1;
+}
+
+using BodySleepFn = void (*)(uint8_t *body);
+BodySleepFn g_originalBodySleep = nullptr;
+void *g_bodySleepTarget = nullptr;
+
+void DetourBodySleep(uint8_t *body) {
+  if (IsSolidBody(body)) return;
+  g_originalBodySleep(body);
+}
+
+void ApplyCollision(uint8_t *owner) {
+  const bool collide = g_collide.load();
+  if (collide != g_collideApplied) {
+    g_collideApplied = collide;
+    Logger::Info(std::string("GhostLab: colisao com o fantasma ") +
+                 (collide ? "ligada." : "desligada."));
+  }
+  uint8_t *vehicle = Read<uint8_t *>(owner - kControllerOwner, kControllerVehicle);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(vehicle)) ||
+      Read<uintptr_t>(vehicle, 0) != g_gameBase + kVehicleVtableRva) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_collideMutex);
+  const bool listed = std::find(g_collidingVehicles.begin(),
+                                g_collidingVehicles.end(),
+                                vehicle) != g_collidingVehicles.end();
+  if (collide == listed) return;
+  SetVehicleCollision(vehicle, collide);
+  if (collide) {
+    g_collidingVehicles.push_back(vehicle);
+  } else {
+    g_collidingVehicles.erase(std::remove(g_collidingVehicles.begin(),
+                                          g_collidingVehicles.end(), vehicle),
+                              g_collidingVehicles.end());
+  }
+}
+
+// Pausa desliga a colisao (F11 de novo para religar), para nenhum Reiniciar
+// pegar o fantasma solido. Pedido ainda nao aplicado (F11 com o jogo pausado)
+// fica esperando. So grava o pedido: o passo da fisica desmonta as formas
+// quando o jogo voltar a rodar.
+void RevertCollision() {
+  std::lock_guard<std::mutex> lock(g_collideMutex);
+  if (g_collidingVehicles.empty()) return;
+  g_collide.store(false);
+  for (uint8_t *vehicle : g_collidingVehicles) {
+    if (Read<uintptr_t>(vehicle, 0) == g_gameBase + kVehicleVtableRva) {
+      SetVehicleCollision(vehicle, false);
+    }
+  }
+  Logger::Info("GhostLab: jogo pausado; colisao desligada (ToggleCollision religa).");
+  g_collidingVehicles.clear();
+  g_collideApplied = false;
+}
+
 int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   InFlight guard;
   const int pending = g_cloneCount.exchange(-1);
   if (pending >= 0) ApplyClones(pending, g_cloneStepMs.load());
+  if (g_spawnPending.exchange(false)) {
+    // Conta as copias que existem agora (o Reiniciar as apaga), nao um contador.
+    const std::vector<uint8_t *> slots = CollectSlots();
+    ResolveSource(slots);
+    int existing = 0;
+    for (uint8_t *slot : slots) existing += IsClone(slot) && IsReady(slot) ? 1 : 0;
+    const int stepMs = g_cloneStepMs.load();
+    Logger::Info("GhostLab[limite]: F7 -> copia #" + std::to_string(existing + 1) +
+                 " (existentes: " + std::to_string(existing) + ").");
+    ApplyClones(existing + 1, stepMs > 0 ? stepMs : 1000);
+  }
 
+  g_anyEvalTick.store(GetTickCount64());
   LinkCloneVehicle(owner);
+  ApplyCollision(owner);
   const int result = g_originalEvaluate(owner, time, arg, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
 
@@ -402,6 +612,65 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   return result;
 }
 
+void DetourPackOpacity(uint8_t *renderObj, int channel) {
+  InFlight guard;
+  const bool opaque = g_opaque.load() && renderObj != nullptr;
+  // Abaixo de 1 o desenho nao descarta o carro; a opacidade e forcada abaixo.
+  if (opaque && channel == 0 && Read<float>(renderObj, kFadeFactor) >= 1.f) {
+    std::memcpy(renderObj + kFadeFactor, &kFadeBelowHidden,
+                sizeof(kFadeBelowHidden));
+  }
+  g_originalPack(renderObj, channel);
+  if (!opaque) return;
+  // w >= 0,5 marca o carro que o packer acabou de deixar transparente.
+  // O jogador sai daqui com w = 0 e nao e reescrito.
+  uint8_t *entry = renderObj + kGhostCarValues;
+  if (Read<float>(entry, 0x0c) < 0.5f) return;
+  const float one = 1.f;
+  const float zero = 0.f;
+  std::memcpy(entry, &one, sizeof(one));
+  std::memcpy(entry + 0x0c, &zero, sizeof(zero));
+  if (!g_opacityLogged) {
+    g_opacityLogged = true;
+    Logger::Info("GhostLab: fantasma solido (GhostCarValues.x = 1).");
+  }
+}
+
+// A troca do tipo durante o desenho fica desligada: a fisica pode ler o 0 de
+// outra thread (suspeita de batida leve na largada, 2026-10-02), e o fantasma
+// solido ja vem do fator abaixo de 1 no packer.
+constexpr bool kSpoofSubmitType = false;
+
+void DetourSubmitCar(uint8_t *renderObj, uint8_t *context, void *pass,
+                     void *extra) {
+  InFlight guard;
+  uint8_t *vehicle = nullptr;
+  uint32_t savedType = 0;
+  bool spoofed = false;
+  if (kSpoofSubmitType && g_opaque.load() &&
+      UsablePointer(reinterpret_cast<uintptr_t>(renderObj)) &&
+      UsablePointer(reinterpret_cast<uintptr_t>(context))) {
+    const int index = Read<int>(renderObj, 0);
+    const uint8_t *table = Read<const uint8_t *>(context, 0xf8);
+    if (index >= 0 && index < 32 &&
+        UsablePointer(reinterpret_cast<uintptr_t>(table))) {
+      vehicle = Read<uint8_t *>(table, static_cast<size_t>(index) * 8);
+      if (UsablePointer(reinterpret_cast<uintptr_t>(vehicle)) &&
+          Read<uintptr_t>(vehicle, 0) == g_gameBase + kVehicleVtableRva &&
+          Read<uint32_t>(vehicle, kVehicleType) == kVehicleTypeGhost) {
+        savedType = kVehicleTypeGhost;
+        const uint32_t physical = 0;
+        std::memcpy(vehicle + kVehicleType, &physical, sizeof(physical));
+        spoofed = true;
+      }
+    }
+  }
+  g_originalSubmit(renderObj, context, pass, extra);
+  if (spoofed) {
+    std::memcpy(vehicle + kVehicleType, &savedType, sizeof(savedType));
+  }
+}
+
 void DetourMakeGhostMaterials(void *self, void *model) {
   InFlight guard;
   if (g_opaque.load()) {
@@ -409,6 +678,31 @@ void DetourMakeGhostMaterials(void *self, void *model) {
     return;
   }
   g_originalMakeGhost(self, model);
+}
+
+// Lista da sessao: tipo (+0x2c) e o byte +0xb4 que faz o 2o passe pular a entrada.
+void LogStageEntries(const char *when) {
+  uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
+  const uint32_t count = Read<uint32_t>(session, 0x40);
+  uint8_t *entries = Read<uint8_t *>(session, 0x30);
+  if (count > 64 || !UsablePointer(reinterpret_cast<uintptr_t>(entries))) return;
+  std::string line = std::string("GhostLab[limite]: lista da sessao ") + when + ": " +
+                     std::to_string(count) + " entradas [tipo/b4]";
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint8_t *e = Read<const uint8_t *>(entries, i * 8);
+    if (!UsablePointer(reinterpret_cast<uintptr_t>(e))) continue;
+    line += " " + std::to_string(Read<uint32_t>(e, 0x2c)) + "/" +
+            std::to_string(e[0xb4]);
+  }
+  Logger::Info(line);
+}
+
+void DetourSpawnVehicles(void *ctx) {
+  InFlight guard;
+  LogStageEntries("antes do spawn");
+  g_originalSpawn(ctx);
+  LogStageEntries("depois do spawn");
 }
 
 bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
@@ -456,10 +750,31 @@ bool GhostLab::Install(uintptr_t gameBase) {
       reinterpret_cast<void *>(&DetourMakeGhostMaterials),
       reinterpret_cast<void **>(&g_originalMakeGhost), &g_makeGhostTarget,
       "MakeGhostMaterials");
+  const bool pack = Hook(
+      kPackOpacityRva, kPackOpacityPrologue, sizeof(kPackOpacityPrologue),
+      reinterpret_cast<void *>(&DetourPackOpacity),
+      reinterpret_cast<void **>(&g_originalPack), &g_packTarget, "PackOpacity");
+  const bool submit = Hook(
+      kSubmitCarRva, kSubmitCarPrologue, sizeof(kSubmitCarPrologue),
+      reinterpret_cast<void *>(&DetourSubmitCar),
+      reinterpret_cast<void **>(&g_originalSubmit), &g_submitTarget,
+      "SubmitCar");
+  Hook(kSpawnVehiclesRva, kSpawnVehiclesPrologue, sizeof(kSpawnVehiclesPrologue),
+       reinterpret_cast<void *>(&DetourSpawnVehicles),
+       reinterpret_cast<void **>(&g_originalSpawn), &g_spawnTarget,
+       "SpawnStageVehicles");
+  const bool sleep = Hook(
+      kBodySleepRva, kBodySleepPrologue, sizeof(kBodySleepPrologue),
+      reinterpret_cast<void *>(&DetourBodySleep),
+      reinterpret_cast<void **>(&g_originalBodySleep), &g_bodySleepTarget,
+      "BodySleep");
   Logger::Info(std::string("GhostLab: hooks (EvaluateGhostState ") +
                (evaluate ? "ok" : "FALHOU") + ", materiais " +
-               (materials ? "ok" : "FALHOU") + ").");
-  return evaluate || materials;
+               (materials ? "ok" : "FALHOU") + ", opacidade " +
+               (pack ? "ok" : "FALHOU") + ", submissao " +
+               (submit ? "ok" : "FALHOU") + ", colisao " +
+               (sleep ? "ok" : "FALHOU") + ").");
+  return evaluate || materials || pack || submit;
 #else
   (void)gameBase;
   return false;
@@ -468,13 +783,15 @@ bool GhostLab::Install(uintptr_t gameBase) {
 
 void GhostLab::Shutdown() {
 #if defined(_WIN32)
-  for (void *target : {g_evaluateTarget, g_makeGhostTarget}) {
+  for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
+                       g_submitTarget, g_bodySleepTarget, g_spawnTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
   for (int waited = 0; g_inFlight.load() > 0 && waited < 2000; ++waited) {
     Sleep(1);
   }
-  for (void **target : {&g_evaluateTarget, &g_makeGhostTarget}) {
+  for (void **target : {&g_evaluateTarget, &g_makeGhostTarget, &g_packTarget,
+                        &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget}) {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;
@@ -491,6 +808,7 @@ void GhostLab::Shutdown() {
 void GhostLab::Update() {
 #if defined(_WIN32)
   std::lock_guard<std::mutex> lock(g_mutex);
+  if (GetTickCount64() - g_anyEvalTick.load() > 500) RevertCollision();
   Status status;
   status.slots = g_slotCount;
   status.readySlots = g_readyCount;
@@ -521,6 +839,7 @@ void GhostLab::Update() {
   status.gapMeters = sGhost - sPlayer;
   status.offTrackMeters = dPlayer;
   g_status = status;
+  // Tempo do fantasma desde o inicio do trajeto: no Reiniciar volta a ~0.
 #endif
 }
 
@@ -541,15 +860,44 @@ void GhostLab::RequestClones(int count, float stepSeconds) {
 #endif
 }
 
+int GhostLab::SpawnClone() {
+#if defined(_WIN32)
+  g_spawnPending.store(true);
+  return 0;
+#else
+  return 0;
+#endif
+}
+
 void GhostLab::SetOpaque(bool opaque) {
   if (g_opaque.exchange(opaque) != opaque) {
+    g_opacityLogged = false;
     Logger::Info(std::string("GhostLab: fantasma ") +
-                 (opaque ? "opaco" : "transparente") +
-                 " a partir do proximo carregamento.");
+                 (opaque ? "solido (opacidade 1, sem aura)"
+                         : "transparente de novo") +
+                 ".");
   }
 }
 
 bool GhostLab::IsOpaque() { return g_opaque.load(); }
+
+void GhostLab::OnStageLoad() {
+  g_collide.store(false);
+  // Os carros da especial anterior somem com ela.
+  std::lock_guard<std::mutex> lock(g_collideMutex);
+  g_collidingVehicles.clear();
+  for (auto &slot : g_solidBodies) slot.store(nullptr);
+}
+
+void GhostLab::OnStageStart() { g_collide.store(false); }
+
+bool GhostLab::ToggleCollision() {
+  const bool collide = !g_collide.load();
+  g_collide.store(collide);
+  Logger::Info(std::string("GhostLab: ToggleCollision -> pedido de colisao ") +
+               (collide ? "ligado." : "desligado."));
+  return collide;
+}
 
 bool GhostLab::SetTimeOffset(float seconds) {
 #if defined(_WIN32)

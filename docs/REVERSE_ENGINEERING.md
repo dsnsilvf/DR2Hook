@@ -13,6 +13,7 @@ Nada foi acrescentado na repartição. Offsets, classificações e hipóteses re
 - [Vehicle Transform](reverse_engineering/vehicle_transform.md)
 - [Vehicle Physics](reverse_engineering/vehicle_physics.md)
 - [Damage](reverse_engineering/damage.md)
+- [Dano terminal](reverse_engineering/terminal_damage.md)
 - [Engine](reverse_engineering/engine.md)
 - [Gearbox](reverse_engineering/gearbox.md)
 - [Telemetry](reverse_engineering/telemetry.md)

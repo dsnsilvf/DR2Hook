@@ -29,6 +29,16 @@ constexpr uint8_t kApplyTextBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55,
                                        0x81, 0xec, 0xc0, 0x00, 0x00, 0x00};
 
 constexpr const char kVisibilityPath[] = "ui.pause_menu.reset_view_available";
+// Helper que grava restart_available e restart_label (0x1402a4bd0). Com o
+// pedido ligado ele roda com dl = 0, o caminho completo de disponibilidade e
+// de rotulo (so ai o texto e montado).
+constexpr uintptr_t kRestartHelperRva = 0x1402a4bd0 - kImageBase;
+constexpr uint8_t kRestartHelperBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10,
+                                           0x48, 0x89, 0x74, 0x24, 0x18};
+using RestartHelperFn = void (*)(void *screen, uint8_t flag);
+RestartHelperFn g_originalRestartHelper = nullptr;
+
+constexpr const char kRestartPath[] = "ui.pause_menu.restart_available";
 constexpr const char kEventName[] = "reset_view";
 constexpr const char kOriginalKey[] = "lng_vr_reset_view";
 constexpr const char kLabel[] = "DR2 Hook";
@@ -99,6 +109,31 @@ bool IsOwnCondition(uintptr_t condition) {
   return true;
 }
 
+// Reiniciar no menu de pausa durante o dano terminal (o jogo o esconde ali).
+// O core liga o pedido so em sessao offline, ver terminal_damage.cpp.
+std::atomic<bool> g_restartVisible{false};
+std::atomic<uintptr_t> g_restartPath{0};
+
+bool IsRestartCondition(uintptr_t condition) {
+  if (Field<uintptr_t>(condition, 0) != g_base + kConditionVtableRva) {
+    return false;
+  }
+  const auto path = Field<uintptr_t>(condition, 0xa0);
+  if (path == 0) {
+    return false;
+  }
+  if (path == g_restartPath.load(std::memory_order_relaxed)) {
+    return true;
+  }
+  if (path < g_base || path + sizeof(kRestartPath) > g_imageEnd ||
+      std::memcmp(reinterpret_cast<const void *>(path), kRestartPath,
+                  sizeof(kRestartPath)) != 0) {
+    return false;
+  }
+  g_restartPath.store(path, std::memory_order_relaxed);
+  return true;
+}
+
 bool ItemHasOwnCondition(uintptr_t item) {
   if (!IsReadable(item, 0x1d0) ||
       Field<uintptr_t>(item, 0) != g_base + kItemVtableRva) {
@@ -166,12 +201,51 @@ bool NativeSlotVisibility(uintptr_t condition, bool &hidden) {
                                 Field<uintptr_t>(condition, 0x10), hidden);
 }
 
+// Diagnostico temporario: registra cada condicao ui.pause_menu.* e o resultado
+// original (uma vez por caminho e valor), para achar o que esconde o Reiniciar.
+void TraceCondition(uintptr_t condition, bool hidden) {
+  if (Field<uintptr_t>(condition, 0) != g_base + kConditionVtableRva) return;
+  const auto path = Field<uintptr_t>(condition, 0xa0);
+  constexpr char kPrefix[] = "ui.pause_menu.";
+  if (path < g_base || path + 64 > g_imageEnd ||
+      std::memcmp(reinterpret_cast<const void *>(path), kPrefix, sizeof(kPrefix) - 1) != 0) {
+    return;
+  }
+  static std::atomic<uint64_t> seen[48];
+  const uint64_t key = (static_cast<uint64_t>(path) << 1) | (hidden ? 1u : 0u);
+  for (auto &slot : seen) {
+    uint64_t cur = slot.load(std::memory_order_relaxed);
+    if (cur == key) return;
+    if (cur == 0 && slot.compare_exchange_strong(cur, key)) {
+      char buf[160];
+      std::snprintf(buf, sizeof(buf), "PauseMenu: condicao '%.60s' item=%llx escondido=%d",
+                    reinterpret_cast<const char *>(path),
+                    static_cast<unsigned long long>(Field<uintptr_t>(condition, 0x10)),
+                    hidden ? 1 : 0);
+      HostLog(buf);
+      return;
+    }
+  }
+}
+
+void DetourRestartHelper(void *screen, uint8_t flag) {
+  const bool forced = g_restartVisible.load(std::memory_order_relaxed);
+  if (forced) HostLog("PauseMenu: helper do Reiniciar com dl=0.");
+  g_originalRestartHelper(screen, forced ? 0 : flag);
+}
+
 bool DetourPredicate(void *condition) {
   NativeScreenTick();
   bool hidden = g_originalPredicate(condition);
   const auto self = reinterpret_cast<uintptr_t>(condition);
+  TraceCondition(self, hidden);
   if (NativeSlotVisibility(self, hidden)) {
     return hidden;
+  }
+  if (hidden && g_restartVisible.load(std::memory_order_relaxed) &&
+      IsRestartCondition(self)) {
+    HostLog("PauseMenu: Reiniciar liberado (dano terminal).");
+    return false;
   }
   if (!IsOwnCondition(self)) {
     return hidden;
@@ -255,6 +329,11 @@ bool InstallPauseMenuHooks() {
     return false;
   }
 
+  if (Matches(kRestartHelperRva, kRestartHelperBytes, sizeof(kRestartHelperBytes))) {
+    Hook(kRestartHelperRva, reinterpret_cast<void *>(&DetourRestartHelper),
+         reinterpret_cast<void **>(&g_originalRestartHelper), "RestartHelper");
+  }
+
   HostLog("PauseMenu: item DR2 Hook instalado no menu de pausa.");
   return true;
 }
@@ -281,11 +360,22 @@ void RefreshItemText(uintptr_t item) {
   }
 }
 
+void SetRestartVisible(bool visible) {
+  g_restartVisible.store(visible, std::memory_order_relaxed);
+}
+
 bool ConsumePauseMenuActivation() {
   return g_activationPending.exchange(false);
 }
 
 } // namespace dr2hook
+
+int Dr2Host_SetRestartVisible(int visible) {
+  dr2hook::HostLog(visible != 0 ? "PauseMenu: pedido para liberar Reiniciar."
+                       : "PauseMenu: Reiniciar volta ao normal.");
+  dr2hook::SetRestartVisible(visible != 0);
+  return 1;
+}
 
 int Dr2Host_ConsumePauseMenuRequest() {
   return dr2hook::ConsumePauseMenuActivation() ? 1 : 0;
