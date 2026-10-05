@@ -1390,26 +1390,32 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
   // (rbp = frame; argumentos em rbp+0x568..; rsp da funcao = rbp-0x100). O 2o argumento
   // ([rbp+0x578]) chegou apontando para um objeto estatico "dummy".
   if (c->Rip - base == 0x49d260) {
-    dumpAt("args[rbp+0x568]", c->Rbp + 0x568, 0x80);
-    dumpAt("locais[rbp-0x100+0x20]", c->Rbp - 0x100 + 0x20, 0x80);
-    dumpAt("[rbp-0x90]", c->Rbp - 0x90, 0x20);
-    dumpAt("[rbp]", c->Rbp, 0x10);
-    if (Readable(c->Rbp + 0xbd0, 8)) {
-      const uintptr_t obj = *reinterpret_cast<const uintptr_t *>(c->Rbp + 0xbd0);
-      char t[80];
-      std::snprintf(t, sizeof(t), "GhostLab[crash]: [rbp+0xbd0]=%llx", static_cast<unsigned long long>(obj));
+    dumpAt("saved[rbp+0x530]", c->Rbp + 0x530, 0x38);  // r15,r14,r13,r12,rdi,rsi,rbp do chamador
+    if (Readable(c->Rbp + 0x560, 8) && Readable(c->Rbp + 0x530, 8)) {
+      const uintptr_t crbp = *reinterpret_cast<const uintptr_t *>(c->Rbp + 0x560);
+      const uintptr_t cr15 = *reinterpret_cast<const uintptr_t *>(c->Rbp + 0x530);
+      char t[120];
+      std::snprintf(t, sizeof(t), "GhostLab[crash]: chamador rbp=%llx r15=%llx",
+                    static_cast<unsigned long long>(crbp), static_cast<unsigned long long>(cr15));
       Logger::Error(t);
-      dumpAt("obj+0x1500", obj + 0x1500, 0x240);
-    }
-    if (Readable(c->Rbp - 0x80, 8)) {
-      const uintptr_t o2 = *reinterpret_cast<const uintptr_t *>(c->Rbp - 0x80);
-      char t[80];
-      std::snprintf(t, sizeof(t), "GhostLab[crash]: [rbp-0x80]=%llx", static_cast<unsigned long long>(o2));
-      Logger::Error(t);
-      if (Readable(o2 + 0xf8, 8)) {
-        const uintptr_t lst = *reinterpret_cast<const uintptr_t *>(o2 + 0xf8);
-        dumpAt("lista[o2+0xf8]", lst, 0x100);
+      if (Readable(crbp + 0xbd0, 8)) {
+        const uintptr_t obj = *reinterpret_cast<const uintptr_t *>(crbp + 0xbd0);
+        std::snprintf(t, sizeof(t), "GhostLab[crash]: [crbp+0xbd0]=%llx", static_cast<unsigned long long>(obj));
+        Logger::Error(t);
+        dumpAt("obj+0x1520", obj + 0x1520, 0x100);
+        dumpAt("obj+0x1620", obj + 0x1620, 0x100);
+        dumpAt("obj+0x1520+r15", obj + 0x1520 + cr15, 0x10);
+        dumpAt("obj+0x1620+r15", obj + 0x1620 + cr15, 0x10);
       }
+      if (Readable(crbp - 0x80, 8)) {
+        const uintptr_t o2 = *reinterpret_cast<const uintptr_t *>(crbp - 0x80);
+        std::snprintf(t, sizeof(t), "GhostLab[crash]: [crbp-0x80]=%llx", static_cast<unsigned long long>(o2));
+        Logger::Error(t);
+        if (Readable(o2 + 0xf8, 8))
+          dumpAt("lista[o2+0xf8]", *reinterpret_cast<const uintptr_t *>(o2 + 0xf8), 0x100);
+      }
+      dumpAt("[crbp-0x8]", crbp - 8, 0x10);
+      dumpAt("[crbp]", crbp, 0x10);
     }
   }
   const NT_TIB *tib = reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
