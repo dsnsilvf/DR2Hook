@@ -28,6 +28,8 @@ Nome de string no executável não é variável localizada.
 - [UI Data](ui_data.md) — telas, estados e fluxo em `game_1.dat` (NeFS e XML binário), e a ferramenta `tools/egodata`
 - [UI Tabs](ui_tabs.md) — `SBTabGroup`, estados com abas, lista com rolagem, combos e a API do data store
 - [UI Limits](ui_limits.md) — limites e capacidades da UI nativa: objetos, posições, behaviours, hot buttons, texto, diálogos e testes pendentes
+- [UI escondida](ui_hidden.md) — telas, textos e opções que existem nos dados ou no executável e não aparecem nos menus
+- [Renderização da UI](ui_render.md) — como o frontend e o HUD desenham, e por onde um mod pode desenhar de forma nativa
 - [Câmera](camera.md) — dono, tick, olho em `+0x240`, base cima/direita/frente e a câmera livre do core (F9)
 - [Dano terminal](terminal_damage.md) — insta crash (F11), pausa e Reiniciar durante a destruição, o gate `host+0x2350` e o que fica preso depois
 - [Carregamento de especiais](stage_loading.md) — resolução de pistas, `BenchmarkManager`, hook do `AutoStage`, `LoadTrace`

@@ -268,7 +268,6 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 | Track editor | A modified `.nefs` has **not been tried in the game**. Collision is not edited. Duplicated objects get new `instanceID` values; whether the game accepts them is unknown. Rally stages (millions of vertices) are not rendered in the test environment. |
 | Track formats | Collision tiles (`.vcqtc`), `track.vis`, `grass.grs`, and the texture of the dense road blocks are not decoded. |
 | Compatibility | Only one game build and only Linux/Proton were tested. |
-| Research harness | The physics tick harness is off by default; the INV-01 write experiments (after G3) have not run. |
 
 ## Roadmap
 
@@ -276,7 +275,7 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 
 - Test one small, safe edited `.nefs` in the game (only with the owner's go-ahead) to validate the save path of the track editor.
 - Decode stage collision (`.vcqtc`) and the remaining track formats, then export and render the rally stages on a real GPU.
-- Re-validate **With Momentum** on the origin block, and run the INV-01 write experiments.
+- Re-validate **With Momentum** on the origin block.
 - Enforce `SafetyGuard` with a real offline/online signal (proposed INV-02).
 - Native desktop viewer for the asset tools (SDL3 + OpenGL), reading the files the Python exporter already writes, so large stages do not depend on the browser.
 
