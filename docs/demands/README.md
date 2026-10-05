@@ -11,6 +11,7 @@ Ideas people want from DR2Hook, kept apart from the reverse-engineering notes an
 | Vehicle editor / custom cars | Speculation, not started (the Car Model Explorer reads car models) | [vehicle-editor.md](vehicle-editor.md) |
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
 | Quick car preview | Speculation, first experiment not run | [car-preview.md](car-preview.md) |
+| Synthetic track in the game | Offline generator exists (`tools/synthtrack`); nothing tried in the game | [synthetic_track.md](synthetic_track.md) |
 
 ## How findings are labelled
 

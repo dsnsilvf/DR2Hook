@@ -55,6 +55,8 @@ tools/uiview/
   tests/
 ```
 
+Para testar sem o jogo, `python -m tools.synthtrack` gera uma pista inventada que aparece na aba **Pistas** ([synthtrack.md](synthtrack.md)).
+
 O viewer nativo em C++ que vai substituir o navegador para pistas grandes está em `tools/viewer3d/` (veja o [plano](../plans/viewer3d/README.md)).
 
 ## Formatos

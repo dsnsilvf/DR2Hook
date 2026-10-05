@@ -10,7 +10,7 @@ dependencies = []
 [project.optional-dependencies]
 # dr2rec (memory recorder and analyzer)
 rec = ["numpy"]
-# uiview (UI Viewer, Car and Track Explorer): texture export to WebP
+# uiview (UI Viewer, Car and Track Explorer) and synthtrack: textures (WebP, PNG)
 view = ["Pillow"]
 # dr2save (save decryption)
 save = ["pycryptodome"]
