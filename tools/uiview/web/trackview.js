@@ -3,7 +3,7 @@
 const TRACKS = typeof TRACK_DATA !== "undefined" ? TRACK_DATA : [];
 const tv = {
   id: null, loadedId: null, data: null, gl: null, prog: null, loc: null, gen: 0,
-  terrain: [], types: new Map(), inst: [], lines: [],
+  terrain: [], texs: new Map(), types: new Map(), typeList: [], inst: null, route: null, lines: [], ext: null, editRev: 0, scratch: new Float32Array(12 * 4096), drawDist: 700, vis: null, visKey: "",
   sel: -1, showTerrain: true, showObjects: true, showTrees: true, showDist: false, showGates: true, showAi: true, wire: false,
   yaw: 0.8, pitch: 0.6, dist: 400, target: [0, 1430, -430], drag: null, keys: new Set(),
   dirty: true, status: "", busy: false,
@@ -27,17 +27,21 @@ function tvParse(buf) {
     o = (o + 3) & ~3;
     const pos = new Float32Array(buf, o, verts * 3); o += verts * 12;
     const uv = new Float32Array(buf, o, verts * 2); o += verts * 8;
+    let col = null;
+    if (flags & 2) { col = new Uint8Array(buf, o, verts * 4); o += verts * 4; }
     const wide = !!(flags & 1);
     const ind = wide ? new Uint32Array(buf, o, indices) : new Uint16Array(buf, o, indices);
     o += indices * (wide ? 4 : 2);
     o = (o + 3) & ~3;
-    out.push({ name, material, verts, pos, uv, ind, wide });
+    out.push({ name, material, verts, pos, uv, col, ind, wide });
   }
   return out;
 }
 
 function tvHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 function tvColor(name, base) {
+  // terreno em lote (batched_track.fx): sem textura nem cor no arquivo; um tom de terra fixo
+  if (/^g\|batchmaterial/.test(name)) return [0.36, 0.34, 0.28];
   const h = tvHash(name);
   const j = (k) => ((h >> k) & 255) / 255;
   return [base[0] * (0.75 + 0.5 * j(0)), base[1] * (0.75 + 0.5 * j(8)), base[2] * (0.75 + 0.5 * j(16))];
@@ -49,21 +53,57 @@ function tvUpload(list, color) {
   return list.map((m) => {
     if (m.wide && !ext) return null;
     const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, m.pos, gl.STATIC_DRAW);
+    const ub = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ub); gl.bufferData(gl.ARRAY_BUFFER, m.uv, gl.STATIC_DRAW);
+    let cb = null;
+    if (m.col) { cb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cb); gl.bufferData(gl.ARRAY_BUFFER, m.col, gl.STATIC_DRAW); }
     const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.ind, gl.STATIC_DRAW);
     let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < m.pos.length; i += 3) for (let k = 0; k < 3; k++) { const v = m.pos[i + k]; if (v < lo[k]) lo[k] = v; if (v > hi[k]) hi[k] = v; }
-    return { pb, ib, count: m.ind.length, wide: m.wide, color: tvColor(m.material, color), material: m.material, lo, hi };
+    return { pb, ub, cb, ib, count: m.ind.length, wide: m.wide, color: tvColor(m.material, color), material: m.material, lo, hi };
   }).filter(Boolean);
+}
+
+// textura de cor de cada material: carregada sob demanda, o material fica na cor até a imagem chegar
+function tvTexture(material) {
+  const file = tv.data && tv.data.materials && tv.data.materials[material];
+  if (!file) return null;
+  let e = tv.texs.get(file);
+  if (e) return e.ready ? e.tex : null;
+  const gl = tv.gl;
+  e = { tex: gl.createTexture(), ready: false };
+  tv.texs.set(file, e);
+  const img = new Image();
+  img.onload = () => {
+    if (tv.gl !== gl) return;
+    gl.bindTexture(gl.TEXTURE_2D, e.tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    const pot = (n) => (n & (n - 1)) === 0;
+    if (pot(img.width) && pot(img.height)) {
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    } else {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    e.ready = true;
+  };
+  img.src = `tracks/${encodeURIComponent(tv.id)}/${file}`;
+  return null;
 }
 
 function tvFree() {
   const gl = tv.gl;
   if (gl) {
-    for (const r of tv.terrain) { gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ib); }
-    for (const t of tv.types.values()) for (const r of t.meshes) { gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ib); }
+    for (const r of tv.terrain) { gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ub); if (r.cb) gl.deleteBuffer(r.cb); gl.deleteBuffer(r.ib); }
+    for (const t of tv.types.values()) { for (const r of t.meshes) { gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ub); if (r.cb) gl.deleteBuffer(r.cb); gl.deleteBuffer(r.ib); } if (t.vb) gl.deleteBuffer(t.vb); }
     for (const l of tv.lines) gl.deleteBuffer(l.buf);
+    for (const e of tv.texs.values()) gl.deleteTexture(e.tex);
   }
-  tv.terrain = []; tv.types = new Map(); tv.inst = []; tv.lines = [];
+  tv.texs.clear();
+  tv.terrain = []; tv.types = new Map(); tv.typeList = []; tv.inst = null; tv.lines = []; tv.vis = null; tv.terrainFile = null;
 }
 
 async function tvFetch(url, kind) {
@@ -111,26 +151,37 @@ function tvXf(m, p) {
   return [p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12], p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13], p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]];
 }
 
+function tvParseInst(buf) {
+  const view = new DataView(buf);
+  if (String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)) !== "DR2I") throw new Error("DR2I");
+  const n = view.getUint32(4, true);
+  let o = 8;
+  const type = new Uint16Array(buf, o, n); o += n * 2; o = (o + 3) & ~3;
+  const idnum = new Uint32Array(buf, o, n); o += n * 4;
+  const m = new Float32Array(buf, o, n * 12);
+  return { n, type, idnum, m, hidden: new Uint8Array(n) };
+}
+
 async function tvOpen(id) {
   tv.busy = true; tv.status = t("trk.loading"); tvStatus();
   const gen = ++tv.gen;
   try {
     const base = `tracks/${encodeURIComponent(id)}/`;
-    const [data, terr, objs] = await Promise.all([tvFetch(base + "track.json", "json"), tvFetch(base + "terrain.bin"), tvFetch(base + "objects.bin")]);
+    const [data, objs] = await Promise.all([tvFetch(base + "track.json", "json"), tvFetch(base + "objects.bin")]);
     if (gen !== tv.gen) return;
     tvFree();
-    tv.data = data; tv.loadedId = id;
-    tv.terrain = tvUpload(tvParse(terr), [0.42, 0.45, 0.34]);
+    tv.data = data; tv.loadedId = id; tv.terrainFile = null;
+    await tvLoadTerrain(data.routes[0].name, gen);
     const lib = tvUpload(tvParse(objs), [0.8, 0.75, 0.7]);
-    for (const [name, info] of Object.entries(data.types)) {
+    tv.typeList = data.type_order.map((name, n) => {
+      const info = data.types[name];
       const meshes = lib.slice(info.first, info.first + info.count);
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
       for (const m of meshes) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], m.lo[k]); hi[k] = Math.max(hi[k], m.hi[k]); }
-      tv.types.set(name, { name, meshes, lo, hi, empty: !meshes.length });
-    }
-    tv.inst = data.instances.map((i, n) => {
-      const kind = i.type[0] === "t" ? (/_dist_/.test(i.type) ? "dist" : "tree") : "obj";
-      return { n, id: i.id, type: i.type, kind, route: i.route, m: new Float32Array(i.m), hidden: false };
+      const kind = name[0] === "t" ? (/_dist_/.test(name) ? "dist" : "tree") : "obj";
+      const ty = { n, name, kind, meshes, lo, hi, empty: !meshes.length, vb: null, vis: 0 };
+      tv.types.set(name, ty);
+      return ty;
     });
     const gl = tv.gl;
     tv.lines = tvLinesFrom(data).map((l) => {
@@ -138,20 +189,89 @@ async function tvOpen(id) {
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(l.pts.flat()), gl.STATIC_DRAW);
       return { ...l, buf, count: l.pts.length };
     });
-    tv.sel = -1;
+    tv.route = data.routes[0].name;
+    await tvLoadRoute(tv.route, gen);
     tvFrameRoute();
     tv.status = "";
-    tv.dirty = true;
   } catch (err) {
     tv.status = t("trk.noload") + " " + String((err && err.message) || err);
   } finally {
     tv.busy = false;
-    tvStatus(); tvInspect();
+    tvRouteSelect(); tvStatus(); tvInspect();
   }
 }
 
-const tvLayer = (i) => (i.kind === "obj" ? tv.showObjects : i.kind === "tree" ? tv.showTrees : tv.showDist);
+// cada rota aponta para um terrain_<n>.bin; rotas com a mesma seleção dividem o arquivo
+async function tvLoadTerrain(route, gen) {
+  const entry = tv.data.routes.find((r) => r.name === route);
+  const file = entry.terrain.file;
+  if (file === tv.terrainFile) return;
+  const buf = await tvFetch(`tracks/${encodeURIComponent(tv.id)}/${file}`);
+  if (gen !== undefined && gen !== tv.gen) return;
+  const gl = tv.gl;
+  for (const r of tv.terrain) { gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ub); if (r.cb) gl.deleteBuffer(r.cb); gl.deleteBuffer(r.ib); }
+  tv.terrain = tvUpload(tvParse(buf), [0.42, 0.45, 0.34]);
+  tv.terrainFile = file;
+}
+
+async function tvLoadRoute(name, gen) {
+  await tvLoadTerrain(name, gen);
+  const buf = await tvFetch(`tracks/${encodeURIComponent(tv.id)}/inst_${name}.bin`);
+  if (gen !== undefined && gen !== tv.gen) return;
+  tv.route = name;
+  tv.inst = tvParseInst(buf);
+  tv.sel = -1;
+  tv.visKey = "";
+  tvGroups();
+}
+
+// instâncias de cada tipo, para cortar por distância sem varrer a rota inteira por tipo
+function tvGroups() {
+  const inst = tv.inst;
+  const counts = new Uint32Array(tv.typeList.length);
+  for (let i = 0; i < inst.n; i++) counts[inst.type[i]]++;
+  const groups = tv.typeList.map((_, k) => new Uint32Array(counts[k]));
+  const fill = new Uint32Array(tv.typeList.length);
+  for (let i = 0; i < inst.n; i++) { const k = inst.type[i]; groups[k][fill[k]++] = i; }
+  tv.groups = groups;
+}
+
 const tvName = (type) => type.slice(2);
+const tvKind = (i) => tv.typeList[tv.inst.type[i]].kind;
+const tvLayerOn = (kind) => (kind === "obj" ? tv.showObjects : kind === "tree" ? tv.showTrees : tv.showDist);
+
+// recorta o que está perto da câmera, por tipo, e sobe para a GPU
+function tvCull() {
+  const cam = tvCam();
+  const key = [tv.target.map((v) => Math.round(v / 8)), Math.round(tv.dist / 8), tv.drawDist, tv.showObjects, tv.showTrees, tv.showDist, tv.editRev].join();
+  if (key === tv.visKey) return;
+  tv.visKey = key;
+  const gl = tv.gl, inst = tv.inst, R2 = tv.drawDist * tv.drawDist;
+  const cx = tv.target[0], cz = tv.target[2];
+  for (const ty of tv.typeList) {
+    ty.vis = 0;
+    if (ty.empty || !tvLayerOn(ty.kind)) continue;
+    const grp = tv.groups[ty.n];
+    let n = 0;
+    const far = ty.kind === "dist";
+    if (tv.scratch.length < grp.length * 12) tv.scratch = new Float32Array(grp.length * 12);
+    const buf = tv.scratch;
+    for (let g = 0; g < grp.length; g++) {
+      const i = grp[g];
+      if (inst.hidden[i]) continue;
+      const o = i * 12;
+      if (!far) { const dx = inst.m[o + 9] - cx, dz = inst.m[o + 11] - cz; if (dx * dx + dz * dz > R2) continue; }
+      buf.set(inst.m.subarray(o, o + 12), n * 12);
+      n++;
+    }
+    ty.vis = n;
+    if (!n) continue;
+    if (!ty.vb) ty.vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, ty.vb);
+    gl.bufferData(gl.ARRAY_BUFFER, buf.subarray(0, n * 12), gl.DYNAMIC_DRAW);
+  }
+  tvStatus();
+}
 
 function tvFrameRoute() {
   const pts = [];
@@ -165,8 +285,9 @@ function tvFrameRoute() {
 }
 
 function tvFrameInst(i) {
-  const ty = tv.types.get(i.type);
-  tv.target = [i.m[12], i.m[13], i.m[14]];
+  const ty = tv.typeList[tv.inst.type[i]];
+  const o = i * 12;
+  tv.target = [tv.inst.m[o + 9], tv.inst.m[o + 10], tv.inst.m[o + 11]];
   const size = ty && !ty.empty ? Math.hypot(ty.hi[0] - ty.lo[0], ty.hi[1] - ty.lo[1], ty.hi[2] - ty.lo[2]) : 4;
   tv.dist = Math.max(6, size * 3);
 }
@@ -189,15 +310,19 @@ function tvGL() {
   if (!gl) return null;
   gl.getExtension("OES_standard_derivatives");
   gl.getExtension("OES_element_index_uint");
-  const vs = `attribute vec3 aPos; uniform mat4 uVp; uniform mat4 uModel; varying vec3 vW; varying float vH;
-    void main() { vec4 w = uModel * vec4(aPos, 1.0); vW = w.xyz; vH = w.y; gl_Position = uVp * w; }`;
+  const vs = `attribute vec2 aUv; varying vec2 vUv; attribute vec4 aCol; varying vec4 vCol; attribute vec3 aPos; attribute vec3 aX; attribute vec3 aY; attribute vec3 aZ; attribute vec3 aP;
+    uniform mat4 uVp; varying vec3 vW; varying float vH;
+    void main() { vUv = aUv; vCol = aCol; vec3 w = aX * aPos.x + aY * aPos.y + aZ * aPos.z + aP; vW = w; vH = w.y; gl_Position = uVp * vec4(w, 1.0); }`;
   const fs = `#extension GL_OES_standard_derivatives : enable
-    precision mediump float; varying vec3 vW; varying float vH; uniform vec3 uColor; uniform float uHi; uniform int uLine;
+    precision mediump float; varying vec3 vW; varying float vH; varying vec2 vUv; varying vec4 vCol; uniform int uVCol; uniform vec3 uColor; uniform float uHi; uniform int uLine;
+    uniform sampler2D uTex; uniform int uHasTex; uniform int uCut;
     void main() {
       if (uLine == 1) { gl_FragColor = vec4(uColor, 1.0); return; }
       vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
       float light = abs(dot(n, normalize(vec3(0.35, 0.85, 0.4)))) * 0.7 + 0.3;
-      gl_FragColor = vec4(mix(uColor * light, vec3(1.0, 0.6, 0.15), uHi * 0.55), 1.0);
+      vec3 base = uVCol == 1 ? vCol.rgb : uColor;
+      if (uHasTex == 1) { vec4 tx = texture2D(uTex, vUv); if (uCut == 1 && tx.a < 0.4) discard; base = tx.rgb; }
+      gl_FragColor = vec4(mix(base * light, vec3(1.0, 0.6, 0.15), uHi * 0.55), 1.0);
     }`;
   const compile = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
   const prog = gl.createProgram();
@@ -207,10 +332,18 @@ function tvGL() {
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
   gl.useProgram(prog);
   gl.enable(gl.DEPTH_TEST);
-  const loc = { pos: gl.getAttribLocation(prog, "aPos") };
-  for (const n of ["uVp", "uModel", "uColor", "uHi", "uLine"]) loc[n] = gl.getUniformLocation(prog, n);
-  Object.assign(tv, { gl, prog, loc });
-  const IDENT = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const loc = { pos: gl.getAttribLocation(prog, "aPos"), uv: gl.getAttribLocation(prog, "aUv"), col: gl.getAttribLocation(prog, "aCol"), x: gl.getAttribLocation(prog, "aX"), y: gl.getAttribLocation(prog, "aY"), z: gl.getAttribLocation(prog, "aZ"), p: gl.getAttribLocation(prog, "aP") };
+  for (const n of ["uVp", "uColor", "uHi", "uLine", "uTex", "uHasTex", "uCut", "uVCol"]) loc[n] = gl.getUniformLocation(prog, n);
+  const ext = gl.getExtension("ANGLE_instanced_arrays");
+  Object.assign(tv, { gl, prog, loc, ext });
+  const rows = [loc.x, loc.y, loc.z, loc.p];
+  // sem instâncias: matriz identidade em atributos constantes
+  const constant = (m) => {
+    for (const a of rows) { gl.disableVertexAttribArray(a); if (ext) ext.vertexAttribDivisorANGLE(a, 0); }
+    gl.vertexAttrib3f(loc.x, m[0], m[1], m[2]); gl.vertexAttrib3f(loc.y, m[3], m[4], m[5]);
+    gl.vertexAttrib3f(loc.z, m[6], m[7], m[8]); gl.vertexAttrib3f(loc.p, m[9], m[10], m[11]);
+  };
+  const IDENT = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
   const gen = tv.gen;
   const frame = () => {
     if (!canvas.isConnected || tv.gl !== gl) return;
@@ -226,28 +359,53 @@ function tvGL() {
     gl.useProgram(prog);
     gl.uniformMatrix4fv(loc.uVp, false, tvVp(canvas));
     gl.enableVertexAttribArray(loc.pos);
-    const drawMesh = (r, model, hi, color) => {
-      gl.uniformMatrix4fv(loc.uModel, false, model);
-      gl.uniform3fv(loc.uColor, color || r.color);
+    if (tv.inst) tvCull();
+    gl.uniform1i(loc.uTex, 0);
+    gl.enableVertexAttribArray(loc.uv);
+    const drawMesh = (r, hi, count) => {
+      gl.uniform3fv(loc.uColor, r.color);
       gl.uniform1f(loc.uHi, hi);
+      const tex = tvTexture(r.material);
+      gl.uniform1i(loc.uHasTex, tex ? 1 : 0);
+      gl.uniform1i(loc.uCut, r.material[0] === "g" ? 0 : 1);
+      if (tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); }
       gl.bindBuffer(gl.ARRAY_BUFFER, r.pb);
       gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, r.ub);
+      gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, 0, 0);
+      if (r.cb && !tex) {
+        gl.uniform1i(loc.uVCol, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, r.cb);
+        gl.enableVertexAttribArray(loc.col);
+        gl.vertexAttribPointer(loc.col, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+      } else { gl.uniform1i(loc.uVCol, 0); gl.disableVertexAttribArray(loc.col); gl.vertexAttrib4f(loc.col, 1, 1, 1, 1); }
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.ib);
-      gl.drawElements(gl.TRIANGLES, r.count, r.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+      const type = r.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+      if (count > 0) ext.drawElementsInstancedANGLE(gl.TRIANGLES, r.count, type, 0, count);
+      else gl.drawElements(gl.TRIANGLES, r.count, type, 0);
     };
     gl.uniform1i(loc.uLine, 0);
-    if (tv.showTerrain) for (const r of tv.terrain) drawMesh(r, IDENT, 0);
-    {
-      for (const i of tv.inst) {
-        if (i.hidden || !tvLayer(i)) continue;
-        const ty = tv.types.get(i.type);
-        if (!ty) continue;
-        const hi = i.n === tv.sel ? 1 : 0;
-        for (const r of ty.meshes) drawMesh(r, i.m, hi);
+    constant(IDENT);
+    if (tv.showTerrain) for (const r of tv.terrain) drawMesh(r, 0, 0);
+    if (tv.inst && ext) {
+      for (const ty of tv.typeList) {
+        if (!ty.vis) continue;
+        gl.bindBuffer(gl.ARRAY_BUFFER, ty.vb);
+        rows.forEach((a, k) => {
+          gl.enableVertexAttribArray(a);
+          gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 48, k * 12);
+          ext.vertexAttribDivisorANGLE(a, 1);
+        });
+        for (const r of ty.meshes) drawMesh(r, 0, ty.vis);
+      }
+      if (tv.sel >= 0) {
+        const ty = tv.typeList[tv.inst.type[tv.sel]], o = tv.sel * 12;
+        constant(tv.inst.m.subarray(o, o + 12));
+        for (const r of ty.meshes) drawMesh(r, 1, 0);
+        constant(IDENT);
       }
     }
     gl.uniform1i(loc.uLine, 1);
-    gl.uniformMatrix4fv(loc.uModel, false, IDENT);
     gl.disable(gl.DEPTH_TEST);
     for (const l of tv.lines) {
       if (l.kind === "gate" ? !tv.showGates : !tv.showAi) continue;
@@ -315,33 +473,37 @@ function tvRay(e, canvas) {
   return { o: cam.eye, d: d.map((v) => v / dl) };
 }
 function tvInvAffine(m) {
-  const a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], i = m[10];
+  const a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5], g = m[6], h = m[7], i = m[8];
   const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g) || 1;
   const r = [(e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det, (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det, (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det];
   // linhas de m = base; o inverso do bloco 3×3 (vetor-linha) é a transposta do inverso usual
   return r;
 }
 function tvPick(e, canvas) {
-  const ray = tvRay(e, canvas);
+  if (!tv.inst) return;
+  const ray = tvRay(e, canvas), inst = tv.inst, R2 = tv.drawDist * tv.drawDist;
   let best = -1, bt = Infinity;
-  for (const i of tv.inst) {
-    if (i.hidden || !tvLayer(i)) continue;
-    const ty = tv.types.get(i.type);
-    if (!ty || ty.empty) continue;
-    // leva o raio ao espaço local: p_local = (p - t) * R^-1 (convenção de vetor-linha)
-    const m = i.m, inv = tvInvAffine(m);
-    const rel = [ray.o[0] - m[12], ray.o[1] - m[13], ray.o[2] - m[14]];
-    const loc = (v) => [v[0] * inv[0] + v[1] * inv[3] + v[2] * inv[6], v[0] * inv[1] + v[1] * inv[4] + v[2] * inv[7], v[0] * inv[2] + v[1] * inv[5] + v[2] * inv[8]];
-    const o = loc(rel), d = loc(ray.d);
-    let t0 = 0, t1 = Infinity, ok = true;
-    for (let k = 0; k < 3 && ok; k++) {
-      if (Math.abs(d[k]) < 1e-9) { if (o[k] < ty.lo[k] || o[k] > ty.hi[k]) ok = false; continue; }
-      let a = (ty.lo[k] - o[k]) / d[k], b = (ty.hi[k] - o[k]) / d[k];
-      if (a > b) [a, b] = [b, a];
-      t0 = Math.max(t0, a); t1 = Math.min(t1, b);
-      if (t0 > t1) ok = false;
+  for (const ty of tv.typeList) {
+    if (ty.empty || !tvLayerOn(ty.kind)) continue;
+    for (const i of tv.groups[ty.n]) {
+      if (inst.hidden[i]) continue;
+      const m = inst.m, b = i * 12;
+      if (ty.kind !== "dist") { const dx = m[b + 9] - tv.target[0], dz = m[b + 11] - tv.target[2]; if (dx * dx + dz * dz > R2) continue; }
+      // leva o raio ao espaço local: p_local = (p - t) * R^-1 (convenção de vetor-linha)
+      const inv = tvInvAffine([m[b], m[b + 1], m[b + 2], m[b + 3], m[b + 4], m[b + 5], m[b + 6], m[b + 7], m[b + 8]]);
+      const rel = [ray.o[0] - m[b + 9], ray.o[1] - m[b + 10], ray.o[2] - m[b + 11]];
+      const loc = (v) => [v[0] * inv[0] + v[1] * inv[3] + v[2] * inv[6], v[0] * inv[1] + v[1] * inv[4] + v[2] * inv[7], v[0] * inv[2] + v[1] * inv[5] + v[2] * inv[8]];
+      const o = loc(rel), d = loc(ray.d);
+      let t0 = 0, t1 = Infinity, ok = true;
+      for (let k = 0; k < 3 && ok; k++) {
+        if (Math.abs(d[k]) < 1e-9) { if (o[k] < ty.lo[k] || o[k] > ty.hi[k]) ok = false; continue; }
+        let a = (ty.lo[k] - o[k]) / d[k], c = (ty.hi[k] - o[k]) / d[k];
+        if (a > c) [a, c] = [c, a];
+        t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+        if (t0 > t1) ok = false;
+      }
+      if (ok && t0 < bt) { bt = t0; best = i; }
     }
-    if (ok && t0 < bt) { bt = t0; best = i.n; }
   }
   tvSelect(best);
 }
@@ -351,14 +513,25 @@ function tvSelect(n) {
   tvStatus(); tvInspect();
 }
 
+const tvRouteEntry = () => tv.data.routes.find((r) => r.name === tv.route) || tv.data.routes[0];
+
+function tvInstInfo(i) {
+  const ty = tv.typeList[tv.inst.type[i]], o = i * 12, m = tv.inst.m;
+  const idnum = tv.inst.idnum[i];
+  const route = tv.data.routes.find((r) => r.name === tv.route);
+  const id = ty.name[0] === "e" && route && route.ens_ids ? route.ens_ids[idnum] : (ty.name[0] === "o" ? "orn" : "tree") + idnum;
+  return { ty, id, pos: [m[o + 9], m[o + 10], m[o + 11]], rows: [...m.subarray(o, o + 9)] };
+}
+
 function tvStatus() {
   const note = document.getElementById("trk-note"), sel = document.getElementById("trk-sel");
   if (!note) return;
   if (tv.status) { note.textContent = tv.status; sel.textContent = ""; return; }
   const d = tv.data;
-  note.textContent = d ? t("trk.status", { terrain: d.terrain.meshes.toLocaleString("pt-BR"), inst: tv.inst.length.toLocaleString("pt-BR"), types: tv.types.size }) : "";
-  const i = tv.sel >= 0 ? tv.inst[tv.sel] : null;
-  sel.textContent = i ? `${tvName(i.type)} · ${i.m[12].toFixed(1)} ${i.m[13].toFixed(1)} ${i.m[14].toFixed(1)}` : "";
+  let shown = 0;
+  for (const ty of tv.typeList) shown += ty.vis || 0;
+  note.textContent = d && tv.inst ? t("trk.status", { terrain: tvRouteEntry().terrain.meshes.toLocaleString("pt-BR"), inst: tv.inst.n.toLocaleString("pt-BR"), shown: shown.toLocaleString("pt-BR"), types: tv.typeList.length }) : "";
+  if (tv.inst && tv.sel >= 0) { const f = tvInstInfo(tv.sel); sel.textContent = `${tvName(f.ty.name)} · ${f.pos.map((v) => v.toFixed(1)).join(" ")}`; } else sel.textContent = "";
 }
 
 function tvInspect() {
@@ -366,20 +539,19 @@ function tvInspect() {
   const row = TRACKS.find((r) => r.id === tv.id);
   if (!row) { box.innerHTML = `<p class="muted">${esc(t("trk.pick"))}</p>`; return; }
   const d = tv.data;
-  const i = tv.sel >= 0 ? tv.inst[tv.sel] : null;
   const kv = (k, v) => `<div>${esc(k)}</div><div class="mono">${esc(String(v))}</div>`;
-  const ty = i ? tv.types.get(i.type) : null;
+  const f = tv.inst && tv.sel >= 0 ? tvInstInfo(tv.sel) : null;
   box.innerHTML = `<h2>${esc(row.n)}</h2>
     <p class="muted small">${esc(row.c)} · ${esc(row.src)}</p>
     <div class="kv">
-      ${kv(t("trk.terrain"), d ? `${d.terrain.meshes.toLocaleString("pt-BR")} ${t("trk.blocks")} · ${d.terrain.verts.toLocaleString("pt-BR")} ${t("mdl.verts")}` : "…")}
+      ${kv(t("trk.terrain"), d ? `${tvRouteEntry().terrain.meshes.toLocaleString("pt-BR")} ${t("trk.blocks")} · ${tvRouteEntry().terrain.verts.toLocaleString("pt-BR")} ${t("mdl.verts")}` : "…")}
       ${kv(t("trk.routes"), (row.routes || []).join(", "))}
-      ${kv(t("trk.objects"), d ? `${tv.inst.length} ${t("trk.instances")} · ${tv.types.size} ${t("trk.types")}` : "…")}
+      ${kv(t("trk.objects"), d && tv.inst ? `${tv.inst.n.toLocaleString("pt-BR")} ${t("trk.instances")} (${tv.route}) · ${tv.typeList.length} ${t("trk.types")}` : "…")}
     </div>
-    ${i ? `<h3>${esc(t("trk.selected"))}</h3><div class="kv">
-      ${kv("id", i.id)}${kv(t("trk.type"), tvName(i.type))}${kv(t("trk.kind"), t("trk.kind." + i.kind))}${kv(t("trk.route"), i.route)}
-      ${kv(t("trk.pos"), `${i.m[12].toFixed(2)}, ${i.m[13].toFixed(2)}, ${i.m[14].toFixed(2)}`)}
-      ${kv(t("trk.meshes"), ty ? (ty.empty ? t("trk.nomesh") : ty.meshes.length) : "—")}
+    ${f ? `<h3>${esc(t("trk.selected"))}</h3><div class="kv">
+      ${kv("id", f.id)}${kv(t("trk.type"), tvName(f.ty.name))}${kv(t("trk.kind"), t("trk.kind." + f.ty.kind))}
+      ${kv(t("trk.pos"), f.pos.map((v) => v.toFixed(2)).join(", "))}
+      ${kv(t("trk.meshes"), f.ty.empty ? t("trk.nomesh") : f.ty.meshes.length)}
     </div>` : `<p class="muted">${esc(t("trk.hint"))}</p>`}`;
 }
 
@@ -387,14 +559,23 @@ const TV_ACTS = [
   ["showTerrain", "trk.show.terrain"], ["showObjects", "trk.show.objects"], ["showTrees", "trk.show.trees"], ["showDist", "trk.show.dist"], ["showGates", "trk.show.gates"], ["showAi", "trk.show.ai"],
 ];
 
+function tvRouteSelect() {
+  const el = document.getElementById("trk-route");
+  if (!el || !tv.data) return;
+  el.innerHTML = tv.data.routes.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} · ${r.instances.toLocaleString("pt-BR")}</option>`).join("");
+  el.value = tv.route;
+}
+
 function ensureTrackStage() {
   if (document.getElementById("trk-view")) return;
   tv.gen++;
-  tv.gl = null; tv.loadedId = null; tv.terrain = []; tv.types = new Map(); tv.inst = []; tv.lines = [];
+  tv.gl = null; tv.loadedId = null; tv.terrain = []; tv.types = new Map(); tv.typeList = []; tv.inst = null; tv.lines = []; tv.visKey = "";
   const opts = TRACKS.map((r) => `<option value="${esc(r.id)}">${esc(r.c)} · ${esc(r.n)}</option>`).join("");
   contentEl.innerHTML = `<div class="trk-ws">
     <div class="car-tb" role="toolbar">
       <select id="trk-open" title="${esc(t("trk.open"))}">${opts}</select>
+      <select id="trk-route" title="${esc(t("trk.route"))}"></select>
+      <label class="trk-opt" title="${esc(t("trk.dist"))}">${esc(t("trk.dist"))} <input type="range" id="trk-dd" min="100" max="4000" step="50" value="${tv.drawDist}"> <span id="trk-ddv">${tv.drawDist} m</span></label>
       ${TV_ACTS.map(([k, key]) => `<label class="trk-opt"><input type="checkbox" data-trk="${k}" ${tv[k] ? "checked" : ""}> ${esc(t(key))}</label>`).join("")}
       <button type="button" class="tb-btn" id="trk-frame" title="${esc(t("trk.frame"))}">${esc(t("trk.frame"))}</button>
     </div>
@@ -402,6 +583,8 @@ function ensureTrackStage() {
     <div class="car-sb"><span id="trk-note"></span><span id="trk-sel"></span></div>
   </div>`;
   document.getElementById("trk-open").addEventListener("change", (e) => { tv.id = e.target.value; history.replaceState(null, "", "#p=" + encodeURIComponent(tv.id)); tvOpen(tv.id); });
+  document.getElementById("trk-route").addEventListener("change", async (e) => { tv.busy = true; await tvLoadRoute(e.target.value); tv.busy = false; tvFrameRoute(); tvStatus(); tvInspect(); });
+  document.getElementById("trk-dd").addEventListener("input", (e) => { tv.drawDist = Number(e.target.value); document.getElementById("trk-ddv").textContent = tv.drawDist + " m"; });
   document.getElementById("trk-frame").addEventListener("click", () => { if (tv.data) tvFrameRoute(); });
   contentEl.querySelectorAll("[data-trk]").forEach((c) => c.addEventListener("change", () => { tv[c.dataset.trk] = c.checked; }));
   try { tvGL(); } catch (err) { document.getElementById("trk-note").textContent = String((err && err.message) || err); }
@@ -432,8 +615,8 @@ document.addEventListener("keydown", (e) => {
   if (state.mode !== "tracks" || /INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || "")) return;
   const k = e.key.toLowerCase();
   if (TV_WASD[k] || k === "shift") tv.keys.add(k);
-  else if (k === "f" && tv.sel >= 0) tvFrameInst(tv.inst[tv.sel]);
-  else if (k === "h" && tv.sel >= 0) { tv.inst[tv.sel].hidden = true; tvSelect(-1); }
+  else if (k === "f" && tv.sel >= 0) tvFrameInst(tv.sel);
+  else if (k === "h" && tv.sel >= 0) { tv.inst.hidden[tv.sel] = 1; tv.visKey = ""; tvSelect(-1); }
   else if (k === "escape") tvSelect(-1);
 });
 document.addEventListener("keyup", (e) => tv.keys.delete(e.key.toLowerCase()));

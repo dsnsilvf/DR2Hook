@@ -115,6 +115,7 @@ def _read_source(idx: dict[str, PSSGNode], source_id: str) -> dict[str, Any] | N
     positions: list[tuple[float, float, float]] | None = None
     uvs: list[tuple[float, float]] | None = None
     skins: list[int] | None = None
+    colors: bytes | None = None
     indices: list[int] = []
     primitive = "triangles"
     for child in source.children:
@@ -137,7 +138,7 @@ def _read_source(idx: dict[str, PSSGNode], source_id: str) -> dict[str, Any] | N
                     continue
                 kind, dtype = str(_attr(stream, "renderType") or ""), str(_attr(stream, "dataType") or "")
                 offset, stride = int(_attr(stream, "offset") or 0), int(_attr(stream, "stride") or 0)
-                width = {"float3": 12, "float2": 8, "half2": 4, "half4": 4, "float": 4}.get(dtype, 0)
+                width = {"float3": 12, "float2": 8, "half2": 4, "half4": 4, "float": 4, "uint_color_argb": 4}.get(dtype, 0)
                 if stride <= 0 or count <= 0 or width <= 0:
                     continue
                 if offset + (count - 1) * stride + width > len(raw):
@@ -154,6 +155,13 @@ def _read_source(idx: dict[str, PSSGNode], source_id: str) -> dict[str, Any] | N
                             u, v = struct.unpack_from(">2H", raw, base)
                             coords.append((decode_half(u), decode_half(v)))
                     uvs = coords
+                elif kind == "Color" and colors is None and dtype == "uint_color_argb":
+                    # bytes A, R, G, B no arquivo; guardados como R, G, B, A
+                    out = bytearray(count * 4)
+                    for i in range(count):
+                        a, r, g, b = raw[offset + i * stride: offset + i * stride + 4]
+                        out[i * 4: i * 4 + 4] = bytes((r, g, b, a))
+                    colors = bytes(out)
                 elif kind == "SkinIndices" and skins is None and dtype == "float":
                     skins = [int(struct.unpack_from(">f", raw, offset + i * stride)[0]) for i in range(count)]
     if primitive == "triangle_strip" and len(indices) > 2:
@@ -164,7 +172,7 @@ def _read_source(idx: dict[str, PSSGNode], source_id: str) -> dict[str, Any] | N
         indices = tris
     if not positions or len(indices) < 3:
         return None
-    return {"positions": positions, "uvs": uvs, "skins": skins, "indices": indices}
+    return {"positions": positions, "uvs": uvs, "skins": skins, "colors": colors, "indices": indices}
 
 
 def _lod_level(node: PSSGNode) -> int | None:
@@ -196,8 +204,8 @@ def _has_lod0(root: PSSGNode) -> bool:
     return False
 
 
-def extract_meshes(root: PSSGNode) -> list[dict[str, Any]]:
-    """Malhas do LOD0 (ou de todas as instâncias, se não houver LOD0)."""
+def extract_meshes(root: PSSGNode, colors: bool = False) -> list[dict[str, Any]]:
+    """Malhas do LOD0 (ou de todas as instâncias, se não houver LOD0). Com `colors`, também a cor por vértice."""
     idx = _index(root)
     parent = _parents(root)
     worlds: dict[int, tuple[float, ...]] = {}
@@ -248,6 +256,7 @@ def extract_meshes(root: PSSGNode) -> list[dict[str, Any]]:
             "positions": positions,
             "uvs": raw["uvs"],
             "indices": raw["indices"],
+            **({"colors": raw["colors"]} if colors and raw["colors"] else {}),
         })
     return meshes
 
@@ -268,7 +277,10 @@ def pack_geom(meshes: list[dict[str, Any]]) -> bytes:
         uvs = mesh["uvs"]
         indices = mesh["indices"]
         wide = any(i > 65535 for i in indices)
-        out += struct.pack("<HHIII", len(name), len(material), len(positions), len(indices), 1 if wide else 0)
+        colors = mesh.get("colors")
+        if colors and len(colors) != len(positions) * 4:
+            colors = None
+        out += struct.pack("<HHIII", len(name), len(material), len(positions), len(indices), (1 if wide else 0) | (2 if colors else 0))
         out += name + material
         _align(out)
         for x, y, z in positions:
@@ -278,6 +290,8 @@ def pack_geom(meshes: list[dict[str, Any]]) -> bytes:
                 out += struct.pack("<2f", uvs[i][0], uvs[i][1])
             else:
                 out += struct.pack("<2f", 0.0, 0.0)
+        if colors:
+            out += colors
         fmt = "<I" if wide else "<H"
         for index in indices:
             out += struct.pack(fmt, index)
@@ -311,7 +325,7 @@ def summarize_geom(path: str) -> dict[str, Any] | None:
             pos += mat_len
             pos = (pos + 3) & ~3
             step = 4 if flags & 1 else 2
-            pos += nv * 20 + ni * step
+            pos += nv * (24 if flags & 2 else 20) + ni * step
             pos = (pos + 3) & ~3
             if pos > len(data):
                 return None
@@ -346,11 +360,15 @@ def unpack_geom(data: bytes) -> list[dict[str, Any]]:
         pos += verts * 12
         uvs = [struct.unpack_from("<2f", data, pos + i * 8) for i in range(verts)]
         pos += verts * 8
+        colors = None
+        if flags & 2:
+            colors = data[pos : pos + verts * 4]
+            pos += verts * 4
         wide = flags & 1
         fmt = "<I" if wide else "<H"
         size = 4 if wide else 2
         index_list = [struct.unpack_from(fmt, data, pos + i * size)[0] for i in range(indices)]
         pos += indices * size
         pos = (pos + 3) & ~3
-        meshes.append({"name": name, "material": material, "positions": positions, "uvs": uvs, "indices": index_list})
+        meshes.append({"name": name, "material": material, "positions": positions, "uvs": uvs, "indices": index_list, **({"colors": colors} if colors else {})})
     return meshes
