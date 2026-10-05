@@ -4,7 +4,7 @@ import struct
 import unittest
 
 from tools.egodata.pssg import PSSGAttribute, PSSGNode
-from tools.uiview.carmodel import build_car_model, lod_label, pack_resources, unpack_resources
+from tools.uiview.car.carmodel import build_car_model, lod_label, pack_resources, unpack_resources
 
 
 def node(type_name, children=None, data=None, **attrs):

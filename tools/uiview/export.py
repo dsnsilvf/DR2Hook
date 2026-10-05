@@ -1,6 +1,6 @@
 """Exporta telas, cenas, textos e texturas do jogo para o visualizador.
 
-Só lê a pasta do jogo. A saída é uma pasta com `index.html`, `viewer.js`,
+Só lê a pasta do jogo. A saída é uma pasta com `index.html`, `js/`, `css/`,
 `data/*.js` e `tex/*.png`, que abre direto no navegador (file://).
 """
 
@@ -448,8 +448,7 @@ def _load_js(path: str, var: str) -> Any:
 
 
 def _copy_web(out: str) -> None:
-    for name in os.listdir(os.path.join(HERE, "web")):
-        shutil.copy(os.path.join(HERE, "web", name), os.path.join(out, name))
+    shutil.copytree(os.path.join(HERE, "web"), out, dirs_exist_ok=True)
     _bust_cache(out)
 
 
@@ -517,7 +516,7 @@ def run(game: str, out: str, force_textures: bool = False, scene_images_only: bo
     log(f"texturas das cenas: {len(wanted & set(textures))} de {len(wanted)}")
     ui["dialogs"] = export_dialogs(reader)
 
-    from tools.uiview.models import export_models
+    from tools.uiview.car.models import export_models
 
     model_assets, model_data = export_models(game, out, force_textures, log, models, all_models=all_models, jobs=jobs)
     # A galeria das cenas fica com a primeira ocorrência do nome; as texturas de
@@ -547,7 +546,7 @@ def run(game: str, out: str, force_textures: bool = False, scene_images_only: bo
 
 def _refresh_models(game: str, out: str, log, jobs: int | None = None) -> str:
     """Só os modelos, um pacote por vez. A interface já exportada permanece."""
-    from tools.uiview.models import export_models
+    from tools.uiview.car.models import export_models
 
     log("modelos: interface já exportada, só as malhas")
     model_assets, model_data = export_models(game, out, False, log, None, all_models=True, jobs=jobs)

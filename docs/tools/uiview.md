@@ -25,10 +25,22 @@ python -m tools.uiview.track --tracks montalegre,poland_rally_01 -o build/uiview
 python -m tools.uiview.serve [--port 8790] [--root build/uiview]
 
 # apply an exported edits file to a NEW .nefs (never inside the game folder)
-python -m tools.uiview.track_edit montalegre.edits.json -o build/uiview/saves/montalegre.nefs
+python -m tools.uiview.track.edit montalegre.edits.json -o build/uiview/saves/montalegre.nefs
 ```
 
 Tests: `bash scripts/dev/test_tools.sh` (or `python3 -m unittest discover -s tools/uiview/tests -t .`).
+
+## Layout
+
+```
+tools/uiview/
+  export.py content.py mesh.py   shared: UI screens, textures, DR2M geometry
+  car/                           Car Model Explorer (carmodel.py, models.py: package catalog and export)
+  track/                         Track Explorer (export.py: stage export, edit.py: write the edited .nefs)
+  serve.py                       local server with POST /api/save
+  web/                           index.html, css/, js/ (copied as is into the output folder)
+  tests/
+```
 
 ## Track Explorer controls
 
@@ -45,7 +57,7 @@ The layers (terrain, objects, trees, distant terrain, track limits, AI line) and
 
 ## How an edit reaches a `.nefs`
 
-The viewer keeps, for each object that changed, its new 3×3 matrix and position, or a *deleted* mark, or (for a copy) the index of the object it came from. `track_edit.py` turns that into changes to the source file of the object:
+The viewer keeps, for each object that changed, its new 3×3 matrix and position, or a *deleted* mark, or (for a copy) the index of the object it came from. `track/edit.py` turns that into changes to the source file of the object:
 
 | Object source | Edit |
 | --- | --- |

@@ -24,7 +24,7 @@ from typing import Any
 
 from tools.egodata.nefs import BLOCK_SIZE
 from tools.egodata.nefs_write import replace_files
-from tools.uiview import track
+from tools.uiview.track import export as track
 
 HIDDEN_Y = -10000.0
 _INSTANCE = re.compile(r"<TEMPLATEENTITYINSTANCE\b[^>]*>.*?</TEMPLATEENTITYINSTANCE>", re.DOTALL)
@@ -172,7 +172,7 @@ def check_blocks(arc, changes: dict[str, bytes]) -> list[str]:
 
 
 def apply(game: str, doc: dict[str, Any], out_path: str, log=print) -> dict[str, Any]:
-    from tools.uiview.models import open_package
+    from tools.uiview.car.models import open_package
 
     if doc.get("format") != "dr2-track-edits":
         raise ValueError("não é um arquivo de edições do Track Explorer")
@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from tools.egodata.cli import DEFAULT_GAME
 
-    parser = argparse.ArgumentParser(prog="python -m tools.uiview.track_edit", description="Aplica edições do Track Explorer num pacote .nefs novo")
+    parser = argparse.ArgumentParser(prog="python -m tools.uiview.track.edit", description="Aplica edições do Track Explorer num pacote .nefs novo")
     parser.add_argument("edits", help="arquivo .edits.json exportado pelo viewer")
     parser.add_argument("-o", "--output", required=True, help="caminho do .nefs novo (nunca a pasta do jogo)")
     parser.add_argument("--game", default=DEFAULT_GAME)

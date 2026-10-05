@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from tools.uiview import track, track_edit
+from tools.uiview.track import export as track, edit as track_edit
 
 ENS = """<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <PSSGFILE version="0.4.0.0beta">

@@ -369,7 +369,7 @@ def _ai_line(root: ET.Element) -> list[dict[str, Any]]:
 
 
 def export_track(game: str, rel: str, out: str, log=print) -> dict[str, Any]:
-    from tools.uiview.models import open_package
+    from tools.uiview.car.models import open_package
 
     arc = open_package(game, rel)
     base = track_base(arc)
@@ -555,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     from tools.egodata.cli import DEFAULT_GAME
-    from tools.uiview.models import package_list
+    from tools.uiview.car.models import package_list
 
     parser = argparse.ArgumentParser(prog="python -m tools.uiview.track", description="Exporta pistas para o Track Explorer")
     parser.add_argument("--game", default=DEFAULT_GAME)

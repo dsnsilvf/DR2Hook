@@ -206,7 +206,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | `docs/` | [Index](docs/README.md): `guides/` (install, Lua mods, remote commands), `architecture/`, `tools/` (dr2rec, UI Viewer) |
 | `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
 | `tools/dr2rec/`, `tools/egodata/` (NEFS, BXML, PSSG), `tools/dr2save.py`, `tools/dr2ghost.py` | Offline research tools (Python) |
-| `tools/uiview/` | DR2 UI Viewer: Car Model Explorer, Track Explorer / editor, exporter and track edit tool |
+| `tools/uiview/` | DR2 UI Viewer: `car/` (Car Model Explorer), `track/` (Track Explorer export and `.nefs` edit), `serve.py`, `web/` (HTML, `js/`, `css/`) |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
 | `src/core/hooks.cpp` | `Present`, window procedure, and Winsock hooks (resident in proxy) |
 | `src/core/host.cpp` | Loads `dr2hook_core.dll` and reloads it on F8 |
@@ -221,7 +221,9 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | `src/script/` | Lua runtime, mod loading, `Menu` API |
 | `src/ui/overlay.cpp` | ImGui overlay |
 | `mods/practice_mode/` | Example mod |
-| `tests/` | Unit and Wine tests |
+| `tests/` | C++ unit and Wine tests (Python tests live next to each tool, in `tools/*/tests`) |
+| `scripts/` | `release/`, `dev/`, `research/` |
+| `pyproject.toml` | Python tools metadata and optional dependencies |
 
 ## Fair play
 

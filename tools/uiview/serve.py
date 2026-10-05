@@ -16,7 +16,7 @@ import re
 import sys
 
 from tools.egodata.cli import DEFAULT_GAME
-from tools.uiview import track_edit
+from tools.uiview.track import edit as track_edit
 
 
 def save(game: str, root: str, doc: dict) -> str:

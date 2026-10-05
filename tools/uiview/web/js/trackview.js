@@ -1,5 +1,5 @@
 // Track Explorer: aba "Pistas". Terreno (tracksplit.pssg), objetos de route_N/objects.ens, portões e linha da IA.
-// Dados vindos de tools/uiview/track.py: tracks/<id>/{track.json, terrain.bin, objects.bin}.
+// Dados vindos de tools/uiview/track/export.py: tracks/<id>/{track.json, terrain.bin, objects.bin}.
 const TRACKS = typeof TRACK_DATA !== "undefined" ? TRACK_DATA : [];
 const tv = {
   id: null, loadedId: null, data: null, gl: null, prog: null, loc: null, gen: 0,
