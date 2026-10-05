@@ -332,6 +332,40 @@ function carResetCamera() { cv.yaw = 0.7; cv.pitch = 0.3; carFrame(null); }
 
 // ------------------------------------------------------------ lista (árvore)
 
+// Categorias da árvore: o PSSG despeja dezenas de nós irmãos (`x0_suspension3_fixed_bl`...).
+// A agrupação é só da lista; o modelo continua igual.
+const CAR_GROUPS = [
+  ["interior", /^(main_interior|door_int|steering|seat|dash|int_)/],
+  ["glass", /^window/],
+  ["lights", /^light/],
+  ["wheels", /^(wheel|tyre|disc|hub|caliper|brake)/],
+  ["susp", /^(suspension|wishbone|damper|spring)/],
+  ["engine", /^(engine|exhaust|fan|radiator|turbo)/],
+  ["body", /^(main_body|bonnet|boot|door|bumper|wing|spoiler|mud|under|aerial|mpn|wiper|splitter|diffuser|roof|scoop|vent|mirror|badge|plate)/],
+];
+const CAR_GROUP_MIN = 8;
+function carGroupOf(n) {
+  if (/^LOD\d/i.test(n.id)) return null;
+  const base = n.id.replace(/^x\d+_/i, "").toLowerCase();
+  for (const [key, re] of CAR_GROUPS) if (re.test(base)) return key;
+  return "other";
+}
+// [[categoria, nós]] na ordem fixa, ou null se a lista é curta demais para agrupar.
+function carGroups(kids) {
+  if (kids.length < CAR_GROUP_MIN) return null;
+  const by = new Map();
+  const direct = [];
+  for (const c of kids) {
+    const g = carGroupOf(c);
+    if (!g) { direct.push(c); continue; }
+    if (!by.has(g)) by.set(g, []);
+    by.get(g).push(c);
+  }
+  if (!by.size) return null;
+  const order = [...CAR_GROUPS.map((g) => g[0]), "other"];
+  return { direct, groups: order.filter((k) => by.has(k)).map((k) => [k, by.get(k)]) };
+}
+
 function carNodeMatches(n, q) {
   if (n.id.toLowerCase().includes(q)) return true;
   if (n.slices.some((s) => (s.material || "").toLowerCase().includes(q))) return true;
@@ -363,7 +397,22 @@ function carRows(q) {
         <span class="tw"></span><span class="tw eye" data-act="seye" data-key="${s.key}" title="${esc(t("car.eye"))}">${eyeOn(cv.hiddenSlices.has(s.key))}</span>
         <span class="nm" title="${esc(s.material)} · ${s.vc.toLocaleString("pt-BR")} v · ${s.tris.toLocaleString("pt-BR")} △">${esc(s.material)}</span><span class="cnt">${s.tris.toLocaleString("pt-BR")}</span></div>`);
     }
-    for (const c of n.children) visit(c, depth + 1, off);
+    const kids = n.children.filter((c) => lodOk(c) && (!q || carNodeMatches(c, q)));
+    const split = carGroups(kids);
+    if (!split) { for (const c of kids) visit(c, depth + 1, off); return; }
+    for (const c of split.direct) visit(c, depth + 1, off);
+    for (const [cat, members] of split.groups) {
+      const gk = `g:${n.uid}:${cat}`;
+      const gopen = q ? true : cv.expanded.has(gk);
+      const goff = off || members.every((m) => cv.hidden.has(m.uid));
+      const tris = members.reduce((a, m) => a + (m._tris || 0), 0);
+      const label = `${t("car.grp." + cat)} (${members.length})`;
+      rows.push(`<div class="row tree-row group${goff ? " off" : ""}" data-id="${esc(gk)}" style="padding-left:${6 + (depth + 1) * 14}px">
+        <span class="tw caret" data-act="gtoggle" data-gk="${esc(gk)}">${gopen ? "▾" : "▸"}</span>
+        <span class="tw eye" data-act="geye" data-uids="${members.map((m) => m.uid).join(",")}" title="${esc(t("car.eye"))}">${eyeOn(members.every((m) => cv.hidden.has(m.uid)))}</span>
+        <span class="nm" title="${esc(label)}">${esc(label)}</span><span class="cnt">${tris ? tris.toLocaleString("pt-BR") : ""}</span></div>`);
+      if (gopen) for (const c of members) visit(c, depth + 2, off);
+    }
   };
   visit(cv.data.tree, 0, false);
   return rows.length ? rows : [`<p class="muted" style="padding:12px">${esc(t("nothing"))}</p>`];
@@ -377,6 +426,25 @@ function carListClick(e) {
   if (act && act.dataset.act === "toggle") {
     const uid = Number(act.dataset.uid);
     if (cv.expanded.has(uid)) cv.expanded.delete(uid); else cv.expanded.add(uid);
+    renderList();
+    return;
+  }
+  if (act && act.dataset.act === "gtoggle") {
+    const gk = act.dataset.gk;
+    if (cv.expanded.has(gk)) cv.expanded.delete(gk); else cv.expanded.add(gk);
+    renderList();
+    return;
+  }
+  if (act && act.dataset.act === "geye") {
+    const uids = act.dataset.uids.split(",").map(Number);
+    const all = uids.every((u) => cv.hidden.has(u));
+    uids.forEach((u) => { if (all) cv.hidden.delete(u); else cv.hidden.add(u); });
+    cv.dirty = true; renderList();
+    return;
+  }
+  if (row.classList.contains("group")) {
+    const gk = row.dataset.id;
+    if (cv.expanded.has(gk)) cv.expanded.delete(gk); else cv.expanded.add(gk);
     renderList();
     return;
   }
@@ -793,7 +861,11 @@ function carDock(on) {
 function carTreeTools(e) {
   const b = e.target.closest("[data-tree]");
   if (!b || !cv.data) return;
-  if (b.dataset.tree === "expand") cv.nodes.forEach((n) => { if (n.children.length || n.slices.length) cv.expanded.add(n.uid); });
+  if (b.dataset.tree === "expand") cv.nodes.forEach((n) => {
+    if (n.children.length || n.slices.length) cv.expanded.add(n.uid);
+    const split = carGroups(n.children);
+    if (split) split.groups.forEach(([cat]) => cv.expanded.add(`g:${n.uid}:${cat}`));
+  });
   else { cv.expanded.clear(); cv.expanded.add(cv.data.tree.uid); }
   renderList();
 }
