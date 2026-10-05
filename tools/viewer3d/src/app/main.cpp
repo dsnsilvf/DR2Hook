@@ -1,10 +1,12 @@
 // DR2 Viewer3D: janela SDL3 com contexto OpenGL 3.3 core e câmera orbital do Track Explorer.
 //
-//   viewer3d [--frames N] [--screenshot arq.ppm]
+//   viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1]
 //
-// Com --frames, roda N quadros, imprime "OK renderer=... gl=... frames=N" e sai com 0.
-// Com --screenshot, grava o último quadro em PPM antes de sair.
+// Sem --track, mostra a cena de teste (cubo e grade). Com --track, abre a pista exportada em DIR
+// (track.json, terrain_<n>.bin, ...). Com --frames, roda N quadros, imprime
+// "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
 
+#include "app/track_view.hpp"
 #include "render/camera.hpp"
 #include "render/gl.hpp"
 
@@ -17,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,6 +29,8 @@ namespace {
 struct Options {
     long frames = -1;  // -1 = até fechar a janela
     const char* screenshot = nullptr;
+    const char* track = nullptr;
+    int vsync = 1;
 };
 
 bool parse_args(int argc, char** argv, Options& opt) {
@@ -39,8 +44,12 @@ bool parse_args(int argc, char** argv, Options& opt) {
             }
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             opt.screenshot = argv[++i];
+        } else if (std::strcmp(argv[i], "--track") == 0 && i + 1 < argc) {
+            opt.track = argv[++i];
+        } else if (std::strcmp(argv[i], "--vsync") == 0 && i + 1 < argc) {
+            opt.vsync = std::atoi(argv[++i]) != 0 ? 1 : 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--frames N] [--screenshot arq.ppm]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1]\n");
             return false;
         }
     }
@@ -61,7 +70,7 @@ const char* gl_string(GLenum name) {
 // SDL, janela e contexto GL. O destrutor desfaz na ordem inversa.
 class Platform {
 public:
-    Platform() {
+    explicit Platform(int vsync) {
         if (!SDL_Init(SDL_INIT_VIDEO)) throw sdl_error("SDL_Init");
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -81,7 +90,7 @@ public:
             release();
             throw err;
         }
-        SDL_GL_SetSwapInterval(1);
+        SDL_GL_SetSwapInterval(vsync);
 
         glewExperimental = GL_TRUE;
         GLenum glew = glewInit();
@@ -232,13 +241,15 @@ struct Drag {
     bool pan = false;
 };
 
-// Traduz eventos SDL em chamadas da câmera. Devolve false para sair.
-bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& drag) {
+// Traduz eventos SDL em chamadas da câmera; as teclas vão antes para a pista, se houver.
+// Devolve false para sair.
+bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& drag, dr2::app::TrackView* track) {
     switch (event.type) {
     case SDL_EVENT_QUIT:
         return false;
     case SDL_EVENT_KEY_DOWN:
         if (event.key.key == SDLK_ESCAPE) return false;
+        if (track && track->key(event.key.key, cam)) break;
         if (event.key.key == SDLK_F) cam.reset();
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -279,13 +290,20 @@ void walk_keys(dr2::render::OrbitCamera& cam, float dt) {
 }
 
 int run(const Options& opt) {
-    Platform platform;
+    Platform platform(opt.vsync);
     SDL_Window* window = platform.window();
     const std::string renderer = gl_string(GL_RENDERER);
     const std::string version = gl_string(GL_VERSION);
 
     dr2::render::OrbitCamera cam;
-    TestScene scene(cam.target);
+    std::unique_ptr<TestScene> scene;
+    std::unique_ptr<dr2::app::TrackView> track;
+    if (opt.track) {
+        track = std::make_unique<dr2::app::TrackView>(opt.track);
+        track->frame_route(cam);
+    } else {
+        scene = std::make_unique<TestScene>(cam.target);
+    }
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
@@ -293,6 +311,7 @@ int run(const Options& opt) {
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 title_t0 = SDL_GetPerformanceCounter();
     Uint64 last_t = title_t0;
+    const Uint64 start_t = title_t0;
     long title_frames = 0;
     long frames = 0;
     bool running = true;
@@ -300,7 +319,7 @@ int run(const Options& opt) {
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event))
-            if (!handle_event(event, cam, drag)) running = false;
+            if (!handle_event(event, cam, drag, track.get())) running = false;
         const Uint64 frame_t = SDL_GetPerformanceCounter();
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
@@ -312,7 +331,9 @@ int run(const Options& opt) {
         glClearColor(0.55f, 0.68f, 0.82f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
-        scene.draw(cam.proj(aspect) * cam.view());
+        const glm::mat4 view_proj = cam.proj(aspect) * cam.view();
+        if (track) track->draw(view_proj);
+        else scene->draw(view_proj);
         dr2::gl::check("quadro");
 
         ++frames;
@@ -325,8 +346,9 @@ int run(const Options& opt) {
         const double elapsed = static_cast<double>(now - title_t0) / static_cast<double>(freq);
         if (elapsed >= 0.5) {
             char title[512];
-            std::snprintf(title, sizeof title, "DR2 Viewer3D | %s | GL %s | %.0f fps", renderer.c_str(), version.c_str(),
-                          title_frames / elapsed);
+            const std::string what = track ? " | " + track->title() : std::string();
+            std::snprintf(title, sizeof title, "DR2 Viewer3D | %s | GL %s%s | %.0f fps", renderer.c_str(), version.c_str(),
+                          what.c_str(), title_frames / elapsed);
             SDL_SetWindowTitle(window, title);
             title_t0 = now;
             title_frames = 0;
@@ -334,7 +356,11 @@ int run(const Options& opt) {
         if (last) running = false;
     }
 
-    if (opt.frames > 0) std::printf("OK renderer=%s gl=%s frames=%ld\n", renderer.c_str(), version.c_str(), frames);
+    if (opt.frames > 0) {
+        const double total = static_cast<double>(SDL_GetPerformanceCounter() - start_t) / static_cast<double>(freq);
+        std::printf("OK renderer=%s gl=%s frames=%ld fps=%.1f\n", renderer.c_str(), version.c_str(), frames, frames / total);
+        if (track) std::printf("%s\n", track->title().c_str());
+    }
     return 0;
 }
 

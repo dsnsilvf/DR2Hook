@@ -12,6 +12,8 @@ endif()
 find_package(SDL3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
 # GLM só de cabeçalhos; nem toda distribuição instala o glmConfig.cmake.
 find_path(GLM_INCLUDE_DIR glm/glm.hpp REQUIRED)
 add_library(glm_headers INTERFACE)
@@ -33,11 +35,17 @@ add_library(dr2core STATIC
 target_include_directories(dr2core PUBLIC src)
 
 # render: GL, câmera, desenho. Não conhece SDL.
-add_library(dr2render STATIC src/render/gl.cpp)
+add_library(dr2render STATIC
+    src/render/gl.cpp
+    src/render/track_shader.cpp
+    src/render/terrain.cpp
+    src/render/texture.cpp
+    src/render/lines.cpp
+)
 target_include_directories(dr2render PUBLIC src)
-target_link_libraries(dr2render PUBLIC GLEW::GLEW OpenGL::GL glm_headers)
+target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers PRIVATE PkgConfig::WEBP)
 
-add_executable(viewer3d src/app/main.cpp)
+add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp)
 target_link_libraries(viewer3d PRIVATE dr2render SDL3::SDL3)
 
 add_executable(camera_test tests/camera_test.cpp)

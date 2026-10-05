@@ -128,6 +128,12 @@ void test_track(const std::string& dir) {
     check(t.verts == r0.terrain_verts, "track: vértices do terreno batem com routes[0].terrain.verts");
     check(!r0.gates.empty() || !r0.ai.empty(), "track: rota com portões ou linha da IA");
 
+    std::size_t missing = 0;
+    for (const auto& [mat, file] : track.materials)
+        if (!std::filesystem::exists(dr2::join_path(dir, file))) ++missing;
+    std::printf("  materials: %zu, arquivos ausentes: %zu\n", track.materials.size(), missing);
+    check(missing == 0, "track: todo arquivo de materials existe em tex/");
+
     const std::string expected_path = dr2::join_path(dir, "expected.json");
     if (std::filesystem::exists(expected_path)) {
         const auto exp = dr2::json::parse_file(expected_path);
@@ -144,10 +150,12 @@ void test_track(const std::string& dir) {
         check(terrain[0].name == fm["name"].as_string() && terrain[0].material == fm["material"].as_string() &&
                   terrain[0].verts == fm["verts"].as_number() && terrain[0].indices == fm["indices"].as_number(),
               "track: primeira malha igual à do Python");
+        check(track.materials.size() == exp["materials"].as_number(), "track: número de materiais");
         std::printf("  expected.json (oráculo Python): igual\n");
     }
     if (track.id == "portugal__montalegre_rallycross") {
         check(t.meshes == 1324 && t.verts == 428789 && t.tris == 557900, "montalegre: 1324 / 428 789 / 557 900");
+        check(track.materials.size() == 820, "montalegre: 820 materiais");
         std::printf("  Montalegre: números do plano conferem\n");
     }
 }
