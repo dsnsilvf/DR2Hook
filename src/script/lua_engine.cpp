@@ -1,5 +1,8 @@
 #include "dr2hook/script/lua_engine.h"
+#include "dr2hook/cutscene_probe.h"
+#include "dr2hook/ghost_lab.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
@@ -466,6 +469,74 @@ static int Lua_Safety_isRestrictedMode(lua_State *L) {
 }
 
 // ---------------------------------------------------------------------------
+// Bindings nativos para Race (largada; hooks em CutsceneProbe)
+// ---------------------------------------------------------------------------
+// Race.setStartMode("normal" | "no_countdown" | "automatic" | "on_throttle")
+// ---------------------------------------------------------------------------
+// Bindings nativos para Ghost (carros fantasma, GhostLab)
+// ---------------------------------------------------------------------------
+static int Lua_Ghost_status(lua_State *L) {
+  const dr2hook::GhostLab::Status st = dr2hook::GhostLab::GetStatus();
+  lua_createtable(L, 0, 9);
+  lua_pushboolean(L, st.active);
+  lua_setfield(L, -2, "active");
+  lua_pushinteger(L, st.slots);
+  lua_setfield(L, -2, "slots");
+  lua_pushinteger(L, st.readySlots);
+  lua_setfield(L, -2, "readySlots");
+  lua_pushnumber(L, st.lapSeconds);
+  lua_setfield(L, -2, "lapSeconds");
+  lua_pushnumber(L, st.ghostSeconds);
+  lua_setfield(L, -2, "ghostSeconds");
+  lua_pushnumber(L, st.playerSeconds);
+  lua_setfield(L, -2, "playerSeconds");
+  lua_pushnumber(L, st.deltaSeconds);
+  lua_setfield(L, -2, "delta");
+  lua_pushnumber(L, st.gapMeters);
+  lua_setfield(L, -2, "gapMeters");
+  lua_pushnumber(L, st.offTrackMeters);
+  lua_setfield(L, -2, "offTrackMeters");
+  return 1;
+}
+
+// Ghost.clone(count, stepSeconds): count = 0 tira os clones.
+static int Lua_Ghost_clone(lua_State *L) {
+  const int count = static_cast<int>(luaL_checkinteger(L, 1));
+  const float step = static_cast<float>(luaL_optnumber(L, 2, 2.0));
+  dr2hook::GhostLab::RequestClones(count, step);
+  return 0;
+}
+
+static int Lua_Ghost_setOpaque(lua_State *L) {
+  dr2hook::GhostLab::SetOpaque(lua_toboolean(L, 1) != 0);
+  return 0;
+}
+
+static int Lua_Ghost_setTimeOffset(lua_State *L) {
+  lua_pushboolean(L, dr2hook::GhostLab::SetTimeOffset(
+                         static_cast<float>(luaL_checknumber(L, 1))));
+  return 1;
+}
+
+static int Lua_Ghost_setHud(lua_State *L) {
+  dr2hook::GhostLab::SetHudVisible(lua_toboolean(L, 1) != 0);
+  return 0;
+}
+
+static int Lua_Race_setStartMode(lua_State *L) {
+  const char *mode = luaL_checkstring(L, 1);
+  if (!CutsceneProbe::SetStartMode(mode)) {
+    return luaL_error(L, "Race.setStartMode: modo invalido '%s'", mode);
+  }
+#if defined(_WIN32)
+  lua_pushboolean(L, 1);
+#else
+  lua_pushboolean(L, 0); // sem jogo, sem hook
+#endif
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Bindings nativos para UI
 // ---------------------------------------------------------------------------
 static int Lua_UI_notify(lua_State *L) {
@@ -583,6 +654,66 @@ static int Lua_Menu_set(lua_State *L) {
     option->index = static_cast<size_t>(index - 1);
   }
   ModMenu::MarkDirty();
+  ModManager::SaveModSettings(ModMenu::CurrentMod());
+  return 0;
+}
+
+// Menu.describe(id, text): descrição da opção no painel da direita da tela
+// nativa. Sem ela, o painel mostra o nome da opção e a descrição do mod.
+// Texto do painel da direita (tela nativa, nó de texto rico): `*negrito*` ou
+// `**negrito**` viram {s:_22_din_bold}...{s:_22_roboto_cnd} (estilos de
+// frontend/configs/text_styles.xml; _22_roboto_cnd é a base do painel) e
+// `\*` é um asterisco. Texto que já começa com {v} passa sem conversão.
+static std::string DescriptionMarkup(const std::string &source) {
+  static constexpr char kBold[] = "{s:_22_din_bold}";
+  static constexpr char kNormal[] = "{s:_22_roboto_cnd}";
+  if (source.rfind("{v}", 0) == 0) {
+    return source;
+  }
+  std::string out;
+  bool bold = false, styled = false;
+  for (size_t i = 0; i < source.size(); ++i) {
+    const char c = source[i];
+    if (c == '\\' && i + 1 < source.size() && source[i + 1] == '*') {
+      out += '*';
+      ++i;
+    } else if (c == '*') {
+      if (i + 1 < source.size() && source[i + 1] == '*') {
+        ++i; // ** igual a *
+      }
+      out += bold ? kNormal : kBold;
+      bold = !bold;
+      styled = true;
+    } else {
+      out += c;
+    }
+  }
+  if (bold) {
+    out += kNormal; // * sem par: fecha no fim
+  }
+  return styled ? "{v}" + out : out;
+}
+
+static int Lua_Menu_describe(lua_State *L) {
+  ModOption *option =
+      ModMenu::Find(ModMenu::CurrentMod(), luaL_checkstring(L, 1));
+  if (option == nullptr) {
+    return luaL_error(L, "Menu.describe: unknown option");
+  }
+  // O texto do jogo desenha um \n no começo de linha como caractere
+  // desconhecido: linha vazia vira um espaço. \r sai por precaução.
+  std::string text;
+  for (const char *c = luaL_optstring(L, 2, ""); *c != '\0'; ++c) {
+    if (*c == '\r') {
+      continue;
+    }
+    if (*c == '\n' && !text.empty() && text.back() == '\n') {
+      text += ' ';
+    }
+    text += *c;
+  }
+  option->description = DescriptionMarkup(text);
+  ModMenu::MarkDirty();
   return 0;
 }
 
@@ -674,6 +805,26 @@ void LuaEngine::RegisterBindings() {
   lua_setfield(s_L, -2, "isRestrictedMode");
   lua_setglobal(s_L, "Safety");
 
+  // Tabela Race
+  lua_createtable(s_L, 0, 1);
+  lua_pushcfunction(s_L, Lua_Race_setStartMode);
+  lua_setfield(s_L, -2, "setStartMode");
+  lua_setglobal(s_L, "Race");
+
+  // Tabela Ghost
+  lua_createtable(s_L, 0, 5);
+  lua_pushcfunction(s_L, Lua_Ghost_status);
+  lua_setfield(s_L, -2, "status");
+  lua_pushcfunction(s_L, Lua_Ghost_clone);
+  lua_setfield(s_L, -2, "clone");
+  lua_pushcfunction(s_L, Lua_Ghost_setOpaque);
+  lua_setfield(s_L, -2, "setOpaque");
+  lua_pushcfunction(s_L, Lua_Ghost_setTimeOffset);
+  lua_setfield(s_L, -2, "setTimeOffset");
+  lua_pushcfunction(s_L, Lua_Ghost_setHud);
+  lua_setfield(s_L, -2, "setHud");
+  lua_setglobal(s_L, "Ghost");
+
   // Tabela UI
   lua_createtable(s_L, 0, 1);
   lua_pushcfunction(s_L, Lua_UI_notify);
@@ -681,7 +832,7 @@ void LuaEngine::RegisterBindings() {
   lua_setglobal(s_L, "UI");
 
   // Tabela Menu
-  lua_createtable(s_L, 0, 5);
+  lua_createtable(s_L, 0, 6);
   lua_pushcfunction(s_L, Lua_Menu_toggle);
   lua_setfield(s_L, -2, "toggle");
   lua_pushcfunction(s_L, Lua_Menu_choice);
@@ -692,6 +843,8 @@ void LuaEngine::RegisterBindings() {
   lua_setfield(s_L, -2, "get");
   lua_pushcfunction(s_L, Lua_Menu_set);
   lua_setfield(s_L, -2, "set");
+  lua_pushcfunction(s_L, Lua_Menu_describe);
+  lua_setfield(s_L, -2, "describe");
   lua_setglobal(s_L, "Menu");
 }
 

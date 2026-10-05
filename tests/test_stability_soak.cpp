@@ -40,6 +40,7 @@ static int g_testsFailed = 0;
   TEST_ASSERT(std::fabs((val) - (expected)) <= (eps), msg)
 
 static size_t GetProcessMemoryRSSBytes() {
+#if defined(__linux__)
   std::ifstream statm("/proc/self/statm");
   if (!statm.is_open()) {
     return 0;
@@ -51,6 +52,9 @@ static size_t GetProcessMemoryRSSBytes() {
     pageSize = 4096;
   }
   return resident * static_cast<size_t>(pageSize);
+#else
+  return 0;
+#endif
 }
 
 // ---------------------------------------------------------------------------

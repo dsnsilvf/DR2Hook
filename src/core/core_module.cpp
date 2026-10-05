@@ -1,6 +1,13 @@
 #include "dr2hook/core_api.h"
+#include "dr2hook/cutscene_probe.h"
+#include "dr2hook/free_camera.h"
+#include "dr2hook/ghost_lab.h"
+#include "dr2hook/ghost_trace.h"
+#include "dr2hook/terminal_damage.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
+#include "dr2hook/net_dialog.h"
+#include "dr2hook/remote_commands.h"
 #include "dr2hook/physics_tick_harness.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
@@ -35,6 +42,32 @@ bool ConsumeReloadModsRequest() {
   static const auto consume =
       HostExport<ConsumeFn>("Dr2Host_ConsumeReloadModsRequest");
   return consume != nullptr && consume() != 0;
+}
+
+// Eventos de especial enfileirados pela proxy (hooks rodam fora da thread de
+// render); o Lua so e chamado daqui.
+void DispatchStageEvents() {
+  static const auto consume =
+      HostExport<Dr2HostStageConsumeEventFn>("Dr2Host_StageConsumeEvent");
+  dr2hook::Dr2StageEvent event{};
+  while (consume != nullptr && consume(&event) != 0) {
+    event.name[sizeof(event.name) - 1] = '\0';
+    switch (event.kind) {
+    case dr2hook::kDr2StageLoad:
+      dr2hook::GhostLab::OnStageLoad();
+      dr2hook::ModManager::DispatchStageLoad(event.name);
+      break;
+    case dr2hook::kDr2StageCountdown:
+      dr2hook::ModManager::DispatchCountdown(event.value);
+      break;
+    case dr2hook::kDr2StageStart:
+      dr2hook::GhostLab::OnStageStart();
+      dr2hook::ModManager::DispatchStageStart(event.name, event.value != 0);
+      break;
+    default:
+      break;
+    }
+  }
 }
 
 // Cliques da tela nativa de mod vão para o Lua; o menu só é republicado
@@ -83,7 +116,8 @@ void SyncNativeMenu() {
                            : dr2hook::kDr2MenuButton;
       options[i].push_back({option.label.c_str(), texts.data(),
                             static_cast<int>(texts.size()),
-                            static_cast<int>(option.ValueIndex()), kind});
+                            static_cast<int>(option.ValueIndex()), kind,
+                            option.description.c_str()});
     }
     mods[i] = {entries[i].name.c_str(), entries[i].description.c_str(),
                options[i].data(), static_cast<int>(options[i].size())};
@@ -109,6 +143,19 @@ int Core_Initialize(int truncateLog) {
       dr2hook::Logger::Error("Falha ao inicializar ModManager.");
     }
 
+    dr2hook::CutsceneProbe::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::FreeCamera::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::GhostLab::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::GhostTrace::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::TerminalDamage::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::NetDialog::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
       const uintptr_t gameBase = reinterpret_cast<uintptr_t>(
@@ -129,7 +176,13 @@ int Core_Initialize(int truncateLog) {
 void Core_Shutdown() {
   try {
     dr2hook::OverlayManager::Shutdown();
+    dr2hook::FreeCamera::Shutdown();
     dr2hook::PhysicsTickHarness::Shutdown();
+    dr2hook::CutsceneProbe::Shutdown();
+    dr2hook::GhostTrace::Shutdown();
+    dr2hook::GhostLab::Shutdown();
+    dr2hook::TerminalDamage::Shutdown();
+    dr2hook::NetDialog::Shutdown();
     dr2hook::SavestateManager::Shutdown();
     dr2hook::ModManager::Shutdown();
     dr2hook::Logger::Info("DR2Hook Core descarregado.");
@@ -167,6 +220,18 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
       dr2hook::Player::ResolveVehicleAddress(
           reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     }
+    dr2hook::GhostLab::Update();
+    {
+      std::string notice;
+      if (dr2hook::GhostLab::TakeSpawnNotice(notice) &&
+          dr2hook::OverlayManager::IsInitialized()) {
+        dr2hook::OverlayManager::AddNotification(notice, 3.0f,
+                                                 dr2hook::ToastType::Info);
+      }
+    }
+    dr2hook::TerminalDamage::Update();
+    dr2hook::RemoteCommands::Poll(hwnd);
+    DispatchStageEvents();
     dr2hook::ModManager::DispatchTick(deltaTime);
 
     if (ConsumePauseMenuRequest()) {
@@ -181,6 +246,7 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
     }
     SyncNativeMenu();
 
+    dr2hook::FreeCamera::OnFrame(hwnd);
     if (dr2hook::OverlayManager::IsInitialized()) {
       dr2hook::OverlayManager::Render(swapChain);
     }
@@ -194,6 +260,53 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) &&
         (wParam == VK_INSERT || wParam == 0x2D)) {
       dr2hook::OverlayManager::ToggleMenu();
+      return 1;
+    }
+
+    if (dr2hook::FreeCamera::OnWndProc(hwnd, msg, wParam, lParam) != 0) {
+      return 1;
+    }
+
+    // Esc no dano terminal: pede a pausa (nao consome a tecla).
+    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE && (lParam & (1 << 30)) == 0) {
+      dr2hook::TerminalDamage::RequestPause();
+    }
+
+    // F7: teste de limite, mais uma copia do fantasma por toque (log em
+    // "GhostLab[limite]"). So com dr2hook_ghost_cars.txt; senao vale o F7 do checkpoint.
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F7 &&
+        (lParam & (1 << 30)) == 0 && dr2hook::GhostLab::TestModeActive()) {
+      dr2hook::GhostLab::SpawnClone();
+      return 1;
+    }
+
+    // F6: pausa/despausa so os clones do fantasma (teste de clones; so com
+    // dr2hook_ghost_cars.txt, senao vale o F6 do checkpoint).
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F6 &&
+        (lParam & (1 << 30)) == 0 && dr2hook::GhostLab::TestModeActive()) {
+      const bool paused = dr2hook::GhostLab::ToggleClonePause();
+      if (dr2hook::OverlayManager::IsInitialized()) {
+        dr2hook::OverlayManager::AddNotification(
+            paused ? "Ghost cars paused." : "Ghost cars resumed.", 2.0f,
+            dr2hook::ToastType::Info);
+      }
+      return 1;
+    }
+
+    // F11: insta crash, destroi o carro na hora (dano terminal).
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F11 &&
+        (lParam & (1 << 30)) == 0) {
+      using R = dr2hook::TerminalDamage::Result;
+      const R r = dr2hook::TerminalDamage::Crash();
+      if (dr2hook::OverlayManager::IsInitialized()) {
+        const char *text = "Car destroyed.";
+        auto type = dr2hook::ToastType::Info;
+        if (r == R::Blocked) { text = "Crash blocked: online event."; type = dr2hook::ToastType::Error; }
+        else if (r == R::NoController) { text = "Crash unavailable: not in a stage."; type = dr2hook::ToastType::Error; }
+        else if (r == R::BadChain) { text = "Crash failed: unexpected game state."; type = dr2hook::ToastType::Error; }
+        else if (r == R::AlreadyDown) { text = "Car already destroyed."; }
+        dr2hook::OverlayManager::AddNotification(text, 2.0f, type);
+      }
       return 1;
     }
 

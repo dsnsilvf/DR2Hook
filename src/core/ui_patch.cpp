@@ -150,6 +150,9 @@ struct Row {
   std::string visibilityPath;
   // Posição do combo (nós <kOptionDataPrefix>N.*); -1 é um botão.
   int comboSlot = -1;
+  // Grava o índice em foco em selected_index, como em
+  // profile_save_management; a DLL troca o painel da direita.
+  bool reportsFocus = false;
 };
 
 // Linha de smart_screen no formato de profile_save_management (botão) e de
@@ -183,6 +186,10 @@ Node RowItem(size_t index, const Row &row) {
                                    {{"out_data_path", "event"},
                                     {"select_value", row.event},
                                     {"help_text", "lng_select"}}));
+  if (row.reportsFocus) {
+    item.children.push_back(MakeNode(
+        "IBItemFlowIndex", {{"index", i}, {"index_data_path", "selected_index"}}));
+  }
   if (!row.visibilityPath.empty()) {
     item.children.push_back(MakeNode("BVisibilityControlData",
                                      {{"data_path", row.visibilityPath},
@@ -232,10 +239,23 @@ bool BuildPage(const Node &templateScreen, const PageDef &page,
   }
 
   titleText->SetAttribute("string", page.titleKey);
-  title->SetAttribute("string_id", page.titleKey);
+  title->SetAttribute("string_id",
+                      page.breadcrumbKey != nullptr ? page.breadcrumbKey : page.titleKey);
   audio->SetAttribute("screen_name", page.name);
-  infoTitle->SetAttribute("string", page.infoTitleKey);
-  infoText->SetAttribute("string", page.infoTextKey);
+  if (page.infoTitleKey != nullptr) {
+    infoTitle->SetAttribute("string", page.infoTitleKey);
+    infoText->SetAttribute("string", page.infoTextKey);
+  } else {
+    // Painel ligado a dados (sidebar.*), escrito pela DLL conforme o foco.
+    *infoTitle = MakeNode("BTextData", {{"glyph", "smart_contextual_info.text_title"},
+                                        {"data_path", "sidebar.title"},
+                                        {"format_id", "explicit"},
+                                        {"watch_data", "true"}});
+    *infoText = MakeNode("BTextData", {{"glyph", "smart_contextual_info.text"},
+                                       {"data_path", "sidebar.description"},
+                                       {"format_id", "explicit"},
+                                       {"watch_data", "true"}});
+  }
 
   Node header = *titleItem;
   items->children.clear();
@@ -266,6 +286,69 @@ bool BuildHost(const Node &templateScreen, Node &out, std::string &error) {
   return true;
 }
 
+
+// Dano terminal (docs/reverse_engineering/terminal_damage.md): StateRace sai da
+// pilha e os estados terminais nao tem link `pause`. Cada um (cutscene de
+// inicio, freeze e cutscene de fim) ganha um `pause` para o menu de pausa
+// original da mesma arvore, o de maior prefixo de caminho em comum, o mesmo
+// alvo que StateOsdCountDown usa. Um menu filho da cutscene foi empilhado mas
+// nao desenhado (travou o jogo em 2026-10-03).
+constexpr const char *kTerminalStates[] = {"1461673396", "2859882945",
+                                           "1591963405"};
+constexpr const char *kPauseMenuState = "314506569";
+
+size_t CommonPrefix(const Path &a, const Path &b) {
+  size_t n = 0;
+  while (n < a.size() && n < b.size() && a[n] == b[n]) ++n;
+  return n;
+}
+
+size_t PatchTerminalPause(Node &root) {
+  struct Menu {
+    Path path;
+    std::string id;
+  };
+  std::vector<Menu> menus;
+  std::vector<Path> terminals;
+  Walk(root, [&](const Node &node, const Path &path) {
+    if (node.name != "node") return;
+    const std::string *state = node.Attribute("state");
+    const std::string *id = node.Attribute("id");
+    if (state == nullptr || id == nullptr) return;
+    if (std::find(std::begin(kTerminalStates), std::end(kTerminalStates), *state) !=
+        std::end(kTerminalStates)) {
+      for (const Node &child : node.children) {
+        if (child.name == "link" && AttributeIs(child, "id", "pause")) return;
+      }
+      terminals.push_back(path);
+    } else if (*state == kPauseMenuState) {
+      for (const Node &child : node.children) {
+        if (child.name == "link" && AttributeIs(child, "id", "restart_race")) {
+          menus.push_back({path, *id});
+          break;
+        }
+      }
+    }
+  });
+  size_t patched = 0;
+  for (const Path &path : terminals) {
+    const Menu *best = nullptr;
+    size_t bestLen = 0;
+    for (const Menu &menu : menus) {
+      const size_t len = CommonPrefix(path, menu.path);
+      if (best == nullptr || len > bestLen) {
+        best = &menu;
+        bestLen = len;
+      }
+    }
+    if (best == nullptr) continue;
+    At(root, path).children.push_back(
+        MakeNode("link", {{"id", "pause"}, {"target", best->id}}));
+    ++patched;
+  }
+  return patched;
+}
+
 } // namespace
 
 bool PatchStates(Node &root, std::string &error) {
@@ -294,6 +377,7 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
     Path path;
     std::string id;
     std::string optionsTarget;
+    bool mainMenu = false;
   };
   std::vector<Origin> origins;
   std::map<std::string, Path> parentOf;
@@ -314,16 +398,18 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
       parentOf[*id] = Path(path.begin(), path.end() - 1);
     }
     const std::string *target = nullptr;
+    const bool mainMenu = AttributeIs(node, "jump_id", kMainMenuJumpId);
     for (const Node &child : node.children) {
       if (child.name == "link" && AttributeIs(child, "id", kPauseEvent)) {
         return;
       }
-      if (child.name == "link" && AttributeIs(child, "id", kTemplateLink)) {
+      if (child.name == "link" &&
+          AttributeIs(child, "id", mainMenu ? kMainMenuAnchorLink : kTemplateLink)) {
         target = child.Attribute("target");
       }
     }
     if (target != nullptr) {
-      origins.push_back({path, *id, *target});
+      origins.push_back({path, *id, *target, mainMenu});
     }
   });
   if (stateInUse) {
@@ -369,15 +455,88 @@ bool PatchFlow(Node &root, size_t &linkedNodes, std::string &error) {
     Node &siblings = At(patched, parent->second);
     siblings.children.push_back(std::move(hub));
     siblings.children.push_back(std::move(mod));
+
+    // Menu principal: o mod interno abre direto, e MODS abre o hub na aba
+    // Mods (estado próprio; mesmos links do hub).
+    if (origin.mainMenu) {
+      const std::string directId = FreshId(used);
+      const std::string modsHubId = FreshId(used);
+      if (directId.empty() || modsHubId.empty()) {
+        error = "sem id de no livre";
+        return false;
+      }
+      Node direct = MakeNode("node", {{"id", directId}, {"state", kModDirect.stateId}});
+      direct.children.push_back(BackLink(origin.id));
+      Node modsHub = MakeNode("node", {{"id", modsHubId}, {"state", kHubMods.stateId}});
+      for (size_t i = 0; i < kListSlots; ++i) {
+        modsHub.children.push_back(MakeNode(
+            "link", {{"id", kNavModPrefix + std::to_string(i)}, {"target", modId}}));
+      }
+      modsHub.children.push_back(BackLink(origin.id));
+      Node &menu = At(patched, origin.path);
+      menu.children.push_back(
+          MakeNode("link", {{"id", kMainMenuPracticeEvent}, {"target", directId}}));
+      menu.children.push_back(
+          MakeNode("link", {{"id", kMainMenuModsEvent}, {"target", modsHubId}}));
+      Node &parentNode = At(patched, parent->second);
+      parentNode.children.push_back(std::move(direct));
+      parentNode.children.push_back(std::move(modsHub));
+    }
   }
+  PatchTerminalPause(patched);
   root = std::move(patched);
   linkedNodes = origins.size();
   return true;
 }
 
+// Cópia de options_extras só com os blocos de kMainMenuTiles, textos e eventos
+// nossos. Falso se o modelo não tiver o layout esperado.
+bool BuildMainMenuPage(const Node &templateScreen, Node &out) {
+  out = templateScreen;
+  out.SetAttribute("id", kMainMenuPage.name);
+  Node *items = out.Child("items");
+  Node *behaviours = out.Child("behaviours");
+  Node *flow = behaviours != nullptr ? behaviours->Child("SBGridItemFlow") : nullptr;
+  if (items == nullptr || flow == nullptr) {
+    return false;
+  }
+  std::vector<Node> kept;
+  for (const MainMenuTile &def : kMainMenuTiles) {
+    Node *source = FindChild(*items, "Item", "id", def.item);
+    if (source == nullptr) {
+      return false;
+    }
+    Node tile = *source;
+    Node *title = FindChild(tile, "BTextStatic", "glyph", "text_title");
+    Node *subtitle = FindChild(tile, "BTextStatic", "glyph", "text_subtitle");
+    Node *texture = tile.Child("BTextureStatic");
+    if (title == nullptr || texture == nullptr || tile.Child("IBSelectableSimple") == nullptr ||
+        (def.subtitleKey != nullptr && subtitle == nullptr)) {
+      return false;
+    }
+    title->SetAttribute("string", def.titleKey);
+    if (subtitle != nullptr && def.subtitleKey != nullptr) {
+      subtitle->SetAttribute("string", def.subtitleKey);
+    }
+    if (def.texture != nullptr) {
+      texture->SetAttribute("texture", def.texture);
+    }
+    tile.Child("IBSelectableSimple")
+        ->SetAttribute("select_value",
+                       def.state == TileState::Action ? def.event : kMainMenuIdleEvent);
+    kept.push_back(std::move(tile));
+  }
+  items->children = std::move(kept);
+  flow->text = std::string("\r\n          ") + kMainMenuGrid + "\r\n        ";
+  // O atalho de "trial upsell" é da tela original.
+  behaviours->RemoveChild("SBHotButtonScreenEvent");
+  return true;
+}
+
 bool PatchScreens(Node &root, std::string &error) {
-  Path hostPath, pagePath, pausePath;
+  Path hostPath, pagePath, pausePath, mainMenuTemplatePath;
   bool exists = false, foundHost = false, foundPage = false, foundPause = false;
+  bool foundMainMenuTemplate = false;
   Walk(root, [&](const Node &node, const Path &path) {
     if (node.name != "Screen") {
       return;
@@ -387,7 +546,7 @@ bool PatchScreens(Node &root, std::string &error) {
       return;
     }
     const bool own =
-        *id == kHub.name || *id == kMod.name ||
+        *id == kHub.name || *id == kMod.name || *id == kMainMenuPage.name ||
         std::any_of(std::begin(kPages), std::end(kPages),
                     [&](const PageDef &page) { return *id == page.name; });
     if (own) {
@@ -401,6 +560,9 @@ bool PatchScreens(Node &root, std::string &error) {
     } else if (*id == kPauseScreen) {
       pausePath = path;
       foundPause = true;
+    } else if (*id == kMainMenuPage.templateScreen) {
+      mainMenuTemplatePath = path;
+      foundMainMenuTemplate = true;
     }
   });
   if (exists || !foundHost || !foundPage || !foundPause || hostPath.empty()) {
@@ -437,7 +599,7 @@ bool PatchScreens(Node &root, std::string &error) {
     modRows.push_back(
         {kModKeyPrefix + index, false, kNavModPrefix + index, kModSlotPath + index, -1});
     optionRows.push_back({kOptionKeyPrefix + index, false, kOptionEventPrefix + index,
-                          kOptionSlotPath + index, static_cast<int>(i)});
+                          kOptionSlotPath + index, static_cast<int>(i), true});
   }
 
   const Node &pageTemplate = At(root, pagePath);
@@ -456,6 +618,14 @@ bool PatchScreens(Node &root, std::string &error) {
   world.children.push_back(std::move(mainPage));
   world.children.push_back(std::move(modsPage));
   world.children.push_back(std::move(modPage));
+
+  // Opcional: sem o modelo, a pausa continua funcionando sem a aba.
+  Node mainMenuPage;
+  if (foundMainMenuTemplate &&
+      BuildMainMenuPage(At(root, mainMenuTemplatePath), mainMenuPage)) {
+    const Path parent(mainMenuTemplatePath.begin(), mainMenuTemplatePath.end() - 1);
+    At(patched, parent).children.push_back(std::move(mainMenuPage));
+  }
   root = std::move(patched);
   return true;
 }

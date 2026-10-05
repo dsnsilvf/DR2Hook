@@ -113,6 +113,16 @@ Engine RPM and gear are not exposed to Lua yet; they are only in the **Diagnosti
 | **F6** | Restore **Normal** — saved pose, velocities zeroed |
 | **F7** | Restore **With Momentum** — saved pose and saved velocities |
 
+Core hotkeys (not part of any mod):
+
+| Key | Action |
+| --- | --- |
+| **F8** | Reload `dr2hook_core.dll` from disk. The game stays open; the in-memory C++ checkpoint is cleared and Lua restarts (`onInit` runs again). |
+| **F9** | Toggle the free camera on a stage. Mouse looks. WASD moves, Space/Q go up and down. Hold Ctrl to freeze keyboard movement; the mouse keeps looking. + and − raise and lower the keyboard speed. Shift multiplies that speed by 4. The game pause menu gives the cursor back and freezes the fly camera until it closes. Insert still opens the overlay and pauses the fly camera. |
+| **F11** | Insta crash: destroys the car on a stage (offline only) so the terminal-damage flow can be studied. Esc during the sequence opens the pause menu with Restart. See `docs/reverse_engineering/terminal_damage.md`. |
+
+Ghost-limit test (developer only): while `dr2hook_ghost_cars.txt` exists next to `dirtrally2.exe`, **F7** adds one ghost copy instead of restoring the checkpoint, and the file's number (0 to 5) sets how many ghost cars the game creates on the next full stage load. Without the file, F7 keeps the Practice Mode behavior. See `docs/reverse_engineering/ghosts.md` §6.3.
+
 The same actions, plus a restore-mode choice and a notifications toggle, are under **Pause → DR2 Hook → Mods → Practice Mode**. The mod keeps its own checkpoint in Lua through `Player.getState` / `Player.setState`.
 
 Restoring writes the rig pose and velocities at the offsets used since the first version (`+0x320` / `+0x330`). **Known limitation:** INV-01 has since marked `+0x320` as a velocity field `REFUTED` (it is a one-tick-delayed copy; the origin state block is at `+0x2b0..+0x2e0`), so velocity restore, and therefore **With Momentum**, may not behave as described. Moving the restore to the origin block is planned in INV-01 and is not validated in-game yet. It is also not the game's own "reset vehicle" path.

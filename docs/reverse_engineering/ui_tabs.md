@@ -351,3 +351,48 @@ Status: tudo acima é especificação. Nada disso foi testado no jogo.
 ### Uso no DR2 Hook
 
 A estrutura recomendada acima está implementada em `src/core/ui_patch.cpp` (dados) e `src/core/native_screen.cpp` (slot `+0x80`, leitura dos combos, textos). Diferenças: os combos são `IBComboTextData` com a lista criada pela DLL, para que choices tenham qualquer número de valores; o painel da direita usa `BTextStatic` com chaves `lng_dr2hook_*`, respondidas pela busca de idioma, em vez de `BTextData`; as linhas não têm `IBItemFlowIndex`. Antes de chamar cada função do store, a DLL confere os bytes iniciais dela. Estado e pendências em [UI Data](ui_data.md#telas-do-dr2-hook).
+
+## Painel da direita por linha e títulos (2026-10-01)
+
+Validado no jogo na tela `dr2hook_mod` (Practice Mode).
+
+**Painel que acompanha o foco.** O jogo faz isso em `profile_save_management` e `input_bindings`:
+- cada `Item` da lista tem `<IBItemFlowIndex index="N" index_data_path="selected_index"/>`, que grava o índice da linha em foco em `ui.<tela>.selected_index` ao navegar (teclado e mouse);
+- o painel usa `<BTextData glyph="smart_contextual_info.text_title" data_path="sidebar.title" format_id="explicit|localise" watch_data="true"/>` e o mesmo com `smart_contextual_info.text` e `sidebar.description`. Com `watch_data`, o texto muda quando o nó do store muda.
+- **O `IBItemFlowIndex` não cria o nó**: só grava se `selected_index` já existir. Nas telas do jogo quem cria é o estado C++. Sem criar `selected_index` (inteiro) no Enter, o painel fica parado no primeiro texto (confirmado varrendo a memória: o hash de `ui.dr2hook_mod.selected_index` não existia no store, só `sidebar.title` e os combos).
+- Na DLL: `PopulateMod` cria `selected_index = 0` e o contêiner `sidebar`; `NativeScreenTick` (thread da UI, a cada 15 ms) lê `selected_index` pelo hash e, se mudou ou o menu mudou de versão, escreve `sidebar.title`/`sidebar.description` fora da trava do store (o `SetString` trava sozinho; o spinlock não é recursivo).
+- `format_id="explicit"` mostra o texto como veio; `\n` quebra a linha (confirmado no jogo). Um `\n` no começo de linha (linha vazia, `\n\n`) aparece como caractere desconhecido; o `Menu.describe` troca a linha vazia por um espaço e, por precaução, descarta `\r` (correção ainda não vista na tela).
+
+**Títulos.** Numa `smart_screen`, o título pequeno em vermelho acima (com `/ `) vem do `SBScreenTitle string_id`, e o grande vem do `BTextStatic` do `Item id="title"` (glyph `screen_header_text`). As telas do jogo usam a mesma chave nos dois; a DLL usa `lng_dr2hook_crumb_mod` (nome do mod) no `SBScreenTitle` e `lng_dr2hook_title_mod` ("OPTIONS") no cabeçalho.
+
+**ABI.** `Dr2MenuOption` ganhou `description` (texto do painel), e por isso `kCoreAbiVersion` passou a 2: um `dxgi.dll` antigo recusa o core novo e vice-versa.
+
+## Entrada no menu principal (investigação, 2026-10-01; ainda não implementado)
+
+Hoje o DR2 Hook só abre pela pausa: `PatchScreens` reaproveita o item `reset_view` do `pause_menu` (evento `dr2hook`) e `PatchFlow` acrescenta o link `dr2hook` → hub em todo nó do fluxo que tem link `options`.
+
+- Menu principal: tela `main_menu` (`object="main_menu"`, `SBTabGroup`; as abas vêm de `tabs.info`, preenchido pelo estado C++), nó do fluxo `102601274` (`jump_id="main_menu_hub"`, estado `StateScreenMainMenu` 1984269910). Esse nó **não tem** link `options`: trata cada bloco por um link próprio (`game_settings`, `input`, `profile`, `racenet_profile`, `graphics`, `audio`, `legal`, `credits`, …). Por isso o patch atual não chega nele.
+- Aba "Options & Extras": tela `options_extras` (`object="options_extras"`), grade de 8 blocos com posição fixa na cena (`tile_preferences`, `tile_input`, `tile_profile`, `tile_racenet`, `tile_graphics`, `tile_audio`, `tile_legal`, `tile_credits`) e `SBGridItemFlow` para a navegação. Cada bloco: título/subtítulo `BTextStatic`, marca d'água `BTextureStatic texture="tile_watermark_*"`, `IBSelectableSimple select_value=<evento>`.
+- Um bloco novo exigiria uma posição (`tile_*`) que a cena não tem. O caminho de menor risco, igual à pausa: **reaproveitar um bloco** (ex.: Credits ou Legal), trocando texto e evento para `dr2hook`, e estender `PatchFlow` para também ligar `dr2hook` → hub no nó com link `credits` (o `back` do hub volta para o menu principal).
+- Alternativa não explorada: acrescentar uma aba "DR2 Hook" ao `tabs.info` do `main_menu` no Enter do estado (a DLL já cria abas no próprio hub), com páginas que usam o menu principal como raiz de dados.
+
+### Aba "DR2 Hook" no menu principal (implementado e validado no jogo em 2026-10-01)
+
+- Abas do menu principal: `0x1402ff0b0` (classe `StateScreenMainMenu`, não é da família de `0x1402c2b90`). Para cada aba: `rótulo = 0x140559f20("lng_<x>_tab_label")` e uma entrada `{screen, label, bool}` (0x18) numa lista local `{ptr, capacidade=8, contagem}`; em paralelo, um código por aba no estado (`+0x2a0` ptr u32, `+0x2a8` capacidade, `+0x2b0` contagem; ex.: 3 = `store_hub`, 2 = `options_extras`). Abas, nesta ordem e conforme condições: `my_team`, `other_modes` (Jogo Livre), `esports`, `esports_wrx`, `cme_menu` (Colin McRae), `store_hub` (Loja), `options_extras`. Depois chama o Setup do TabController `0x140369320(estado+0x128, &lista, índice, "")`.
+- O código só é lido em `0x140312490` (`código[aba atual] == 0` → `0x140454c10`).
+- Vtable do `StateScreenMainMenu`: `0x14125c0c0` (sem RTTI; alinhada pelos slots iguais aos do `StateScreenFECore` `0x141256e98`). `+0x70` = `0x1402d5730` (GetTransition comum), `+0x80` = `0x1402ff0b0` (Setup das abas), `+0x88` = `0x140318c50` (despacho próprio: compara o evento com `quit` e outros). Um evento sem link no nó e não tratado aqui é ignorado pelo runner.
+- Blocos de ação (2026-10-02): a DLL troca o slot `+0x88` dessa vtable por um detour que consome `dr2hook_do_*` (OPEN OVERLAY → `dr2hook_do_overlay`, RELOAD MODS → `dr2hook_do_reload_mods`) e repassa o resto. Os pedidos são atendidos no `OnFrame` do core, em qualquer tela.
+- DLL: hook do `Setup` acrescenta `{dr2hook_mm, "DR2 Hook", 1}` quando a lista tem `options_extras`, ainda há espaço e os códigos estão alinhados (código 2). `ui_patch` cria a tela `dr2hook_mm` (cópia de `options_extras` com só o bloco `preferences`, textos `lng_dr2hook_mm_*`, evento `dr2hook`, sem o atalho de trial) e liga `dr2hook` → hub no nó `jump_id="main_menu_hub"` (os nós hub/mod ficam junto do alvo de `game_settings`).
+
+### Texto rico (2026-10-01)
+
+Os textos do `.lng` usam marcação própria: `{v}` no início liga a marcação, `{s:<estilo>}` troca o estilo (`20_black_wt_sub` negrito, `20_regular_wt_body` normal, `24_black_wt_title`, `_N_din_bold`), `{t:<chave>}` inclui outro texto, `{p}` e `[NOME]` são substituições. Testado no painel do DR2 Hook (`BTextData format_id="explicit"`): a marcação aparece **crua**. Testado também (2026-10-01): painel com `format_id="localise"` apontando para uma chave `lng_dr2hook_sb_N` respondida pelo hook da busca de idioma (o texto chega por esse caminho), primeiro com `BTextData` e depois com `BTextTokens` (formato usado pelo jogo em `<BTextTokens data_path="description" format_id="localise">`). Nos dois casos a marcação **continua crua**; textos sem marcação aparecem normais. Conclusão: `{v}`/`{s:...}` não são aplicados pela busca de idioma nem por esses componentes; devem ser interpretados pelo C++ de telas específicas (ajuda "what's this", diálogos). Código revertido para `BTextData explicit`.
+
+
+### Texto rico no painel: resolvido (2026-10-02)
+
+- Quem interpreta a marcação é o **tipo do nó de texto da cena**, não o componente: `UINODETEXTDOC` (tipo 274) interpreta `{v}`/`{s:...}`, `UINODETEXT` (273) desenha cru. Prova: a tela `racenet_confirm_terms` manda `"{v}"+texto` (montado em `0x140619cb0`) por um `BTextData explicit` comum, e o glyph `t_and_c_message.text_message` aponta para `edoc4256` (DOC). O nosso `smart_contextual_info.text` aponta para `etex115` (TEXT). Os dois nós têm os mesmos atributos (`sn` estilo base, `wi` largura, `ha` alinhamento, `wr` quebra) e nenhum filho. Achado com ajuda do Gemini (agy), conferido nos bytes.
+- Cenas da UI: `frontend/databases/persistentDB.pssg` (`game_1.dat`). PSSG: cabeçalho `PSSG` + tamanho BE + contagens; esquema com nomes de tipos/atributos; nós `{tipo u32, tamanho u32, tam_atributos u32, atributos, filhos/dados}`, tudo big-endian. Glyphs em texto puro no atributo `nickname`.
+- Leitora de PSSG binário: `0x1408d3520`, lê por `0x1408e6860(stream, buf, n)`: cabeçalho de 8 bytes, esquema e **cabeçalho de cada nó numa leitura de 12 bytes**; blocos binários grandes vão por outro caminho (a posição acumulada no hook fica ~200 KB atrás).
+- Patch (`src/core/pssg_patch.cpp`, `dxgi.dll`, instalado no `DllMain`): no stream cujo cabeçalho tem o tamanho do `persistentDB.pssg` desta versão (5338789), conta as leituras de 12 bytes iguais a `00 00 01 11 00 00 00 55 00 00 00 51` (54 no arquivo) e troca o tipo para `00 00 01 12` na 26ª; confere o apelido lido em seguida (`etex115`) e loga "aplicado e conferido".
+- Estilos de `{s:<id>}`: tabela `frontend/configs/text_styles.xml` (`game_1.dat`, 74 estilos `{id, font, height, boldness...}`), ex.: `_20/_22/_25/_28/..._din_bold`, `_16/_20/_22/_25/_26/_30_roboto_cnd`, `_24/_26/_28/..._din_ita`. Os `{s:20_black_wt_sub}` dos textos "what's this" **não** existem nessa tabela (sem efeito). O painel usa base `_22_roboto_cnd`; negrito do mesmo tamanho: `_22_din_bold`. Validado no jogo.

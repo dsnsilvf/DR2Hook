@@ -113,9 +113,12 @@ void ModManager::Shutdown() {
         luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnKeyDown);
         mod.refOnKeyDown = LUA_NOREF;
       }
-      if (mod.refOnStageStart != LUA_NOREF) {
-        luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnStageStart);
-        mod.refOnStageStart = LUA_NOREF;
+      for (int *ref : {&mod.refOnStageLoad, &mod.refOnCountdown,
+                       &mod.refOnStageStart}) {
+        if (*ref != LUA_NOREF) {
+          luaL_unref(L, LUA_REGISTRYINDEX, *ref);
+          *ref = LUA_NOREF;
+        }
       }
       if (mod.refOnRenderUI != LUA_NOREF) {
         luaL_unref(L, LUA_REGISTRYINDEX, mod.refOnRenderUI);
@@ -208,6 +211,8 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnInit = LUA_NOREF;
   mod.refOnTick = LUA_NOREF;
   mod.refOnKeyDown = LUA_NOREF;
+  mod.refOnStageLoad = LUA_NOREF;
+  mod.refOnCountdown = LUA_NOREF;
   mod.refOnStageStart = LUA_NOREF;
   mod.refOnRenderUI = LUA_NOREF;
 
@@ -267,8 +272,12 @@ bool ModManager::LoadModFromDirectory(const std::string &modDirPath) {
   mod.refOnInit = cacheCallback("onInit");
   mod.refOnTick = cacheCallback("onTick");
   mod.refOnKeyDown = cacheCallback("onKeyDown");
+  mod.refOnStageLoad = cacheCallback("onStageLoad");
+  mod.refOnCountdown = cacheCallback("onCountdown");
   mod.refOnStageStart = cacheCallback("onStageStart");
   mod.refOnRenderUI = cacheCallback("onRenderUI");
+
+  LoadModSettings(mod);
 
   // Invocacao de ciclo de vida onInit
   if (mod.enabled && mod.refOnInit != LUA_NOREF) {
@@ -341,7 +350,50 @@ void ModManager::DispatchKeyDown(UINT vkCode) {
   }
 }
 
-void ModManager::DispatchStageStart(const std::string &stageName) {
+void ModManager::DispatchStageLoad(const std::string &stageName) {
+  if (!s_initialized) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+
+  lua_State *L = LuaEngine::GetState();
+  if (L == nullptr) {
+    return;
+  }
+
+  for (auto &mod : s_mods) {
+    if (mod.enabled && mod.refOnStageLoad != LUA_NOREF) {
+      lua_createtable(L, 0, 1);
+      lua_pushstring(L, stageName.c_str());
+      lua_setfield(L, -2, "name");
+      CallModCallback(mod, mod.refOnStageLoad, 1, 0);
+    }
+  }
+}
+
+void ModManager::DispatchCountdown(int light) {
+  if (!s_initialized) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+
+  lua_State *L = LuaEngine::GetState();
+  if (L == nullptr) {
+    return;
+  }
+
+  for (auto &mod : s_mods) {
+    if (mod.enabled && mod.refOnCountdown != LUA_NOREF) {
+      lua_pushinteger(L, static_cast<lua_Integer>(light));
+      CallModCallback(mod, mod.refOnCountdown, 1, 0);
+    }
+  }
+}
+
+void ModManager::DispatchStageStart(const std::string &stageName,
+                                    bool restart) {
   if (!s_initialized) {
     return;
   }
@@ -355,9 +407,11 @@ void ModManager::DispatchStageStart(const std::string &stageName) {
 
   for (auto &mod : s_mods) {
     if (mod.enabled && mod.refOnStageStart != LUA_NOREF) {
-      lua_createtable(L, 0, 1);
+      lua_createtable(L, 0, 2);
       lua_pushstring(L, stageName.c_str());
       lua_setfield(L, -2, "name");
+      lua_pushboolean(L, restart ? 1 : 0);
+      lua_setfield(L, -2, "restart");
       CallModCallback(mod, mod.refOnStageStart, 1, 0);
     }
   }
@@ -373,6 +427,98 @@ void ModManager::DispatchRenderUI(ModInstance &mod) {
 }
 
 const std::vector<ModInstance> &ModManager::GetLoadedMods() { return s_mods; }
+
+namespace {
+
+std::filesystem::path SettingsPath(const ModInstance &mod) {
+  return std::filesystem::path(mod.directoryPath) / ModManager::kSettingsFileName;
+}
+
+std::string TrimSpaces(const std::string &text) {
+  const size_t first = text.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos) {
+    return "";
+  }
+  return text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+} // namespace
+
+// Uma linha `id=valor` por opção: toggle `on`/`off`, choice pelo texto do
+// valor (sobrevive a reordenar a lista). Botões não são guardados.
+void ModManager::SaveModSettings(const std::string &modId) {
+  std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
+  const auto mod = std::find_if(s_mods.begin(), s_mods.end(),
+                                [&](const ModInstance &m) { return m.id == modId; });
+  const std::vector<ModOption> *options = ModMenu::OptionsOf(modId);
+  if (mod == s_mods.end() || options == nullptr || mod->directoryPath.empty()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "; Opcoes de " << mod->name << " gravadas pelo DR2 Hook.\n";
+  for (const ModOption &option : *options) {
+    if (option.type == ModOption::Type::Toggle) {
+      out << option.id << "=" << (option.enabled ? "on" : "off") << "\n";
+    } else if (option.type == ModOption::Type::Choice &&
+               option.index < option.values.size()) {
+      out << option.id << "=" << option.values[option.index] << "\n";
+    }
+  }
+  const std::filesystem::path path = SettingsPath(*mod);
+  const std::filesystem::path temp = path.string() + ".tmp";
+  {
+    std::ofstream file(temp, std::ios::trunc);
+    if (!file || !(file << out.str())) {
+      Logger::Warn("[Mod: " + modId + "] nao foi possivel gravar " + path.string());
+      return;
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(temp, path, error);
+  if (error) {
+    Logger::Warn("[Mod: " + modId + "] nao foi possivel gravar " + path.string() +
+                 ": " + error.message());
+  }
+}
+
+void ModManager::LoadModSettings(const ModInstance &mod) {
+  std::vector<ModOption> *options = ModMenu::OptionsOf(mod.id);
+  std::ifstream file(SettingsPath(mod));
+  if (!mod.enabled || options == nullptr || !file) {
+    return;
+  }
+  size_t restored = 0;
+  std::string line;
+  while (std::getline(file, line)) {
+    line = TrimSpaces(line);
+    const size_t equals = line.find('=');
+    if (line.empty() || line[0] == ';' || line[0] == '#' || equals == std::string::npos) {
+      continue;
+    }
+    const std::string id = TrimSpaces(line.substr(0, equals));
+    const std::string value = TrimSpaces(line.substr(equals + 1));
+    for (ModOption &option : *options) {
+      if (option.id != id) {
+        continue;
+      }
+      if (option.type == ModOption::Type::Toggle && (value == "on" || value == "off")) {
+        option.enabled = value == "on";
+        ++restored;
+      } else if (option.type == ModOption::Type::Choice) {
+        const auto found = std::find(option.values.begin(), option.values.end(), value);
+        if (found != option.values.end()) {
+          option.index = static_cast<size_t>(found - option.values.begin());
+          ++restored;
+        }
+      }
+    }
+  }
+  if (restored > 0) {
+    ModMenu::MarkDirty();
+    Logger::Info("[Mod: " + mod.id + "] " + std::to_string(restored) +
+                 " opcao(oes) restaurada(s) de " + kSettingsFileName);
+  }
+}
 
 void ModManager::DispatchMenuEvent(size_t modIndex, size_t optionIndex, int value) {
   std::lock_guard<std::recursive_mutex> lock(LuaEngine::GetMutex());
@@ -396,6 +542,9 @@ void ModManager::DispatchMenuEvent(size_t modIndex, size_t optionIndex, int valu
   }
   ModMenu::MarkDirty();
   Logger::Info("[Mod: " + mod.id + "] menu: " + option.DisplayLabel());
+  if (option.type != ModOption::Type::Button) {
+    SaveModSettings(mod.id);
+  }
 
   // O callback pode declarar opções e realocar o vetor: copiar antes.
   const ModOption snapshot = option;

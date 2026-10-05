@@ -32,6 +32,13 @@ constexpr uintptr_t kDispatchStubRva = 0x140ebb300 - kImageBase;
 constexpr uint8_t kDispatchStubBytes[] = {0x32, 0xc0, 0xc3};
 constexpr uintptr_t kEnterDataStubRva = 0x1406bfe70 - kImageBase;
 constexpr uint8_t kEnterDataStubBytes[] = {0xc2, 0x00, 0x00};
+// StateScreenMainMenu: vtable própria (+0x80 é o Setup das abas 0x1402ff0b0) e
+// despacho próprio em +0x88. Os blocos de ação da aba DR2 Hook disparam
+// eventos dr2hook_do_*, que o nó do menu principal não tem como link.
+constexpr uintptr_t kMainMenuVtableRva = 0x14125c0c0 - kImageBase;
+constexpr uintptr_t kMainMenuDispatchRva = 0x140318c50 - kImageBase;
+constexpr uint8_t kMainMenuDispatchBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                              0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30};
 // StateScreenFECore: id, store, Path de ui.<tela> (depois do Enter).
 constexpr uintptr_t kStateIdOffset = 0x08;
 constexpr uintptr_t kStateStoreOffset = 0x38;
@@ -43,6 +50,41 @@ constexpr uint8_t kLanguageLookupBytes[] = {
     0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x48,
     0x83, 0xec, 0x20, 0x48, 0x8b, 0x99, 0x88, 0x00, 0x00, 0x00, 0x48, 0x8b};
 constexpr char kCapsSuffix[] = "_caps";
+
+// TabController::Setup(ctrl, vec<{screen, label, bool}>*, índice, prefixo)
+// (docs/reverse_engineering/ui_tabs.md). O menu principal (0x1402ff0b0) monta
+// a lista dele e chama este Setup com ctrl = estado + 0x128; o estado guarda um
+// código por aba em +0x2a0 (ptr u32), +0x2a8 (capacidade), +0x2b0 (contagem),
+// lido pelo índice da aba atual (0x140312490).
+constexpr uintptr_t kTabSetupRva = 0x140369320 - kImageBase;
+constexpr uint8_t kTabSetupBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56,
+                                      0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
+constexpr uintptr_t kTabControllerOffset = 0x128;
+constexpr uintptr_t kMainMenuCodesOffset = 0x2a0;
+constexpr uintptr_t kMainMenuSavedTabOffset = 0x288;     // u32
+constexpr uintptr_t kMainMenuSavedTabValidOffset = 0x291; // u8
+constexpr char kMainMenuMarkerTab[] = "options_extras";
+// Código de options_extras: a aba nossa é tratada como página de opções.
+constexpr uint32_t kMainMenuTabCode = 2;
+
+struct TabEntry {
+  const char *screen;
+  const char *label;
+  uint8_t enabled;
+};
+static_assert(sizeof(TabEntry) == 0x18);
+
+struct TabVector {
+  TabEntry *data;
+  uint64_t capacity;
+  uint64_t count;
+};
+
+struct CodeArray {
+  uint32_t *data;
+  uint64_t capacity;
+  uint64_t count;
+};
 constexpr size_t kMaxQueuedEvents = 64;
 
 // Data store da UI (docs/reverse_engineering/ui_tabs.md). O spinlock em
@@ -97,15 +139,19 @@ struct DataStoreApi {
 using DispatchFn = bool (*)(void *state, const char *eventName);
 using EnterDataFn = void (*)(void *state);
 using LookupFn = const char *(*)(void *handler, const char *key);
+using TabSetupFn = void (*)(void *controller, TabVector *tabs, uint32_t index,
+                            const char *prefix);
 
 struct MenuOption {
   std::string label;
   std::vector<std::string> values;
   int index = 0;
   int kind = kDr2MenuButton;
+  std::string description;
   bool operator==(const MenuOption &other) const {
     return label == other.label && values == other.values &&
-           index == other.index && kind == other.kind;
+           index == other.index && kind == other.kind &&
+           description == other.description;
   }
 };
 
@@ -134,8 +180,10 @@ struct ComboWatch {
 
 uintptr_t g_base = 0;
 DispatchFn g_originalDispatch = nullptr;
+DispatchFn g_originalMainMenuDispatch = nullptr;
 EnterDataFn g_originalEnterData = nullptr;
 LookupFn g_originalLookup = nullptr;
+TabSetupFn g_originalTabSetup = nullptr;
 std::atomic<bool> g_reloadModsPending{false};
 
 // Escrito pelo core no Present; lido pela busca de idioma, cuja thread não
@@ -153,6 +201,14 @@ ComboWatch g_combos[up::kListSlots];
 int g_comboMod = -1;
 std::atomic<bool> g_combosActive{false};
 bool g_rootHashLogged = false;
+// Painel da direita da tela de mod (sidebar.title/description, BTextData).
+// Cada linha grava o índice em foco em selected_index (IBItemFlowIndex).
+DsPath g_sidebarPath{};
+bool g_sidebarReady = false;
+int g_sidebarIndex = -1;
+uint32_t g_sidebarVersion = 0;
+constexpr char kModHint[] =
+    "Use left and right to change a value, and A to run an action.";
 
 template <size_t N> bool StartsWith(const char *text, const char (&prefix)[N]) {
   return std::strncmp(text, prefix, N - 1) == 0;
@@ -356,6 +412,37 @@ bool RootHashMatches(const void *state, const char *screen) {
   return expected == actual;
 }
 
+// Título e texto do painel para a linha `option` do mod `mod`: a descrição da
+// opção, ou o nome dela com a descrição do mod. Fora das opções, o mod.
+void SidebarText(int mod, int option, std::string &title, std::string &text) {
+  std::lock_guard<std::mutex> lock(g_menuMutex);
+  if (mod < 0 || static_cast<size_t>(mod) >= g_menu.size()) {
+    title = "Mod";
+    text = kModHint;
+    return;
+  }
+  const MenuMod &entry = g_menu[mod];
+  const std::string modText =
+      entry.description.empty() ? kModHint : entry.description + " " + kModHint;
+  if (option < 0 || static_cast<size_t>(option) >= entry.options.size()) {
+    title = entry.name;
+    text = modText;
+    return;
+  }
+  const MenuOption &selected = entry.options[option];
+  title = selected.label;
+  text = selected.description.empty() ? modText : selected.description;
+}
+
+void WriteSidebar(void *store, int option) {
+  std::string title, text;
+  SidebarText(g_comboMod, option, title, text);
+  SetString(store, g_sidebarPath, "title", title.c_str());
+  SetString(store, g_sidebarPath, "description", text.c_str());
+  g_sidebarIndex = option;
+  g_sidebarVersion = g_menuVersion.load();
+}
+
 // Enter do hub: tabs.info[i].{screen,label}, tabs.current_index e a
 // visibilidade de reserva das linhas da lista de mods.
 void PopulateHub(void *store, const DsPath &root) {
@@ -432,14 +519,39 @@ void PopulateMod(void *store, const DsPath &root, bool hashOk) {
     watch.hash = PathHash(std::string("ui.") + up::kMod.name + "." + name + ".index");
     ++created;
   }
+  // IBItemFlowIndex só grava num nó que já existe (em profile_save_management
+  // quem cria é o estado do jogo); sem ele o painel não acompanha o foco.
+  SetInt(store, root, "selected_index", 0);
+  g_sidebarReady = Container(store, root, "sidebar", false, g_sidebarPath);
+  if (g_sidebarReady) {
+    WriteSidebar(store, 0);
+  }
   g_combosActive.store(created == up::kListSlots && hashOk);
 }
 
 void DetourEnterData(void *state) {
   g_originalEnterData(state);
   const uint32_t id = Field<uint32_t>(state, kStateIdOffset);
-  if (id != up::kHub.stateIdValue && id != up::kMod.stateIdValue) {
+  if (id != up::kHub.stateIdValue && id != up::kMod.stateIdValue &&
+      id != up::kModDirect.stateIdValue && id != up::kHubMods.stateIdValue) {
     return;
+  }
+  if (id == up::kHubMods.stateIdValue) {
+    g_returnTab.store(up::kModsTab); // bloco MODS do menu principal
+  }
+  // Aberto direto do menu principal: o mod interno, não o último do hub.
+  if (id == up::kModDirect.stateIdValue) {
+    int builtin = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_menuMutex);
+      for (size_t i = 0; i < g_menu.size(); ++i) {
+        if (g_menu[i].name == up::kBuiltinModName) {
+          builtin = static_cast<int>(i);
+          break;
+        }
+      }
+    }
+    g_selectedMod.store(builtin);
   }
   void *store = Field<void *>(state, kStateStoreOffset);
   if (!g_ds.ready || store == nullptr) {
@@ -448,9 +560,9 @@ void DetourEnterData(void *state) {
   const auto *root =
       reinterpret_cast<const DsPath *>(static_cast<const uint8_t *>(state) +
                                        kStateRootOffset);
-  if (id == up::kHub.stateIdValue) {
+  if (id == up::kHub.stateIdValue || id == up::kHubMods.stateIdValue) {
     PopulateHub(store, *root);
-  } else {
+  } else { // kMod e kModDirect: a mesma tela
     PopulateMod(store, *root, RootHashMatches(state, up::kMod.name));
   }
 }
@@ -519,6 +631,13 @@ bool DetourDispatch(void *state, const char *eventName) {
   return g_originalDispatch(state, eventName);
 }
 
+bool DetourMainMenuDispatch(void *state, const char *eventName) {
+  if (eventName != nullptr && StartsWith(eventName, up::kActionPrefix)) {
+    return HandleAction(eventName);
+  }
+  return g_originalMainMenuDispatch(state, eventName);
+}
+
 // ---------------------------------------------------------------------------
 // Textos
 // ---------------------------------------------------------------------------
@@ -549,13 +668,32 @@ bool MenuText(const std::string &key, std::string &text) {
                : std::to_string(g_menu.size()) +
                      (g_menu.size() == 1 ? " mod loaded." : " mods loaded.") +
                      " Select a mod to open its options.";
+  } else if (key == "lng_dr2hook_mm_mods_title") {
+    text = "MODS";
+  } else if (key == "lng_dr2hook_mm_mods_subtitle") {
+    text = g_menu.empty() ? "No mods loaded"
+                          : std::to_string(g_menu.size()) +
+                                (g_menu.size() == 1 ? " mod loaded" : " mods loaded");
+  } else if (key == "lng_dr2hook_mm_mp_title") {
+    text = "MULTIPLAYER";
+  } else if (key == "lng_dr2hook_mm_world_title") {
+    text = "WORLD EDITOR";
+  } else if (key == "lng_dr2hook_mm_vehicle_title") {
+    text = "VEHICLE EDITOR";
+  } else if (key == "lng_dr2hook_mm_soon") {
+    text = "Coming soon";
+  } else if (key == "lng_dr2hook_mm_overlay_title") {
+    text = "OPEN OVERLAY";
+  } else if (key == "lng_dr2hook_mm_reload_title") {
+    text = "RELOAD MODS";
+  } else if (key == "lng_dr2hook_mm_practice_title") {
+    text = "PRACTICE MODE";
+  } else if (key == "lng_dr2hook_mm_about_title") {
+    text = std::string("DR2 HOOK v") + DR2HOOK_VERSION + " - DSNSILVF";
   } else if (key == up::kModPage.titleKey) {
+    text = "OPTIONS";
+  } else if (key == up::kModPage.breadcrumbKey) {
     text = mod != nullptr ? Upper(mod->name) : "MOD";
-  } else if (key == up::kModPage.infoTitleKey) {
-    text = mod != nullptr ? mod->name : "Mod";
-  } else if (key == up::kModPage.infoTextKey) {
-    text = mod != nullptr && !mod->description.empty() ? mod->description + " " : "";
-    text += "Use left and right to change a value, and A to run an action.";
   } else if (key.rfind(up::kModKeyPrefix, 0) == 0) {
     const int slot = SlotIndex(key.c_str() + sizeof(up::kModKeyPrefix) - 1);
     if (slot < 0) {
@@ -616,6 +754,55 @@ bool InstallTitleHook(uintptr_t base) {
   return true;
 }
 
+// Acrescenta a aba DR2 Hook à lista do menu principal antes do Setup gravar
+// tabs.info. Só mexe se a lista tem options_extras, cabe mais uma aba e os
+// códigos do estado estão alinhados com as abas.
+void DetourTabSetup(void *controller, TabVector *tabs, uint32_t index,
+                    const char *prefix) {
+  bool mainMenu = false, present = false;
+  for (uint64_t i = 0; tabs != nullptr && i < tabs->count; ++i) {
+    const char *screen = tabs->data[i].screen;
+    mainMenu = mainMenu || (screen != nullptr && std::strcmp(screen, kMainMenuMarkerTab) == 0);
+    present = present || (screen != nullptr && std::strcmp(screen, up::kMainMenuPage.name) == 0);
+  }
+  if (mainMenu && !present && tabs->count < tabs->capacity) {
+    auto *codes = reinterpret_cast<CodeArray *>(static_cast<uint8_t *>(controller) -
+                                                kTabControllerOffset + kMainMenuCodesOffset);
+    if (codes->data != nullptr && codes->count == tabs->count &&
+        codes->count < codes->capacity) {
+      const uint32_t ours = static_cast<uint32_t>(tabs->count);
+      tabs->data[tabs->count++] = {up::kMainMenuPage.name, up::kMainMenuPage.tabLabel, 1};
+      codes->data[codes->count++] = kMainMenuTabCode;
+      // A aba salva (+0x288, válida com +0x291) é limitada pelo jogo às abas
+      // dele, contadas antes da nossa: voltando do DR2 Hook ela caía em
+      // options_extras.
+      const auto *state = static_cast<const uint8_t *>(controller) - kTabControllerOffset;
+      if (state[kMainMenuSavedTabValidOffset] != 0 &&
+          Field<uint32_t>(state, kMainMenuSavedTabOffset) == ours) {
+        index = ours;
+      }
+    } else {
+      Log("menu principal sem espaco para a aba DR2 Hook");
+    }
+  }
+  g_originalTabSetup(controller, tabs, index, prefix);
+}
+
+bool InstallMainMenuTab(uintptr_t base) {
+  void *target = reinterpret_cast<void *>(base + kTabSetupRva);
+  if (std::memcmp(target, kTabSetupBytes, sizeof(kTabSetupBytes)) != 0) {
+    Log("Setup de abas diferente do esperado; sem aba no menu principal.");
+    return false;
+  }
+  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourTabSetup),
+                    reinterpret_cast<void **>(&g_originalTabSetup)) != MH_OK ||
+      MH_EnableHook(target) != MH_OK) {
+    Log("falha ao instalar o hook do Setup de abas.");
+    return false;
+  }
+  return true;
+}
+
 enum class SlotKind { None, Mod, Option };
 
 struct SlotPath {
@@ -646,10 +833,10 @@ SlotPath ParseSlotPath(const char *path, size_t available) {
 }
 
 // Vtable trocada só depois de conferir o valor atual e os bytes do stub.
-bool SwapVtableSlot(uintptr_t base, uintptr_t slotOffset, uintptr_t stubRva,
-                    const uint8_t *stubBytes, size_t stubSize, void *detour,
-                    void **original, const char *name) {
-  auto *slot = reinterpret_cast<uintptr_t *>(base + kFeCoreVtableRva + slotOffset);
+bool SwapVtableSlot(uintptr_t base, uintptr_t vtableRva, uintptr_t slotOffset,
+                    uintptr_t stubRva, const uint8_t *stubBytes, size_t stubSize,
+                    void *detour, void **original, const char *name) {
+  auto *slot = reinterpret_cast<uintptr_t *>(base + vtableRva + slotOffset);
   const uintptr_t stub = base + stubRva;
   if (*slot != stub ||
       std::memcmp(reinterpret_cast<const void *>(stub), stubBytes, stubSize) != 0) {
@@ -716,8 +903,17 @@ void NativeScreenTick() {
   }
   std::vector<std::pair<int, int32_t>> changed;
   bool gone = false;
+  int focused = g_sidebarIndex;
   {
     StoreLock lock(store);
+    static const uint64_t selectedHash =
+        PathHash(std::string("ui.") + up::kMod.name + ".selected_index");
+    if (const void *node = g_ds.find(store, selectedHash)) {
+      const uint8_t type = Field<uint8_t>(node, kNodeTypeOffset);
+      if (type == kNodeInt || type == kNodeIntAlt) {
+        focused = Field<int32_t>(node, kNodeValueOffset);
+      }
+    }
     for (size_t i = 0; i < up::kListSlots; ++i) {
       ComboWatch &watch = g_combos[i];
       if (!watch.active) {
@@ -742,11 +938,17 @@ void NativeScreenTick() {
   // A raiz ui.dr2hook_mod some quando o estado sai.
   if (gone) {
     g_combosActive.store(false);
+    g_sidebarReady = false;
     return;
   }
   for (const auto &[option, value] : changed) {
     QueueEvent(g_comboMod, option, value);
     Log("combo " + std::to_string(option) + " = " + std::to_string(value));
+  }
+  // Fora da trava do store: SetString trava sozinho (spinlock não recursivo).
+  if (g_sidebarReady &&
+      (focused != g_sidebarIndex || g_menuVersion.load() != g_sidebarVersion)) {
+    WriteSidebar(store, focused);
   }
 }
 
@@ -759,9 +961,20 @@ bool InstallNativeScreenHook() {
   if (InstallTitleHook(base)) {
     HostLog("NativeScreen: textos das telas dr2hook instalados.");
   }
+  if (InstallMainMenuTab(base)) {
+    HostLog("NativeScreen: aba DR2 Hook do menu principal instalada.");
+  }
 
-  if (!SwapVtableSlot(base, kDispatchSlot, kDispatchStubRva, kDispatchStubBytes,
-                      sizeof(kDispatchStubBytes),
+  if (SwapVtableSlot(base, kMainMenuVtableRva, kDispatchSlot, kMainMenuDispatchRva,
+                     kMainMenuDispatchBytes, sizeof(kMainMenuDispatchBytes),
+                     reinterpret_cast<void *>(&DetourMainMenuDispatch),
+                     reinterpret_cast<void **>(&g_originalMainMenuDispatch),
+                     "+0x88 do menu principal")) {
+    HostLog("NativeScreen: blocos de acao do menu principal tratados pela DLL.");
+  }
+
+  if (!SwapVtableSlot(base, kFeCoreVtableRva, kDispatchSlot, kDispatchStubRva,
+                      kDispatchStubBytes, sizeof(kDispatchStubBytes),
                       reinterpret_cast<void *>(&DetourDispatch),
                       reinterpret_cast<void **>(&g_originalDispatch), "+0x88")) {
     HostLog("NativeScreen: executavel diferente do esperado; eventos das "
@@ -771,8 +984,8 @@ bool InstallNativeScreenHook() {
   HostLog("NativeScreen: eventos das telas dr2hook tratados pela DLL.");
 
   if (ResolveDataStore(base) &&
-      SwapVtableSlot(base, kEnterDataSlot, kEnterDataStubRva, kEnterDataStubBytes,
-                     sizeof(kEnterDataStubBytes),
+      SwapVtableSlot(base, kFeCoreVtableRva, kEnterDataSlot, kEnterDataStubRva,
+                     kEnterDataStubBytes, sizeof(kEnterDataStubBytes),
                      reinterpret_cast<void *>(&DetourEnterData),
                      reinterpret_cast<void **>(&g_originalEnterData), "+0x80")) {
     HostLog("NativeScreen: abas e combos das telas dr2hook criados pela DLL.");
@@ -806,6 +1019,7 @@ void Dr2Host_NativeMenuPublish(const dr2hook::Dr2MenuMod *mods, int count) {
       }
       option.index = source.index;
       option.kind = source.kind;
+      option.description = source.description != nullptr ? source.description : "";
       mod.options.push_back(std::move(option));
     }
     menu.push_back(std::move(mod));

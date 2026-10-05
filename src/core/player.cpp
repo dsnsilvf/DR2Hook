@@ -112,16 +112,16 @@ bool Player::ResolveVehicleAddress(uintptr_t gameBase) {
   return true;
 }
 
-bool Player::CaptureState(CarState &outState) {
+bool Player::CaptureState(CarState &outState, bool quiet) {
   if (s_scanner == nullptr || s_vehicleAddress == 0) {
-    Logger::Warn(
+    if (!quiet) Logger::Warn(
         "Player::CaptureState: scanner ou vehicleAddress nao configurado.");
     return false;
   }
 
   IMemoryAccessor *accessor = s_scanner->GetAccessor();
   if (accessor == nullptr || !accessor->IsValidAddress(s_vehicleAddress)) {
-    Logger::Warn("Player::CaptureState: accessor nulo ou endereco invalido.");
+    if (!quiet) Logger::Warn("Player::CaptureState: accessor nulo ou endereco invalido.");
     return false;
   }
 
@@ -152,10 +152,17 @@ bool Player::CaptureState(CarState &outState) {
       outState.rotationMatrix.m[2][2] = row2.z;
     }
 
-    accessor->Read(s_vehicleAddress + 0x320, &outState.linearVelocity,
-                   sizeof(Vector3));
-    accessor->Read(s_vehicleAddress + 0x330, &outState.angularVelocity,
-                   sizeof(Vector3));
+    // 4. Leitura da velocidade linear (+0x2b0) e angular (+0x2c0) do bloco de origem real
+    if (!accessor->Read(s_vehicleAddress + 0x2b0, &outState.linearVelocity,
+                        sizeof(Vector3))) {
+      accessor->Read(s_vehicleAddress + 0x320, &outState.linearVelocity,
+                     sizeof(Vector3));
+    }
+    if (!accessor->Read(s_vehicleAddress + 0x2c0, &outState.angularVelocity,
+                        sizeof(Vector3))) {
+      accessor->Read(s_vehicleAddress + 0x330, &outState.angularVelocity,
+                     sizeof(Vector3));
+    }
 
     for (int i = 0; i < 4; ++i) {
       outState.wheels[i].suspensionCompression = SUSPENSION_STATIC_SAG_RATIO;
@@ -167,7 +174,7 @@ bool Player::CaptureState(CarState &outState) {
 
   // Fallback para teste unitario com mock direto compacto
   if (!accessor->Read(s_vehicleAddress, &outState, sizeof(CarState))) {
-    Logger::Warn("Player::CaptureState: falha na leitura de CarState.");
+    if (!quiet) Logger::Warn("Player::CaptureState: falha na leitura de CarState.");
     return false;
   }
 
@@ -214,26 +221,30 @@ bool Player::ApplyState(const CarState &state, RestoreMode mode) {
     accessor->Write(s_vehicleAddress + 0x300, &row1, sizeof(Vector3));
     accessor->Write(s_vehicleAddress + 0x310, &row2, sizeof(Vector3));
 
-    // 4. Velocidade linear e angular de acordo com o modo
-    if (mode == RestoreMode::WithMomentum) {
-      accessor->Write(s_vehicleAddress + 0x320, &state.linearVelocity,
-                      sizeof(Vector3));
-      accessor->Write(s_vehicleAddress + 0x330, &state.angularVelocity,
-                      sizeof(Vector3));
-    } else {
-      Vector3 zeroVel{0.f, 0.f, 0.f};
-      accessor->Write(s_vehicleAddress + 0x320, &zeroVel, sizeof(Vector3));
-      accessor->Write(s_vehicleAddress + 0x330, &zeroVel, sizeof(Vector3));
-    }
+    // 4. Velocidade linear e angular de acordo com o modo de restauracao
+    const Vector3 targetLinVel = (mode == RestoreMode::WithMomentum)
+                                     ? state.linearVelocity
+                                     : Vector3{0.f, 0.f, 0.f};
+    const Vector3 targetAngVel = (mode == RestoreMode::WithMomentum)
+                                     ? state.angularVelocity
+                                     : Vector3{0.f, 0.f, 0.f};
 
-    // 5. Sincronizacao de transform visual no container (+0xcd0)
-    uintptr_t container = 0;
-    if (accessor->Read(s_vehicleAddress, &container, sizeof(container)) &&
-        container != 0 && accessor->IsValidAddress(container + 0xcd0)) {
-      Vector3 gfxPos = state.position;
-      gfxPos.y -= 0.44f;
-      accessor->Write(container + 0xcd0, &gfxPos, sizeof(Vector3));
-    }
+    // Fonte de verdade ativa no rig (+0x2b0 linear, +0x2c0 angular)
+    accessor->Write(s_vehicleAddress + 0x2b0, &targetLinVel, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x2c0, &targetAngVel, sizeof(Vector3));
+
+    // Copias tick-start (+0x170 linear, +0x180 angular)
+    accessor->Write(s_vehicleAddress + 0x170, &targetLinVel, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x180, &targetAngVel, sizeof(Vector3));
+
+    // Copias committed (+0x200 linear, +0x210 angular)
+    accessor->Write(s_vehicleAddress + 0x200, &targetLinVel, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x210, &targetAngVel, sizeof(Vector3));
+
+    // Copias de saida / telemetria lag-1 (+0x320 linear, +0x330 angular)
+    accessor->Write(s_vehicleAddress + 0x320, &targetLinVel, sizeof(Vector3));
+    accessor->Write(s_vehicleAddress + 0x330, &targetAngVel, sizeof(Vector3));
+
     return true;
   }
 

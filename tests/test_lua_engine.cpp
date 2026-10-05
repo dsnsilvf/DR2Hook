@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -564,8 +565,14 @@ void TestPracticeModeNativeMenu() {
       "Restore checkpoint",
       "Restore mode: Normal",
       "Clear checkpoint on new stage: On",
+      "Race start: Normal",
       "Indestructible tyres: Off",
       "Indestructible car: Off",
+      "Live gap to ghost: On",
+      "Extra ghost copies: Off",
+      "Ghost copy spacing: 2 s",
+      "Ghost head start: 0 s",
+      "Solid ghost car: Off",
       "Notifications: On",
   };
   TEST_ASSERT(entries.size() == mods.size() && entries[practice].name == "Practice Mode",
@@ -574,6 +581,15 @@ void TestPracticeModeNativeMenu() {
               "descricao do mod no menu");
   TEST_ASSERT(entries.size() == mods.size() && labels(entries[practice]) == expected,
               "opcoes do mod de pratica, na ordem declarada");
+  TEST_ASSERT(entries.size() == mods.size() &&
+                  entries[practice].options[4].description.rfind("{v}How every start works", 0) == 0 &&
+                  entries[practice].options[4].description.find("{s:_22_din_bold}Normal:{s:_22_roboto_cnd}") != std::string::npos &&
+                  !entries[practice].options[0].description.empty(),
+              "Menu.describe preenche a descricao do painel");
+  TEST_ASSERT(entries.size() == mods.size() &&
+                  entries[practice].options[4].description.find("\n\n") == std::string::npos &&
+                  entries[practice].options[4].description.find("\n \n") != std::string::npos,
+              "linha vazia da descricao vira espaco (sem simbolo no jogo)");
 
   // Salvar pelo menu (A no botao), desligar a limpeza ao iniciar especial pelo
   // combo (indice 0) e restaurar.
@@ -592,13 +608,16 @@ void TestPracticeModeNativeMenu() {
 
   dr2hook::ModManager::DispatchMenuEvent(practice, 2, 1);
   dr2hook::ModManager::DispatchMenuEvent(practice, 4, -1);
-  dr2hook::ModManager::DispatchMenuEvent(practice, 6, 7);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 5, -1);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 12, 7);
   const auto after = dr2hook::ModManager::MenuSnapshot();
   const auto afterLabels = labels(after[practice]);
   TEST_ASSERT(afterLabels[2] == "Restore mode: Momentum", "combo escolhe o valor do choice");
   TEST_ASSERT(afterLabels[3] == "Clear checkpoint on new stage: Off", "combo desliga o toggle");
-  TEST_ASSERT(afterLabels[4] == "Indestructible tyres: On", "A avanca o toggle");
-  TEST_ASSERT(afterLabels[6] == "Notifications: On", "indice fora dos valores ignorado");
+  TEST_ASSERT(afterLabels[4] == "Race start: No countdown",
+              "A avanca o modo de largada sem quebrar o mod fora do jogo");
+  TEST_ASSERT(afterLabels[5] == "Indestructible tyres: On", "A avanca o toggle");
+  TEST_ASSERT(afterLabels[12] == "Notifications: On", "indice fora dos valores ignorado");
   TEST_ASSERT(after[practice].options[2].ValueNames() ==
                   std::vector<std::string>({"Normal", "Momentum"}),
               "valores do combo no snapshot");
@@ -698,7 +717,72 @@ void TestConcurrentEventDispatch() {
 // ---------------------------------------------------------------------------
 // Main Runner
 // ---------------------------------------------------------------------------
+// Opções gravadas por uma execução anterior mudariam os valores padrão que os
+// testes esperam.
+void RemoveRealModSettings() {
+  std::error_code ignored;
+  std::filesystem::remove(std::filesystem::path("mods") / "practice_mode" /
+                              dr2hook::ModManager::kSettingsFileName,
+                          ignored);
+}
+
+void TestModSettingsPersistence() {
+  std::cout << "[RUN] TestModSettingsPersistence..." << std::endl;
+  const std::filesystem::path tempModsDir = "/tmp/dr2_test_settings_mods";
+  const std::filesystem::path modDir = tempModsDir / "settings_mod";
+  std::filesystem::remove_all(tempModsDir);
+  std::filesystem::create_directories(modDir);
+  std::ofstream(modDir / "mod.json") << R"({
+    "name": "Settings Test Mod", "id": "test.settings", "version": "1.0.0", "main": "main.lua"
+  })";
+  std::ofstream(modDir / "main.lua") << R"(
+    Menu.toggle("fast", "Fast", false)
+    Menu.choice("mode", "Mode", {"A", "B", "C"}, 1)
+    Menu.button("go", "Go", function() end)
+    function onInit()
+      local _, mode = Menu.get("mode")
+      seenAtInit = tostring(Menu.get("fast")) .. "/" .. mode
+    end
+  )";
+
+  TEST_ASSERT(dr2hook::ModManager::Initialize(tempModsDir.string()), "carrega mod de opcoes");
+  TEST_ASSERT(!std::filesystem::exists(modDir / dr2hook::ModManager::kSettingsFileName),
+              "sem mudanca, sem arquivo");
+  dr2hook::ModManager::DispatchMenuEvent(0, 0, -1); // fast -> on
+  dr2hook::ModManager::DispatchMenuEvent(0, 1, 2);  // mode -> C
+  dr2hook::ModManager::DispatchMenuEvent(0, 2, -1); // botao nao grava valor
+  std::ifstream saved(modDir / dr2hook::ModManager::kSettingsFileName);
+  std::stringstream text;
+  text << saved.rdbuf();
+  TEST_ASSERT(text.str().find("fast=on") != std::string::npos &&
+                  text.str().find("mode=C") != std::string::npos &&
+                  text.str().find("go=") == std::string::npos,
+              "grava toggle como on/off e choice pelo texto");
+
+  dr2hook::ModManager::ReloadMods(tempModsDir.string());
+  const auto entries = dr2hook::ModManager::MenuSnapshot();
+  TEST_ASSERT(entries.size() == 1 && entries[0].options.size() == 3 &&
+                  entries[0].options[0].DisplayLabel() == "Fast: On" &&
+                  entries[0].options[1].DisplayLabel() == "Mode: C",
+              "valores restaurados no reload");
+  TEST_ASSERT(dr2hook::LuaEngine::ExecuteString(
+                  "assert(seenAtInit == 'true/C', tostring(seenAtInit))"),
+              "onInit ja enxerga os valores salvos");
+
+  std::ofstream(modDir / dr2hook::ModManager::kSettingsFileName)
+      << "; comentario\nmode=Z\nfast=talvez\nunknown=on\n";
+  dr2hook::ModManager::ReloadMods(tempModsDir.string());
+  const auto fallback = dr2hook::ModManager::MenuSnapshot();
+  TEST_ASSERT(fallback.size() == 1 && fallback[0].options[0].DisplayLabel() == "Fast: Off" &&
+                  fallback[0].options[1].DisplayLabel() == "Mode: A",
+              "valores invalidos e ids desconhecidos ficam no padrao");
+
+  dr2hook::ModManager::Shutdown();
+  std::filesystem::remove_all(tempModsDir);
+}
+
 int main() {
+  RemoveRealModSettings();
   std::cout << "====================================================="
             << std::endl;
   std::cout << "DR2Hook - Suíte de Testes do Motor Lua e ModManager (Fase 4)"
@@ -716,6 +800,8 @@ int main() {
   TestMenuBindings();
   TestPracticeModeNativeMenu();
   TestConcurrentEventDispatch();
+  TestModSettingsPersistence();
+  RemoveRealModSettings();
 
   std::cout << "====================================================="
             << std::endl;

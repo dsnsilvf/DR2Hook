@@ -1,4 +1,5 @@
 #include "dr2hook/ui/overlay.h"
+#include "dr2hook/ghost_lab.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
@@ -257,7 +258,41 @@ void OverlayManager::RenderUI() {
     }
   }
 
-  // 2. Main In-Game Menu (DR2Hook)
+  // 2. Diferenca ao vivo para o fantasma
+  if (dr2hook::GhostLab::IsHudVisible()) {
+    const dr2hook::GhostLab::Status ghost = dr2hook::GhostLab::GetStatus();
+    if (ghost.active) {
+      const ImGuiViewport *viewport = ImGui::GetMainViewport();
+      ImGui::SetNextWindowPos(
+          ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                 viewport->WorkPos.y + 12.0f),
+          ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+      ImGui::SetNextWindowBgAlpha(0.6f);
+      const ImGuiWindowFlags flags =
+          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+          ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+          ImGuiWindowFlags_NoInputs;
+      if (ImGui::Begin("##GhostDelta", nullptr, flags)) {
+        // delta > 0: o fantasma passou por aqui antes, jogador atras.
+        const bool behind = ghost.deltaSeconds > 0.0f;
+        const ImVec4 color = behind ? ImVec4(1.0f, 0.35f, 0.3f, 1.0f)
+                                    : ImVec4(0.35f, 1.0f, 0.45f, 1.0f);
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::TextColored(color, "%+.2f s", ghost.deltaSeconds);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%+.0f m", -ghost.gapMeters);
+        if (ghost.offTrackMeters > 25.0f) {
+          ImGui::TextDisabled("off the ghost's line (%.0f m)",
+                              ghost.offTrackMeters);
+        }
+      }
+      ImGui::End();
+    }
+  }
+
+  // 3. Main In-Game Menu (DR2Hook)
   if (g_showMenu) {
     ImGui::SetNextWindowSize(ImVec2(660, 540), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("DR2Hook v0.1.0", &g_showMenu)) {

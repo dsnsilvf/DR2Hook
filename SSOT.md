@@ -58,6 +58,9 @@ graph TD
   - Hook em `IDXGISwapChain::Present` para sincronização com o ciclo de renderização do jogo. O detour fica na `dxgi.dll` e chama o core.
   - Hook na `WndProc` da janela do DiRT Rally 2.0 para interceptação de atalhos (`Insert`, `F5`, `F6`, `F7`, `F8`).
 - **Core recarregável (`src/core/core_module.cpp`):** Overlay, telemetria, savestate e mods. É o que o `F8` troca.
+- **Ciclo de vida da especial (`src/core/race_events.cpp`, `src/core/load_trace.cpp`, na `dxgi.dll`):** `onStageLoad` (abertura do `.nefs` da localidade), `onCountdown` e `onStageStart` (hook de `RaceSession::OnNamedEvent`). Os eventos vão para uma fila que o core consome a cada frame (`Dr2Host_StageConsumeEvent`) e despacha ao Lua na thread de render.
+- **AutoStage (`src/core/auto_stage.cpp`, na `dxgi.dll`):** força o modo benchmark nativo; instalado no `DllMain` porque o jogo o inicializa no começo do `WinMain`.
+- **Largada (`src/core/cutscene_probe.cpp`, no core):** modos de largada (`Race.setStartMode`) e log dos keyframes de cutscene. Exceção consciente ao ADR-007: hooks em experimentação ficam no core para iterar com `F8`; o `Shutdown` desliga os hooks, espera as chamadas em andamento e devolve os valores do jogo que alterou.
 - **Network Isolation (dentro de `src/core/hooks.cpp`, na `dxgi.dll`):** Detours em `ws2_32.dll` (`getaddrinfo`, `GetAddrInfoW`, `connect`). Nomes que não sejam localhost e conexões fora de `127.0.0.0/8` e do loopback IPv6 são recusados. `sendto` não é interceptado, então telemetria UDP local continua possível. O isolamento não vai para o módulo recarregável: um `F8` não o desliga.
 - **Safety Gate (`src/core/safety.cpp`):** Módulo de controle de segurança que inspeciona ponteiros e estados de sessão sob política *fail-closed*.
 - **Memory Engine (`src/core/memory.cpp` & `player.cpp`):** Resolução da cadeia de ponteiros do veículo e leitura da telemetria em tempo real.

@@ -89,15 +89,33 @@ O DR2Hook invoca funções globais específicas no seu script `main.lua` caso es
   end
   ```
 
-### `onStageStart(stage)`
-- **Quando é chamado:** Disparado ao iniciar ou reiniciar uma especial ou pista de treino.
+### `onStageLoad(stage)`
+- **Quando é chamado:** No início do carregamento de uma especial, quando o jogo abre o pacote da localidade (`locations/<local>__<pista>.nefs`). Reiniciar a especial não recarrega e não chama este callback.
 - **Parâmetros:**
-  - `stage` (table): Tabela contendo informações da especial, incluindo o campo `name` (string).
+  - `stage` (table): campo `name` (string) com a pista, ex.: `"new_zealand_rally_01"`. A rota ainda não é identificada.
+- **Assinatura:** `function onStageLoad(stage)`
+
+### `onCountdown(light)`
+- **Quando é chamado:** Uma vez por luz da contagem de largada, com um segundo entre elas.
+- **Parâmetros:**
+  - `light` (integer): número da luz, de `1` a `5`. A largada (`onStageStart`) vem um segundo depois da quinta.
+- **Assinatura:** `function onCountdown(light)`
+
+### `onStageStart(stage)`
+- **Quando é chamado:** Na largada, quando o jogador assume o controle do carro (evento `racestart` do jogo). Também na largada depois de reiniciar a especial.
+- **Parâmetros:**
+  - `stage` (table):
+    - `name` (string): pista, igual a `onStageLoad`.
+    - `restart` (boolean): `true` quando é a largada de um reinício da mesma especial, sem novo carregamento.
 - **Assinatura:** `function onStageStart(stage)`
 - **Exemplo:**
   ```lua
   function onStageStart(stage)
-      print("[MeuMod] Nova especial iniciada: " .. tostring(stage.name))
+      if stage.restart then
+          print("[MeuMod] Especial reiniciada: " .. stage.name)
+      else
+          print("[MeuMod] Nova especial: " .. stage.name)
+      end
   end
   ```
 
@@ -147,6 +165,14 @@ Permite inspecionar o status das travas de Fair Play antes de realizar qualquer 
 | :--- | :--- | :--- | :--- |
 | `Safety.isRestrictedMode()` | Nenhum | `boolean` | Retorna `true` se o jogo estiver em evento oficial/competitivo (RaceNet), ou `false` se estiver em modo livre/treino offline. |
 
+### Módulo `Race`
+- `Race.setStartMode(mode)`: como a largada acontece, inclusive nos reinícios. `mode` é uma string:
+  - `"normal"`: padrão do jogo (segurar o freio de mão e 5 luzes).
+  - `"no_countdown"`: segura o freio de mão e larga na hora, sem luzes nem a espera do tempo do rival.
+  - `"automatic"`: larga sozinho assim que o carro está na linha.
+  - `"on_throttle"`: larga ao pisar no acelerador.
+  Os hooks ficam no core (recarregados pelo F8, que volta o modo para `"normal"`); retorna `false` fora do Windows.
+
 ### Módulo `UI`
 Permite emitir mensagens e avisos visuais na tela através do sistema de notificações HUD do Dear ImGui.
 
@@ -155,7 +181,7 @@ Permite emitir mensagens e avisos visuais na tela através do sistema de notific
 | `UI.notify(message, duration)` | `message` (string), `duration` (number opcional, padrão `3.0`) | `nil` | Exibe uma notificação toast semi-transparente no canto superior da tela pelo tempo indicado (em segundos). |
 
 ### Módulo `Menu`
-Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB troca de aba) > nome do mod**. As chamadas ficam no corpo do `main.lua`, fora dos callbacks. Cada mod tem até 24 opções, numa lista com rolagem, na ordem em que foram declaradas. Declarar de novo o mesmo `id` substitui a opção. Toggle e choice aparecem como `< valor >` e mudam com esquerda e direita. Botões rodam com A. O callback é chamado no quadro seguinte, na thread do `Present`.
+Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB troca de aba) > nome do mod**. A tela tem o título `OPTIONS` (com o nome do mod em vermelho acima), e o painel da direita acompanha a linha em foco. As chamadas ficam no corpo do `main.lua`, fora dos callbacks. Cada mod tem até 24 opções, numa lista com rolagem, na ordem em que foram declaradas. Declarar de novo o mesmo `id` substitui a opção. Toggle e choice aparecem como `< valor >` e mudam com esquerda e direita. Botões rodam com A. O callback é chamado no quadro seguinte, na thread do `Present`.
 
 | Função | Parâmetros | Retorno | Descrição |
 | :--- | :--- | :--- | :--- |
@@ -164,14 +190,18 @@ Declara opções na tela nativa do jogo: **Pausa > DR2 Hook > aba Mods (LB/RB tr
 | `Menu.button(id, label, onClick)` | `onClick()` obrigatório | `nil` | Só chama a função. Rótulo `label`. |
 | `Menu.get(id)` | `id` | toggle: `boolean`. choice: `index, value`. button ou id inexistente: `nil` | Valor atual. |
 | `Menu.set(id, value)` | toggle: `boolean`. choice: índice a partir de `1` | `nil` | Muda o valor sem chamar o callback. Erro se o id não existir ou o índice estiver fora da lista. Com a tela do mod aberta, o combo só mostra o valor novo quando a tela é reaberta. |
+| `Menu.describe(id, text)` | `id` de uma opção já declarada. `text` string | `nil` | Texto do painel da direita quando a linha está em foco. Opcional: sem ele, o painel mostra o nome da opção e a descrição do mod (`mod.json`). Erro se o id não existir. |
 
-Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` chamado fora de um mod (por exemplo, pelo console) geram erro de Lua. No carregamento, o mod é desativado como em qualquer outro erro de carga. Mod desativado aparece na lista como `nome (error)`, sem opções. Os valores não são salvos: voltam ao padrão quando os mods ou o core são recarregados.
+Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` chamado fora de um mod (por exemplo, pelo console) geram erro de Lua. No carregamento, o mod é desativado como em qualquer outro erro de carga. Mod desativado aparece na lista como `nome (error)`, sem opções. Os valores de toggle e choice são salvos em `mods/<pasta do mod>/settings.ini` (uma linha `id=valor`; toggle `on`/`off`, choice pelo texto do valor) sempre que o jogador muda uma opção no menu ou o mod chama `Menu.set`. Ao carregar o mod, depois do `main.lua` declarar as opções e antes do `onInit`, os valores salvos são aplicados **sem chamar os callbacks**: leia-os com `Menu.get` no `onInit`. Valores que não existem mais na lista e ids desconhecidos são ignorados. Apagar o arquivo volta tudo ao padrão.
+
+Nas descrições (`Menu.describe`), `\n` quebra a linha. Negrito: `*texto*` (ou `**texto**`) sai em DIN negrito no painel; `\\*` mostra um asterisco. Ex.: `Menu.describe("race_start", "*Normal:* hold the handbrake")`. Avançado: um texto que já começa com `{v}` passa direto para a marcação do jogo (`{s:<estilo>}`, ids de `frontend/configs/text_styles.xml`; o painel usa `_22_roboto_cnd`).
 
 ```lua
 Menu.toggle("indestructible_tyres", "Indestructible tyres", false, function(enabled)
     UI.notify("Tyres: " .. tostring(enabled), 2.0)
 end)
 Menu.choice("restore_mode", "Restore mode", {"Normal", "Momentum"}, 1)
+Menu.describe("restore_mode", "Normal: the car comes back stopped. Momentum: it keeps its speed.")
 
 function onKeyDown(keyCode)
     local index, value = Menu.get("restore_mode")

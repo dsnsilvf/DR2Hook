@@ -23,6 +23,8 @@ struct ModInstance {
   int refOnInit = LUA_NOREF;
   int refOnTick = LUA_NOREF;
   int refOnKeyDown = LUA_NOREF;
+  int refOnStageLoad = LUA_NOREF;
+  int refOnCountdown = LUA_NOREF;
   int refOnStageStart = LUA_NOREF;
   int refOnRenderUI = LUA_NOREF;
 };
@@ -47,11 +49,22 @@ public:
   static void ReloadMods(const std::string &modsDirectory = "mods");
   static void DispatchTick(double deltaTime);
   static void DispatchKeyDown(UINT vkCode);
-  static void DispatchStageStart(const std::string &stageName);
+  // Ciclo de vida da especial (eventos do jogo via proxy).
+  static void DispatchStageLoad(const std::string &stageName);
+  static void DispatchCountdown(int light);
+  static void DispatchStageStart(const std::string &stageName,
+                                 bool restart = false);
   static void DispatchRenderUI(ModInstance &mod);
   static const std::vector<ModInstance> &GetLoadedMods();
+  // Grava os valores atuais das opções do mod em <pasta do mod>/settings.ini.
+  // Chamado quando o usuário muda uma opção no menu ou o mod usa Menu.set.
+  static void SaveModSettings(const std::string &modId);
+  static constexpr const char *kSettingsFileName = "settings.ini";
 
 private:
+  // Lê settings.ini e aplica por id, sem chamar callbacks: roda depois do
+  // main.lua declarar as opções e antes do onInit.
+  static void LoadModSettings(const ModInstance &mod);
   static bool LoadModFromDirectory(const std::string &modDirPath);
   static void CallModCallback(ModInstance &mod, int funcRef, int nargs = 0,
                               int nresults = 0);

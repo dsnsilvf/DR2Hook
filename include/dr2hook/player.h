@@ -72,7 +72,8 @@ struct TrackTelemetryInfo {
 class Player {
 public:
   static void Configure(MemoryScanner *scanner, uintptr_t vehicleAddress);
-  static bool CaptureState(CarState &outState);
+  // quiet: sem avisos no log (leitura a cada frame).
+  static bool CaptureState(CarState &outState, bool quiet = false);
   static bool ApplyState(const CarState &state,
                          RestoreMode mode = RestoreMode::Normal);
   static bool ResolveVehicleAddress(uintptr_t gameBase);

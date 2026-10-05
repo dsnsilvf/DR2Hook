@@ -210,3 +210,8 @@ See the tables above. The verbatim `ss`, `stat`, `maps`, `ls`, and log excerpts 
 - **G2 at start (12:07:28) and end (12:08:13):** all sanity checks true; `confound_flags = 0x00` (clean).
 - **Rig pointer unchanged:** 0x4b29bab0.
 - **Phase 1a results:** see `/workspace/validation/INV-01-phase1a.md`.
+
+---
+
+## Nota posterior (2026-10-04)
+Este documento registra a execução de G0/G1/G2 de 2026-09-30; a frase "G3 ... NOT run" vale para aquele momento. O G3 foi executado depois, em 2026-10-01, com PASS: ver `G3-result.md`.

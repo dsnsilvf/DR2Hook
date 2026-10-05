@@ -36,3 +36,7 @@ captures/
 # Python
 __pycache__/
 *.py[cod]
+
+# Opcoes de mods gravadas pelo DR2 Hook
+mods/*/settings.ini
+mods/*/settings.ini.tmp

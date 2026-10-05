@@ -67,6 +67,11 @@ add_library(dxgi SHARED
     src/core/host.cpp
     src/core/hooks.cpp
     src/core/logger.cpp
+    src/core/auto_stage.cpp
+    src/core/load_trace.cpp
+    src/core/race_events.cpp
+    src/core/pssg_patch.cpp
+    src/core/vehicle_system_patch.cpp
     src/core/pause_menu.cpp
     src/core/native_screen.cpp
     src/core/ui_data.cpp
@@ -88,6 +93,13 @@ add_library(dr2hook_core SHARED
     src/core/player.cpp
     src/core/savestate.cpp
     src/core/physics_tick_harness.cpp
+    src/core/cutscene_probe.cpp
+    src/core/free_camera.cpp
+    src/core/ghost_lab.cpp
+    src/core/ghost_trace.cpp
+    src/core/terminal_damage.cpp
+    src/core/remote_commands.cpp
+    src/core/net_dialog.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
@@ -204,6 +216,8 @@ add_executable(test_lua_engine
     src/core/savestate.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
+    src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
@@ -245,6 +259,8 @@ add_executable(test_overlay
     src/core/player.cpp
     src/core/savestate.cpp
     src/script/lua_engine.cpp
+    src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
@@ -286,6 +302,8 @@ add_executable(test_stability_soak
     src/core/savestate.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
+    src/core/cutscene_probe.cpp
+    src/core/ghost_lab.cpp
     src/script/mod_manager.cpp
     src/script/mod_menu.cpp
     ${IMGUI_CORE_SOURCES}
@@ -401,6 +419,40 @@ endif()
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_physics_tick_harness PRIVATE m)
+endif()
+
+add_executable(test_free_camera
+    tests/test_free_camera.cpp
+)
+
+target_include_directories(test_free_camera PRIVATE include)
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_free_camera PRIVATE m)
+endif()
+
+add_executable(test_auto_stage
+    tests/test_auto_stage.cpp
+    src/core/auto_stage.cpp
+    src/core/logger.cpp
+)
+
+target_include_directories(test_auto_stage PRIVATE
+    include
+    src
+    vendor/minhook/include
+)
+
+if(NOT WIN32 AND DR2HOOK_WINE_WINDOWS_INCLUDE)
+    target_include_directories(test_auto_stage PRIVATE ${DR2HOOK_WINE_WINDOWS_INCLUDE})
+endif()
+
+if(WIN32 OR MSVC)
+    target_compile_definitions(test_auto_stage PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _CRT_SECURE_NO_WARNINGS
+    )
 endif()
 
 # Alvo customizado para geração do pacote de release (Fase 6)

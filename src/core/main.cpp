@@ -1,16 +1,24 @@
+#include "dr2hook/auto_stage.h"
 #include "dr2hook/common.h"
 #include "dr2hook/hooks.h"
+#include "dr2hook/load_trace.h"
 #include "dr2hook/host.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/native_screen.h"
 #include "dr2hook/pause_menu.h"
 #include "dr2hook/proxy.h"
+#include "dr2hook/pssg_patch.h"
+#include "dr2hook/race_events.h"
 #include "dr2hook/ui_data.h"
+#include "dr2hook/vehicle_system_patch.h"
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   dr2hook::SetHostModule(static_cast<HMODULE>(lpParam));
   dr2hook::Logger::Init("dr2hook.log");
   dr2hook::StartUiDataLog();
+  dr2hook::LogAutoStageStatus();
+  dr2hook::LogPssgPatchStatus();
+  dr2hook::LogVehicleSystemSizePatch();
   dr2hook::EnsureProxyInitialized();
 
   if (dr2hook::GetOriginalProc("CreateDXGIFactory") != nullptr) {
@@ -21,6 +29,8 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
       dr2hook::HostLog("Hooks principais inicializados com sucesso.");
       dr2hook::InstallPauseMenuHooks();
       dr2hook::InstallNativeScreenHook();
+      dr2hook::InstallLoadTrace();
+      dr2hook::InstallRaceEventsHook();
     } else {
       dr2hook::HostLog("Falha ao inicializar hooks principais.");
     }
@@ -37,6 +47,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   case DLL_PROCESS_ATTACH: {
     DisableThreadLibraryCalls(hModule);
     dr2hook::InstallUiDataHook(hModule);
+    dr2hook::InstallAutoStageHook();
+    dr2hook::InstallPssgPatch();
+    dr2hook::InstallVehicleSystemSizePatch();
     HANDLE hThread =
         CreateThread(nullptr, 0, DR2Hook_InitThread, hModule, 0, nullptr);
     if (hThread != nullptr) {
@@ -46,6 +59,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   }
 
   case DLL_PROCESS_DETACH:
+    dr2hook::UninstallAutoStageHook();
+    dr2hook::UninstallLoadTrace();
+    dr2hook::UninstallRaceEventsHook();
     dr2hook::UnloadCore(lpReserved == nullptr);
     dr2hook::ShutdownHooks();
     ShutdownProxy();

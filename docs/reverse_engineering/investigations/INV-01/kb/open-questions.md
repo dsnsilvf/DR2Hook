@@ -20,6 +20,7 @@ A dash (—) means the field was not recorded in the source.
 - Static addendum (RE Analyst): REPORTED 2026-09-30 — /workspace/analyst/INV-01-static-addendum.md. Recorded as H-042..H-056, H-R08..H-R10, Q-028..Q-034, C-006; resolves C-005; Q-011/Q-012/Q-014/Q-020 answered or proposed. Revised experiments E-B1..E-B11 in addendum §7; 'write between ticks' now means 'write at L1'.
 - Build identity: CONFIRMED by two sources (F-011).
 - Runtime half (Memory Cartographer full analysis): REPORTED 2026-09-30 — /workspace/captures/INV-01/REPORT.md (rev. 2). Promotions F-012..F-014 per RE Orchestrator ruling; H-057, H-058, H-R11, Q-035, Q-036 added. INV-01 stays OPEN.
+- Harness gate G3 (read-only self-test): PASSED 2026-10-01 (validation/G3-result.md); harness cleared for the write-experiment phase. No question below changed status because of it.
 - Result: OPEN (not closed; awaiting runtime cross-check).
 
 ## Unknowns

@@ -311,7 +311,16 @@ A causa do cursor está no formato da grade, e não no tratador. O texto de `SBG
 - `options_ingame` e `pause_menu` têm um id por linha (`\r\n item_0\r\n item_1 ...`).
 - Das 82 grades de `screens.bin`, 15 têm mais de um id por linha, como `spare_new0 spare_new1 spare_new2 spare_new3`.
 
-O patch montava `" item_0 item_1 item_2 item_3 "`, uma linha com quatro colunas, e por isso para baixo não tinha destino. HIPÓTESE: esquerda e direita teriam trocado de item. Agora o patch gera um id por linha, e `test_ui_patch` exige isso. O parser da grade no executável não foi desmontado.
+O patch montava `" item_0 item_1 item_2 item_3 "`, uma linha com quatro colunas, e por isso para baixo não tinha destino. HIPÓTESE: esquerda e direita teriam trocado de item. Agora o patch gera um id por linha, e `test_ui_patch` exige isso.
+
+Leitor da grade (2026-10-02, CONFIRMADO no código): o loader do `SBGridItemFlow` (`0x140d23358`, lê `wrapH` `+0xa8`, `wrapV` `+0xa9`, `allow_duplicate_nodes` `+0xaa`) percorre o texto em `0x140d23443` com uma tabela de salto por caractere (`0x140d23818`/`0x140d23804`):
+
+- espaço, `\t`, `\r` e `\0` fecham o token; cada token vira uma célula ligada à anterior (esquerda `+0x20`, direita `+0x28`) e à célula da mesma coluna na linha de cima (cima `+0x10`, baixo `+0x18`);
+- `\n` fecha a linha. Linha em branco não muda nada;
+- `[id]` é uma célula que aponta para o item de um token anterior (bloco grande que ocupa duas células, `+0x30`);
+- `|` abre um segundo nome no mesmo token (`+0x38`), sem uso conhecido nos dados.
+
+Armadilha: o XML do `tools/egodata` junta o espaço em branco do texto e mostra `options_extras` numa linha só. Nos bytes do `screens.bin` são 4 linhas (`preferences input profile` / `[preferences] [input] racenet` / `graphics audio legal` / `[graphics] [audio] credits`). A aba DR2 Hook copiou o texto achatado, a grade virou 1 × 12 e cima/baixo não andavam.
 
 `back` já é o evento do botão de voltar do controle (`SBHotButtonScreenEvent event_primary="back"`), gravado no mesmo `data_path="event"`. Por isso um item com `select_value="back"` deve voltar pelo mesmo link.
 

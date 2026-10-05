@@ -7,6 +7,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -280,13 +281,32 @@ void CheckPage(const Node *screen, const ui_patch::PageDef &page, const char *da
   const Node *flow = Behaviour(*screen, "SBScrollableItemFlow");
   TEST_ASSERT(flow != nullptr && flow->text && *flow->text == ListText(rows),
               name + ": lista com um id por linha em CRLF");
-  TEST_ASSERT(Behaviour(*screen, "SBScreenTitle", "string_id", page.titleKey) != nullptr,
+  TEST_ASSERT(Behaviour(*screen, "SBScreenTitle", "string_id",
+                        page.breadcrumbKey != nullptr ? page.breadcrumbKey
+                                                      : page.titleKey) != nullptr,
               name + ": titulo pela chave propria");
   TEST_ASSERT(Behaviour(*screen, "SBAudioNotification", "screen_name", page.name) != nullptr,
               name + ": audio da propria tela");
-  TEST_ASSERT(Behaviour(*screen, "BTextStatic", "string", page.infoTitleKey) != nullptr &&
-                  Behaviour(*screen, "BTextStatic", "string", page.infoTextKey) != nullptr,
-              name + ": painel de descricao");
+  if (page.infoTitleKey != nullptr) {
+    TEST_ASSERT(Behaviour(*screen, "BTextStatic", "string", page.infoTitleKey) != nullptr &&
+                    Behaviour(*screen, "BTextStatic", "string", page.infoTextKey) != nullptr,
+                name + ": painel de descricao");
+  } else {
+    TEST_ASSERT(Behaviour(*screen, "BTextData", "data_path", "sidebar.title") != nullptr &&
+                    Behaviour(*screen, "BTextData", "data_path", "sidebar.description") != nullptr &&
+                    Behaviour(*screen, "BTextStatic", "glyph",
+                              "smart_contextual_info.text_title") == nullptr,
+                name + ": painel ligado a sidebar.* (muda com o foco)");
+    for (size_t i = 0; i < rows && i + 1 < items.children.size(); ++i) {
+      const Node &item = items.children[i + 1];
+      const std::string index = std::to_string(i);
+      TEST_ASSERT(Find(item, [&](const Node &n) {
+                    return Is(n, "IBItemFlowIndex", "index", index.c_str()) &&
+                           Is(n, "IBItemFlowIndex", "index_data_path", "selected_index");
+                  }),
+                  name + ": linha " + index + " grava o foco em selected_index");
+    }
+  }
   TEST_ASSERT(Behaviour(*screen, "SBHotButtonScreenEvent", "event_primary", "back") != nullptr,
               name + ": B volta pelo evento back");
 }
@@ -308,9 +328,9 @@ void TestPatchChain() {
   TEST_ASSERT(ui_patch::PatchStates(states, error), error);
   for (const ui_patch::ScreenDef &def : ui_patch::kScreens) {
     const Node *state = Find(states, [&](const Node &n) {
-      return Is(n, "StateScreenFECore", "screen_name", def.name);
+      return Is(n, "StateScreenFECore", "id", def.stateId);
     });
-    TEST_ASSERT(state != nullptr && *state->Attribute("id") == def.stateId,
+    TEST_ASSERT(state != nullptr && *state->Attribute("screen_name") == def.name,
                 std::string("estado com id fixo: ") + def.name);
     TEST_ASSERT(std::stoul(def.stateId) == def.stateIdValue,
                 std::string("id em texto e em numero: ") + def.name);
@@ -468,6 +488,9 @@ void TestEventPrefixes() {
               "chaves dinamicas com o prefixo da busca");
   for (const ui_patch::PageDef &page : {ui_patch::kMainPage, ui_patch::kModsPage, ui_patch::kModPage}) {
     for (const char *key : {page.titleKey, page.infoTitleKey, page.infoTextKey}) {
+      if (key == nullptr) {
+        continue; // painel ligado a dados
+      }
       TEST_ASSERT(std::string(key).rfind(ui_patch::kKeyPrefix, 0) == 0,
                   std::string("chave respondida pela DLL: ") + key);
     }
@@ -571,6 +594,76 @@ void TestRealFiles() {
     if (std::string(name) == "flow") ok = ui_patch::PatchFlow(root, linked, error);
     if (std::string(name) == "screens") ok = ui_patch::PatchScreens(root, error);
     TEST_ASSERT(ok, std::string(name) + ": " + error);
+    if (ok && std::string(name) == "screens") {
+      const Node *page = Find(root, [](const Node &n) {
+        return Is(n, "Screen", "id", ui_patch::kMainMenuPage.name);
+      });
+      const size_t tiles = sizeof(ui_patch::kMainMenuTiles) / sizeof(ui_patch::kMainMenuTiles[0]);
+      TEST_ASSERT(page != nullptr && page->children.size() == 2 &&
+                      page->children[0].children.size() == tiles &&
+                      Find(*page, [](const Node &n) {
+                        return Is(n, "IBSelectableSimple", "select_value",
+                                  ui_patch::kMainMenuModsEvent);
+                      }) != nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return n.name == "IBDataEnabled";
+                      }) == nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return Is(n, "IBSelectableSimple", "select_value",
+                                  ui_patch::kMainMenuPracticeEvent);
+                      }) != nullptr &&
+                      Find(*page, [](const Node &n) {
+                        return n.name == "SBHotButtonScreenEvent";
+                      }) == nullptr &&
+                      std::all_of(page->children[0].children.begin(),
+                                  page->children[0].children.end(),
+                                  [](const Node &tile) {
+                                    return Find(tile, [](const Node &n) {
+                                             return n.name == "IBSelectableSimple";
+                                           }) != nullptr;
+                                  }),
+                  "aba do menu principal: 8 blocos, MODS e PRACTICE ativos, em breve sem acao e navegaveis");
+      // O leitor da grade só liga cima/baixo entre linhas separadas por '\n'.
+      const Node *grid = page != nullptr ? Find(*page, [](const Node &n) {
+        return n.name == "SBGridItemFlow";
+      }) : nullptr;
+      size_t rows = 0;
+      if (grid != nullptr) {
+        std::istringstream lines(grid->text.value_or(""));
+        for (std::string line; std::getline(lines, line);) {
+          rows += line.find_first_not_of(" \t\r") != std::string::npos;
+        }
+      }
+      TEST_ASSERT(rows == 4, "grade da aba do menu principal com 4 linhas");
+      for (const char *event : {ui_patch::kOpenOverlayEvent, ui_patch::kReloadModsEvent}) {
+        TEST_ASSERT(page != nullptr && Find(*page, [&](const Node &n) {
+                      return Is(n, "IBSelectableSimple", "select_value", event);
+                    }) != nullptr,
+                    std::string("bloco de acao no menu principal: ") + event);
+      }
+    }
+    if (ok && std::string(name) == "flow") {
+      const Node *mainMenu = Find(root, [](const Node &n) {
+        return Is(n, "node", "jump_id", ui_patch::kMainMenuJumpId);
+      });
+      TEST_ASSERT(mainMenu != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kPauseEvent);
+                      }) != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kMainMenuPracticeEvent);
+                      }) != nullptr &&
+                      Find(root, [](const Node &n) {
+                        return Is(n, "node", "state", ui_patch::kModDirect.stateId);
+                      }) != nullptr &&
+                      Find(*mainMenu, [](const Node &n) {
+                        return Is(n, "link", "id", ui_patch::kMainMenuModsEvent);
+                      }) != nullptr &&
+                      Find(root, [](const Node &n) {
+                        return Is(n, "node", "state", ui_patch::kHubMods.stateId);
+                      }) != nullptr,
+                  "menu principal ligado ao hub e ao mod interno");
+    }
     if (out != nullptr) {
       const std::vector<uint8_t> patched = dr2hook::bxml::Encode(root);
       std::ofstream(std::string(out) + "/" + name + ".bin", std::ios::binary)
