@@ -19,6 +19,7 @@ import json
 import os
 from typing import Any, Callable
 
+from tools.egodata import bxml
 from tools.egodata.nefs import NefsArchive
 from tools.pssg import PSSGFile
 from tools.uiview.content import export_pssg_images, safe_name
@@ -223,6 +224,57 @@ def _bind_textures(arc: NefsArchive, rel: str, path: str, files: dict[str, int],
     return tex_ids
 
 
+def _car_cameras(arc: NefsArchive, path: str) -> list[dict[str, Any]]:
+    """Vistas de câmera do jogo (`cameras.xml` ao lado do PSSG), no espaço do carro.
+
+    Cada vista traz os parâmetros crus (`params`) e, quando há, a posição (`pos`) e os ângulos.
+    Câmeras de perseguição não têm posição fixa: guardam o alvo e a distância.
+    """
+    cam_path = os.path.dirname(path) + "/cameras.xml"
+    try:
+        root = bxml.decode(arc.read(cam_path))
+    except Exception:
+        return []
+    views: list[dict[str, Any]] = []
+
+    def num(v: str) -> float:
+        try:
+            return float(v)
+        except ValueError:
+            return 0.0
+
+    def walk(node: list) -> None:
+        if node[0] == "View":
+            ident = dict(node[2]).get("ident", "")
+            params: dict[str, Any] = {}
+            for child in node[3]:
+                a = dict(child[2])
+                kind, name = a.get("type"), a.get("name", "")
+                if kind == "vector3":
+                    params[name] = [num(a.get("x", "0")), num(a.get("y", "0")), num(a.get("z", "0"))]
+                elif kind == "scalar":
+                    params[name] = num(a.get("value", "0"))
+                elif kind == "bool":
+                    params[name] = a.get("value") == "true"
+                else:
+                    params[name] = a.get("value", "")
+            view: dict[str, Any] = {"id": ident, "locked": bool(params.get("isLocked")), "params": params}
+            pos = params.get("position") or params.get("offset")
+            if pos:
+                view["pos"] = pos
+                view["fixed"] = "position" in params          # câmeras de cabine: pitch em graus
+                view["pitch"], view["yaw"], view["roll"] = (params.get(k, 0.0) for k in ("pitch", "yaw", "roll"))
+            elif "target" in params:
+                view["target"] = params["target"]
+                view["dist"] = params.get("overrideOffset", 0.0)
+            views.append(view)
+        for child in node[3]:
+            walk(child)
+
+    walk(root)
+    return views
+
+
 def _export_car(arc: NefsArchive, rel: str, path: str, row: dict[str, Any], out: str, force: bool,
                 log: Callable[[str], None]) -> str | None:
     """Grava a árvore (`.car.json`) e os buffers compartilhados (`.car.bin`) de um carro."""
@@ -231,7 +283,12 @@ def _export_car(arc: NefsArchive, rel: str, path: str, row: dict[str, Any], out:
     json_abs, bin_abs = os.path.join(out, json_rel), os.path.join(out, bin_rel)
     if not force and os.path.exists(json_abs) and os.path.exists(bin_abs):
         try:
-            if json.load(open(json_abs, encoding="utf-8")).get("rev") == CAR_REV:
+            cached = json.load(open(json_abs, encoding="utf-8"))
+            if cached.get("rev") == CAR_REV:
+                if "cameras" not in cached:      # árvores antigas ganham só as câmeras, sem refazer a malha
+                    cached["cameras"] = _car_cameras(arc, path)
+                    with open(json_abs, "w", encoding="utf-8") as fh:
+                        json.dump(cached, fh, separators=(",", ":"))
                 return json_rel
         except (OSError, ValueError):
             pass
@@ -249,6 +306,7 @@ def _export_car(arc: NefsArchive, rel: str, path: str, row: dict[str, Any], out:
     with open(bin_abs, "wb") as fh:
         fh.write(pack_resources(resources))
     model["bin"] = bin_rel
+    model["cameras"] = _car_cameras(arc, path)
     with open(json_abs, "w", encoding="utf-8") as fh:
         json.dump(model, fh, separators=(",", ":"))
     lods = ", ".join(f"{l['name']}={l['nodes']} nós/{l['slices']} fatias" for l in model["lods"]) or "sem LOD"

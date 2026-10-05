@@ -14,7 +14,7 @@ const cv = {
   expanded: new Set(), hidden: new Set(), hiddenSlices: new Set(),
   lod: "LOD0", solo: false, wire: false, flat: false, flip: false, variant: "tarmac", glass: true,
   yaw: 0.7, pitch: 0.3, dist: 5, target: [0, 0.5, 0], drag: null,
-  tool: "orbit", gz: null, gzHover: -1, edited: new Set(), hist: [], histPos: 0, histOpen: false,   // ferramenta: orbit | move | rotate
+  tool: "orbit", gz: null, gzHover: -1, edited: new Set(), hist: [], histPos: 0, histOpen: false, camsOn: true, camView: null,   // ferramenta: orbit | move | rotate
   gl: null, program: null, grid: null, loc: null, draw: [], dirty: true, gen: 0, status: "",
 };
 const CAR_ACCENT = [1, 0.6, 0.15];
@@ -271,7 +271,7 @@ function openCar(id) {
   cv.loadedId = id;
   cv.row = row;
   cv.data = null;
-  cv.edited.clear(); cv.gz = null; cv.hist = []; cv.histPos = 0;
+  cv.edited.clear(); cv.gz = null; cv.hist = []; cv.histPos = 0; cv.camView = null;
   cv.selected = null; cv.hidden.clear(); cv.hiddenSlices.clear(); cv.expanded.clear(); cv.solo = false;
   cv.matTex.clear(); cv.matBlend.clear();
   cv.status = t("car.loading");
@@ -611,8 +611,8 @@ function carGL() {
     gl.clearColor(0.05, 0.06, 0.08, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const cam = carCamera();
-    const view = mat4Look(cam.eye, cam.look);
-    const vp = mat4Mul(mat4Perspective(0.9, canvas.width / Math.max(1, canvas.height), 0.05, 200), view);
+    const view = carViewMat(cam);
+    const vp = mat4Mul(mat4Perspective(carFov(), canvas.width / Math.max(1, canvas.height), 0.05, 200), view);
     gl.useProgram(program);
     gl.uniformMatrix4fv(loc.uVp, false, vp);
     gl.uniformMatrix4fv(loc.uView, false, view);
@@ -683,6 +683,7 @@ function carGL() {
       gl.depthMask(true);
       gl.disable(gl.BLEND);
     }
+    carDrawCams(gl, loc);
     carDrawGizmo(gl, loc, canvas);
   };
 
@@ -892,7 +893,7 @@ function carHistRender() {
 function carViewProj(canvas) {
   const cam = carCamera();
   const asp = canvas.clientWidth / Math.max(1, canvas.clientHeight);
-  return { cam, vp: mat4Mul(mat4Perspective(0.9, asp, 0.05, 200), mat4Look(cam.eye, cam.look)) };
+  return { cam, vp: mat4Mul(mat4Perspective(carFov(), asp, 0.05, 200), carViewMat(cam)) };
 }
 function carProject(vp, p, w, h) {
   const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
@@ -1074,8 +1075,13 @@ function carPick(e, canvas) {
   const fl = Math.hypot(...f) || 1; f = f.map((x) => x / fl);
   let rt = [-f[2], 0, f[0]];
   const rl = Math.hypot(...rt) || 1; rt = rt.map((x) => x / rl);
-  const up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
-  const th = Math.tan(0.45), asp = rect.width / Math.max(1, rect.height);
+  let up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
+  if (cam.roll) {
+    const c = Math.cos(cam.roll), sn = Math.sin(cam.roll), r0 = rt;
+    rt = [0, 1, 2].map((k) => r0[k] * c - up[k] * sn);
+    up = [0, 1, 2].map((k) => r0[k] * sn + up[k] * c);
+  }
+  const th = Math.tan(carFov() / 2), asp = rect.width / Math.max(1, rect.height);
   const dir = [0, 1, 2].map((k) => f[k] + rt[k] * nx * th * asp + up[k] * ny * th);
   let best = null, bestGlass = null;
   for (const d of cv.draw || []) {
@@ -1103,7 +1109,83 @@ function carPick(e, canvas) {
   if (row) row.scrollIntoView({ block: "nearest" });
 }
 
+// ------------------------------------------------------------ câmeras do jogo (cameras.xml)
+// Fov vertical aproximado: o jogo não o guarda no cameras.xml (vem das opções de vídeo).
+const CAR_CAM_FOV = 1.0;
+const carFov = () => (cv.camView ? CAR_CAM_FOV : 0.9);
+const carCamList = () => (cv.data && cv.data.cameras) || [];
+function carFrontZ() {
+  const box = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+  if (cv.data) carAabb(cv.data.tree, box);
+  return isFinite(box.max[2]) ? box.max[2] : 0;
+}
+// Posição e direção no espaço do carro. yaw gira em Y (0 olha para +Z), pitch positivo olha para baixo;
+// nas câmeras de cabine (head/dash/pillar) o pitch está em graus. Chase: atrás do alvo, um pouco acima.
+function carCamPose(c) {
+  if (c.pos) {
+    const p = c.pos.slice();
+    if (c.params.restrictOffsetToConvexHull) p[2] += carFrontZ();     // para-choque: relativo à frente do casco
+    const pitch = c.fixed ? (c.pitch * Math.PI) / 180 : c.pitch, cp = Math.cos(pitch);
+    return { eye: p, f: [Math.sin(c.yaw) * cp, -Math.sin(pitch), Math.cos(c.yaw) * cp], roll: c.roll || 0 };
+  }
+  const pitch = 0.18, f = [0, -Math.sin(pitch), Math.cos(pitch)], t = c.target, d = c.dist;
+  return { eye: [t[0] - f[0] * d, t[1] - f[1] * d, t[2] - f[2] * d], f, roll: 0 };
+}
+function carViewMat(cam) {
+  const v = mat4Look(cam.eye, cam.look);
+  if (!cam.roll) return v;
+  const c = Math.cos(cam.roll), sn = Math.sin(cam.roll);
+  return mat4Mul(new Float32Array([c, sn, 0, 0, -sn, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), v);
+}
+function carCamLines(c, size) {
+  const { eye, f } = carCamPose(c);
+  let rx = f[2], rz = -f[0];
+  const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+  const r = [rx, 0, rz], u = [f[1] * rz, f[2] * rx - f[0] * rz, -f[1] * rx];
+  const at = (a, b) => [0, 1, 2].map((k) => eye[k] + f[k] * size + r[k] * a * size * 0.6 + u[k] * b * size * 0.36);
+  const q = [at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)], out = [];
+  for (let i = 0; i < 4; i++) out.push(...eye, ...q[i], ...q[i], ...q[(i + 1) % 4]);
+  out.push(...at(-0.4, 1.15), ...at(0.4, 1.15), ...at(0.4, 1.15), ...at(0, 1.6), ...at(0, 1.6), ...at(-0.4, 1.15));
+  if (c.target) out.push(...eye, ...c.target);
+  return out;
+}
+function carDrawCams(gl, loc) {
+  if (!cv.camsOn || cv.camView) return;
+  const cams = carCamList().filter((c) => c.id !== cv.camView);
+  if (!cams.length) return;
+  if (!cv.camBuf) cv.camBuf = gl.createBuffer();
+  gl.disable(gl.DEPTH_TEST);
+  gl.uniform1i(loc.uLine, 1);
+  gl.uniform1f(loc.uAlpha, 1);
+  gl.uniformMatrix4fv(loc.uModel, false, CAR_IDENT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cv.camBuf);
+  gl.enableVertexAttribArray(loc.pos);
+  gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
+  gl.disableVertexAttribArray(loc.uv);
+  gl.vertexAttrib2f(loc.uv, 0, 0);
+  for (const c of cams) {
+    const col = c.locked ? [0.62, 0.64, 0.7] : c.target ? [0.75, 0.55, 0.95] : [0.3, 0.85, 0.95];
+    gl.uniform3f(loc.uColor, col[0], col[1], col[2]);
+    const data = new Float32Array(carCamLines(c, c.target ? 0.5 : 0.28));
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.LINES, 0, data.length / 3);
+  }
+  gl.uniform1i(loc.uLine, 0);
+  gl.enable(gl.DEPTH_TEST);
+}
+function carSetCamView(id) {
+  cv.camView = id || null;
+  cv.gzHover = -1;
+  cv.dirty = true;
+  carSyncBar(); carStatus();
+}
+
 function carCamera() {
+  const c = cv.camView && carCamList().find((x) => x.id === cv.camView);
+  if (c) {
+    const { eye, f, roll } = carCamPose(c);
+    return { eye, look: [eye[0] + f[0], eye[1] + f[1], eye[2] + f[2]], right: [1, 0, 0], up: [0, 1, 0], roll };
+  }
   const cp = Math.cos(cv.pitch), sp = Math.sin(cv.pitch), cy = Math.cos(cv.yaw), sy = Math.sin(cv.yaw);
   const dir = [sy * cp, sp, cy * cp];
   const look = cv.target;
@@ -1179,6 +1261,13 @@ function carStatus() {
   const sel = document.getElementById("car-sel");
   if (sel) { sel.textContent = carSelLabel(); sel.title = sel.textContent; }
   if (cv.status) { el.textContent = cv.status; return; }
+  const cam = cv.camView && carCamList().find((x) => x.id === cv.camView);
+  if (cam) {
+    const p = carCamPose(cam).eye;
+    el.textContent = `${t("car.cam.in")} ${cam.id} · x ${p[0].toFixed(3)} · y ${p[1].toFixed(3)} · z ${p[2].toFixed(3)} · ${t("car.cam.approx")}`;
+    el.title = el.textContent;
+    return;
+  }
   const tris = cv.draw.reduce((a, d) => a + d.s.tris, 0);
   el.textContent = t("car.status", { slices: cv.draw.length, tris: tris.toLocaleString("pt-BR") }) + " · " + t("mdl.drag");
   el.title = el.textContent;
@@ -1201,6 +1290,7 @@ const CAR_ICONS = {
   restore: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/><path d="M9 12h6"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
   redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+  cams: '<path d="M3 8h12v8H3z"/><path d="M15 11l6-3v8l-6-3"/>',
   hist: '<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
   expand: '<path d="M6 9l6 6 6-6"/>',
   collapse: '<path d="M6 15l6-6 6 6"/>',
@@ -1218,6 +1308,7 @@ const CAR_ACTS = {
   rotate: { key: "car.tool.rotate", run: () => { cv.tool = "rotate"; }, on: () => cv.tool === "rotate" },
   undo: { key: "car.undo", run: carUndo, avail: () => cv.histPos > 0 },
   redo: { key: "car.redo", run: carRedo, avail: () => cv.histPos < cv.hist.length },
+  cams: { key: "car.cams", toggle: () => { cv.camsOn = !cv.camsOn; }, on: () => cv.camsOn },
   hist: { key: "car.hist", toggle: () => { cv.histOpen = !cv.histOpen; carHistRender(); }, on: () => cv.histOpen },
   restore: { key: "car.tool.restore", run: carRestoreEdits, avail: () => cv.edited.size > 0 },
   reset: { key: "car.reset", run: carResetCamera },
@@ -1240,6 +1331,12 @@ function carSyncBar() {
   const lod = document.getElementById("car-lod");
   if (lod && cv.data) {
     lod.innerHTML = [...cv.data.lods.map((l) => l.name), "ALL"].map((n) => `<option value="${esc(n)}"${n === cv.lod ? " selected" : ""}>${esc(n === "ALL" ? t("mdl.all") : n)}</option>`).join("");
+  }
+  const camSel = document.getElementById("car-cam");
+  if (camSel) {
+    const cams = carCamList();
+    camSel.innerHTML = `<option value="">${esc(t("car.camfree"))}</option>` + cams.map((c) => `<option value="${esc(c.id)}"${c.id === cv.camView ? " selected" : ""}>${esc(c.id)}</option>`).join("");
+    camSel.disabled = !cams.length;
   }
   const sel = document.getElementById("car-open");
   if (sel) sel.value = cv.carId || "";
@@ -1308,6 +1405,9 @@ function ensureCarStage() {
       <span class="tb-sep"></span>
       ${["undo", "redo", "hist", "restore"].map(carBtn).join("")}
       <span class="tb-sep"></span>
+      ${carBtn("cams")}
+      <select id="car-cam" title="${esc(t("car.camview"))}"></select>
+      <span class="tb-sep"></span>
       ${["wire", "mats", "glass", "flip"].map(carBtn).join("")}
       <span class="tb-sep"></span>
       ${["reset", "focus", "solo", "show"].map(carBtn).join("")}
@@ -1334,6 +1434,7 @@ function ensureCarStage() {
     cv.lod = e.target.value; state.filter = cv.lod; cv.dirty = true;
     renderFilters(); renderList(); carFrame(null);
   });
+  on("car-cam", "change", (e) => carSetCamView(e.target.value));
   on("car-surface", "change", (e) => { cv.variant = e.target.value; cv.dirty = true; });
   ws.addEventListener("click", (e) => {
     const hb = e.target.closest("[data-hist]");
