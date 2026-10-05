@@ -292,10 +292,10 @@ void OverlayManager::RenderUI() {
     }
   }
 
-  // 3. Main In-Game Menu (DR2 ModLoader)
+  // 3. Main In-Game Menu (DR2Hook)
   if (g_showMenu) {
     ImGui::SetNextWindowSize(ImVec2(660, 540), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("DR2 ModLoader v0.1.0", &g_showMenu)) {
+    if (ImGui::Begin("DR2Hook v0.1.0", &g_showMenu)) {
       // Tab Navigation
       if (ImGui::BeginTabBar("DR2TabBar", ImGuiTabBarFlags_None)) {
 

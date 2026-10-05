@@ -269,9 +269,9 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     // F7: teste de limite, mais uma copia do fantasma por toque (log em
-    // "GhostLab[limite]"). Tem prioridade sobre o F7 do checkpoint.
+    // "GhostLab[limite]"). So com dr2hook_ghost_cars.txt; senao vale o F7 do checkpoint.
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F7 &&
-        (lParam & (1 << 30)) == 0) {
+        (lParam & (1 << 30)) == 0 && dr2hook::GhostLab::TestModeActive()) {
       dr2hook::GhostLab::SpawnClone();
       return 1;
     }

@@ -51,6 +51,10 @@ public:
   // thread do jogo, entao o Reiniciar zera sozinha.
   static int SpawnClone();
 
+  // Modo de teste: existe dr2hook_ghost_cars.txt ao lado do exe. So nele o F7
+  // vira "copiar fantasma"; sem o arquivo o F7 segue sendo o do checkpoint.
+  static bool TestModeActive();
+
   // Texto do ultimo F7 (copias de dados x carros desenhados), uma vez.
   static bool TakeSpawnNotice(std::string &out);
 

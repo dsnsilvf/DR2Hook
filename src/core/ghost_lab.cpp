@@ -1295,6 +1295,16 @@ bool GhostLab::TakeSpawnNotice(std::string &out) {
 #endif
 }
 
+bool GhostLab::TestModeActive() {
+#if defined(_WIN32)
+  if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
+    std::fclose(f);
+    return true;
+  }
+#endif
+  return false;
+}
+
 int GhostLab::SpawnClone() {
 #if defined(_WIN32)
   g_spawnPending.store(true);

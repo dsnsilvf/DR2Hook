@@ -1,4 +1,4 @@
-# DR2 ModLoader v0.1.0 — Single Source of Truth (SSOT) & Especificação Arquitetural
+# DR2Hook v0.1.0 — Single Source of Truth (SSOT) & Especificação Arquitetural
 
 > **Versão do Documento:** 1.2.0  
 > **Status:** Estável / Homologado (v0.1.0)  
@@ -9,7 +9,7 @@
 
 ## 1. Visão Geral e Princípios Fundamentais
 
-O **DR2 ModLoader v0.1.0** é um framework de modding e hook nativo para o *DiRT Rally 2.0*, desenvolvido com foco em qualidade de vida, treino de pilotos virtuais, pesquisa de telemetria e viabilização de um ecossistema de scripts comunitários.
+O **DR2Hook v0.1.0** é um projeto de engenharia reversa do *DiRT Rally 2.0*. O mod loader descrito neste documento é a aplicação desse trabalho: hooks nativos, scripts Lua da comunidade, treino de pilotos virtuais e pesquisa de telemetria.
 
 ### Pilares Inegociáveis
 1. **Fair Play First (Isolamento de Rede Mandatório & Anti-Cheat):**

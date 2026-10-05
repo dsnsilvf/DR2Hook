@@ -1,8 +1,8 @@
-# Guia Oficial da API de Mods do DR2 ModLoader v0.1.0
+# Guia Oficial da API de Mods do DR2Hook v0.1.0
 
-Bem-vindo ao Guia Oficial de Desenvolvimento de Mods para o **DR2 ModLoader v0.1.0** no *DiRT Rally 2.0*.
+Bem-vindo ao Guia Oficial de Desenvolvimento de Mods para o **DR2Hook v0.1.0** no *DiRT Rally 2.0*.
 
-O DR2 ModLoader oferece um ambiente de scripting modular e sandbox baseado em **Lua 5.4**, permitindo que a comunidade crie ferramentas de telemetria, modos de treino, interfaces personalizadas e automações em tempo real com overhead imperceptível de processamento (< 0.2ms por frame).
+O DR2Hook oferece um ambiente de scripting modular e sandbox baseado em **Lua 5.4**, permitindo que a comunidade crie ferramentas de telemetria, modos de treino, interfaces personalizadas e automações em tempo real com overhead imperceptível de processamento (< 0.2ms por frame).
 
 ---
 
@@ -123,7 +123,7 @@ O DR2Hook invoca funções globais específicas no seu script `main.lua` caso es
 
 ## 3. Tabela de APIs Nativas Expostas
 
-O DR2 ModLoader expõe namespaces protegidos em C++ para o ambiente Lua:
+O DR2Hook expõe namespaces protegidos em C++ para o ambiente Lua:
 
 ### Módulo `Player`
 Controla leitura e escrita de cinemática, telemetria do motor e suspensão do veículo do jogador.
@@ -228,7 +228,7 @@ Para testar uma DLL nativa nova, substitua `dr2hook_core.dll` na pasta do jogo e
 
 ## 5. Regras de Fair Play (Anti-Cheat Integrado)
 
-O princípio nº 1 do DR2 ModLoader é o **Fair Play First**:
+O princípio nº 1 do DR2Hook é o **Fair Play First**:
 
 1. **Isolamento de rede (Winsock), preso na `dxgi.dll`:**
    - `getaddrinfo` / `GetAddrInfoW` só resolvem localhost. Qualquer outro nome retorna “nome não encontrado”.
