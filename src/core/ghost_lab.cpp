@@ -1125,7 +1125,7 @@ int WantedGhostCars() {
     if (std::fscanf(f, "%d", &want) != 1) want = 0;
     std::fclose(f);
   }
-  return std::clamp(want, 0, kMaxGhostCars);
+  return std::clamp(want, 0, 23); // 24 corpos de fisica / objetos de render: jogador + 23
 }
 
 uint8_t g_realRecord[kGhostRecordSize];
@@ -1425,6 +1425,120 @@ bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
   return true;
 }
 
+// ---- Mais de 15 fantasmas: array de objetos de render de carro ----
+// O gerenciador de render guarda 16 objetos de 0x1730 bytes embutidos (+0x2110) e
+// os indexa pelo numero do carro, sem checar limite; o carro 17 le lixo
+// (ghost-limit-ladder-2026-10-05.md). Aqui o construtor (0x140946xxx) passa a
+// usar um buffer externo de kRenderObjects elementos: o ponteiro-base
+// (`lea rax,[rsi+0x2110]`), o ponteiro da lista de 16 dwords (`lea rdi,[rsi+0x194a8]`, que
+// passa a um rascunho para o laco nao escrever sobre o campo seguinte) e o
+// limite do laco (`cmp ebx,0x10`), mais dois lacos de busca (`cmp rdx,0x10`).
+// So vale se o gerenciador ainda nao foi construido (core carregado no inicio).
+constexpr int kRenderObjects = 24;
+constexpr size_t kRenderObjectSize = 0x1730;
+struct RenderPatch {
+  uintptr_t rva;
+  size_t size;
+  const uint8_t *expected;
+};
+
+bool PatchBytes(uintptr_t va, const uint8_t *bytes, size_t size) {
+  DWORD old = 0;
+  void *p = reinterpret_cast<void *>(va);
+  if (!VirtualProtect(p, size, PAGE_EXECUTE_READWRITE, &old)) return false;
+  std::memcpy(p, bytes, size);
+  FlushInstructionCache(GetCurrentProcess(), p, size);
+  VirtualProtect(p, size, old, &old);
+  return true;
+}
+
+// Aloca perto da imagem do jogo (alcance do deslocamento de 32 bits do `lea` rip-relativo).
+uint8_t *AllocNearImage(size_t size) {
+  for (uintptr_t hint = g_gameBase + 0x10000000; hint < g_gameBase + 0x70000000;
+       hint += 0x1000000) {
+    void *p = VirtualAlloc(reinterpret_cast<void *>(hint), size, MEM_COMMIT | MEM_RESERVE,
+                           PAGE_READWRITE);
+    if (p != nullptr) return static_cast<uint8_t *>(p);
+  }
+  return nullptr;
+}
+
+void PatchRenderObjectArray() {
+  if (WantedGhostCars() < 16) return;
+  if (GetEnvironmentVariableA("DR2HOOK_RENDER_ARRAY", nullptr, 0) != 0) {
+    Logger::Info("GhostLab[render]: array de objetos de render ja trocado neste processo.");
+    return;
+  }
+  // So antes do gerenciador de render existir (core carregado no inicio do processo).
+  FILETIME created, exited, kernel, user;
+  if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+    FILETIME nowFt;
+    GetSystemTimeAsFileTime(&nowFt);
+    const uint64_t a = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    const uint64_t b = (static_cast<uint64_t>(nowFt.dwHighDateTime) << 32) | nowFt.dwLowDateTime;
+    const double ageSeconds = static_cast<double>(b - a) / 1e7;
+    if (ageSeconds > 20.0) {
+      Logger::Warn("GhostLab[render]: core carregado tarde (" + std::to_string(ageSeconds) +
+                   " s); array de render nao trocado (reabra o jogo).");
+      return;
+    }
+  }
+  static const uint8_t kLeaArray[] = {0x48, 0x8d, 0x86, 0x10, 0x21, 0x00, 0x00};
+  static const uint8_t kLeaFlags[] = {0x48, 0x8d, 0xbe, 0xa8, 0x94, 0x01, 0x00};
+  static const uint8_t kCmpLoop[] = {0x83, 0xfb, 0x10};
+  static const uint8_t kCmpFind[] = {0x48, 0x83, 0xfa, 0x10};
+  const struct {
+    uintptr_t va;
+    const uint8_t *expected;
+    size_t size;
+  } checks[] = {{0x14094628a, kLeaArray, 7},
+                {0x14094629b, kLeaFlags, 7},
+                {0x1409462e7, kCmpLoop, 3},
+                {0x14095341a, kCmpFind, 4},
+                {0x14095348e, kCmpFind, 4}};
+  for (const auto &c : checks) {
+    if (std::memcmp(reinterpret_cast<void *>(g_gameBase + (c.va - kImageBase)), c.expected,
+                    c.size) != 0) {
+      Logger::Warn("GhostLab[render]: bytes do construtor de render diferentes do esperado; nada trocado.");
+      return;
+    }
+  }
+  const size_t arrayBytes = static_cast<size_t>(kRenderObjects) * kRenderObjectSize;
+  const size_t total = (arrayBytes + 0x1000 + 0xfff) & ~static_cast<size_t>(0xfff);
+  uint8_t *buffer = AllocNearImage(total);
+  if (buffer == nullptr) {
+    Logger::Warn("GhostLab[render]: sem memoria perto da imagem do jogo; nada trocado.");
+    return;
+  }
+  uint8_t *scratch = buffer + ((arrayBytes + 0xf) & ~static_cast<size_t>(0xf));
+  auto rel32 = [&](uintptr_t instr, size_t len, const void *target) {
+    return static_cast<int32_t>(reinterpret_cast<intptr_t>(target) -
+                                static_cast<intptr_t>(instr + len));
+  };
+  const uintptr_t aLea = g_gameBase + (0x14094628a - kImageBase);
+  const uintptr_t bLea = g_gameBase + (0x14094629b - kImageBase);
+  uint8_t leaArray[7] = {0x48, 0x8d, 0x05, 0, 0, 0, 0}; // lea rax,[rip+rel32]
+  uint8_t leaFlags[7] = {0x48, 0x8d, 0x3d, 0, 0, 0, 0};  // lea rdi,[rip+rel32]
+  const int32_t ra = rel32(aLea, 7, buffer);
+  const int32_t rb = rel32(bLea, 7, scratch);
+  std::memcpy(leaArray + 3, &ra, 4);
+  std::memcpy(leaFlags + 3, &rb, 4);
+  const uint8_t cmpLoop[] = {0x83, 0xfb, static_cast<uint8_t>(kRenderObjects)};
+  const uint8_t cmpFind[] = {0x48, 0x83, 0xfa, static_cast<uint8_t>(kRenderObjects)};
+  bool ok = PatchBytes(g_gameBase + (0x14095341a - kImageBase), cmpFind, 4);
+  ok = PatchBytes(g_gameBase + (0x14095348e - kImageBase), cmpFind, 4) && ok;
+  ok = PatchBytes(g_gameBase + (0x1409462e7 - kImageBase), cmpLoop, 3) && ok;
+  ok = PatchBytes(bLea, leaFlags, 7) && ok;
+  ok = PatchBytes(aLea, leaArray, 7) && ok; // por ultimo: liga o array externo
+  SetEnvironmentVariableA("DR2HOOK_RENDER_ARRAY", "1");
+  char msg[200];
+  std::snprintf(msg, sizeof(msg),
+                "GhostLab[render]: array de objetos de render trocado por buffer externo de %d "
+                "elementos em %p (%s).",
+                kRenderObjects, static_cast<void *>(buffer), ok ? "ok" : "FALHOU parcialmente");
+  Logger::Info(msg);
+}
+
 #endif
 
 } // namespace
@@ -1438,6 +1552,7 @@ bool GhostLab::Install(uintptr_t gameBase) {
     Logger::Error("GhostLab: MH_Initialize falhou.");
     return false;
   }
+  PatchRenderObjectArray(); // so com dr2hook_ghost_cars.txt >= 16
   const bool evaluate =
       Hook(kEvaluateRva, kEvaluatePrologue, sizeof(kEvaluatePrologue),
            reinterpret_cast<void *>(&DetourEvaluate),
