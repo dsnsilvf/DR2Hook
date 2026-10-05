@@ -1,6 +1,6 @@
 # Passagem de bastão — INV-01 (fonte de verdade do estado do carro)
 
-Atualizado em 2026-10-01 07:30 (UTC-3), pelo RE Orchestrator. Este arquivo é o ponto de entrada. Onde ele divergir dos arquivos em `kb/`, vale este (o KB foi atualizado pela última vez em 2026-09-30 12:18 e não incorpora as decisões posteriores listadas abaixo).
+Atualizado em 2026-10-04 (UTC-3): texto original do RE Orchestrator de 2026-10-01 07:30, revisado para incorporar o resultado do gate G3 (2026-10-01 07:47-07:48 BRT, PASS; `validation/G3-result.md`) e o merge do PR #4. Este arquivo é o ponto de entrada. Onde ele divergir dos arquivos em `kb/`, vale este (o KB foi atualizado pela última vez em 2026-09-30 12:18, exceto a linha do G3 em `kb/history.md`, e não incorpora as decisões posteriores listadas abaixo).
 
 ## Regras de trabalho
 - Classifique toda afirmação como CONFIRMED / PROBABLE / HYPOTHESIS / UNKNOWN / REFUTED. Concordância entre agentes não é evidência independente.
@@ -60,24 +60,18 @@ Reset `0x14074a110`, SetTransform `0x14074ad80`, SetLinVel `0x14074a910`, SetAng
 ## Estado do harness de instrumentação
 - Código em `src/core/physics_tick_harness.cpp` + `physics_harness_detour_x64.S`, dentro do `dr2hook_core.dll`. Desligado por padrão; ativa com `DR2HOOK_PHYSICS_HARNESS=1` ou `dr2hook_physics_harness.ini`. Docs: `docs/physics_tick_harness.md`.
 - PR #1 (mergeado) tinha bytes de prólogo errados e bug de ABI (xmm1/dt destruído). Corrigido no PR #3, mergeado em `main` como `6b03139` após PASS do Validation Specialist (objdump, .pdata/.xdata, teste no Wine com callbacks que destroem registradores voláteis e fazem syscalls).
-- PR #4 (draft, `b1ee5a7`): ajustes não bloqueantes do thunk (remove restore errado de r13, epílogo `add rsp,0xC0`, renomeia frame_loop → post_physics_task). **Não mergear antes do G3 e de revisão igual à do PR #3**, porque mexe no thunk.
-- Pendências conhecidas: o sham-write só registra em log (não prova nada); ~19 VirtualQuery por linha de CSV (medir custo no G3); descarregar com F8 pode liberar o thunk com threads dentro, então encerre o G3 saindo do jogo.
+- PR #4 (`b1ee5a7`): ajustes não bloqueantes do thunk (remove restore errado de r13, epílogo `add rsp,0xC0`, renomeia frame_loop → post_physics_task). Mergeado em `main` como `a2e5043` (2026-10-01 07:41 -0300, `git log`), antes da execução do G3 (07:47). A nota anterior pedia não mergear antes do G3 e de uma revisão igual à do PR #3. **A verificar:** (a) se essa revisão do thunk do PR #4 foi feita (nenhum arquivo de INV-01 a registra; `validation/PR3-review.md` cobre só o PR #3); (b) a partir de qual commit foram compiladas as DLLs do G3 (`dr2hook_core.dll` `4f3f0a22…`), isto é, se já incluíam o PR #4 (o `G3-result.md` não diz).
+- Pendências conhecidas: o sham-write só registra em log (não prova nada; o G3 contou 2985 sham-writes, todos com `writes=0`); ~19 VirtualQuery por linha de CSV (o custo era para ser medido no G3, mas o `G3-result.md` não registra essa medição: a verificar); descarregar com F8 pode liberar o thunk com threads dentro, então o G3 foi encerrado saindo do jogo (exit code 0).
 
-## Próximo passo: gate G3 (autoteste, sem escrita) — AINDA NÃO EXECUTADO
-Em 2026-10-01 o checkout local do usuário ainda estava em `a35baa9` (antes das correções).
-1. `git pull --ff-only origin main` (deve chegar a `6b03139` ou depois).
-2. Build MinGW em `build-g3` (manter `build-release` como fallback). Rodar `scripts/verify_physics_harness_dll.sh` no build do usuário (GCC 16).
-3. Usuário sai do jogo. Backup de `dxgi.dll` e `dr2hook_core.dll` com hashes; instalar via tmp+mv.
-4. ini contendo só `self_test=1`.
-5. Estágio offline por ~20 s (≥ 600 ticks em estágio). Rechecar G1/G2 (offline e build).
-6. Coletar `dr2hook.log`, `dr2hook_physics_harness_self_test.log` e o CSV. Remover o ini. Sair do jogo. Verificar que os 9 sites voltaram a bater com o disco.
-- PASS: 4 hooks obrigatórios `installed=1`, sem `prologue mismatch`, ≥ 600 ticks, nenhuma linha `write tick=`, sem NaN/teleporte/crash.
-- Abortar (sair do jogo) em: NaN/teleporte/explosão, crash, prologue mismatch em hook obrigatório, ou qualquer linha `write tick=`.
-- Rollback: restaurar as duas DLLs.
+## Gate G3 (autoteste, sem escrita): concluído, PASS
+Executado em 2026-10-01, 07:47-07:48 BRT, com `self_test=1` (somente leitura). Detalhes e tabela dos 9 critérios em `validation/G3-result.md`. Resumo: 9/9 prólogos batem com o disco (0 mismatches), 9/9 hooks `installed=1`, 600 ticks em estágio (9285 ticks totais na sessão), `reentrancy=0`, `writes=0`, 2985 sham-writes registrados, 0 NaN/Inf, 0 teclas F5-F7 em 168312 linhas de CSV, saída limpa (exit code 0). O ini de ativação foi removido depois do teste. Veredito do documento: harness aprovado para a fase de experimentos de escrita.
+- O `G3-result.md` não registra explicitamente: a verificação de G1/G2 dentro do estágio daquele teste, a ordem das fases M1→M2→M3 (§3.3 do plano) nem a conferência dos bytes de código depois de encerrar o jogo. Se o orquestrador quiser esses itens como parte do PASS, **a verificar** nos logs brutos (fora do repo).
+- O checklist antigo de execução (pull, build `build-g3`, instalar DLLs, ini com `self_test=1`) está cumprido e foi removido daqui; a preparação está em `validation/G3-prep.md` (historicamente, na época os bloqueios B1/B2 eram reais; foram corrigidos no PR #3).
 
-## Depois do G3
-- Experimentos de escrita de `validation/INV-01-experiment-plan.md` (rev 2, CSV de 80 colunas): escrita bruta em L1 vs API nativa, depois L0/L2/L4/L6/L7, teste de inércia E-B6, I6 (lerp do 0x290).
-- Gates de escrita: G3 PASS; PROBABLE-offline aceito pelo orquestrador (atestado do usuário + 27 sockets UDP não conectados, sem hook em sendto); F5-F7 do Practice Mode registrados por tick (o usuário confirmou que não apertou durante as capturas).
+## Próximo passo: experimentos de escrita
+Plano em `validation/INV-01-experiment-plan.md` (rev 2, CSV de 80 colunas): escrita bruta em L1 vs API nativa (W0/W1 e seguintes), depois L0/L2/L4/L6/L7, teste de inércia E-B6, I6 (lerp do 0x290). Ainda `todo` no plano: R7, R8, parte c930 do R9, I1-I6 (log-only, Fase 1b) e todos os W/A. Escritas continuam sob o protocolo das regras de trabalho.
+- Gates de escrita: G3 PASS (cumprido); PROBABLE-offline aceito pelo orquestrador (atestado do usuário + 27 sockets UDP não conectados, sem hook em sendto); G1/G2 devem ser rechecados por tentativa; F5-F7 do Practice Mode registrados por tick (o usuário confirmou que não apertou durante as capturas, e o G3 registrou 0 teclas).
+- Fora de INV-01: depois deste handoff o código passou a usar `+0x2b0/+0x2c0` para velocidades (`92d9577`, `player.cpp`) e o README declara a limitação da restauração de `+0x320` (`c2d867c`). O KB segue classificando a receita de restauração como PROBABLE; nenhum arquivo de INV-01 registra teste de escrita que a confirme.
 
 ## Outras recomendações em aberto (análise inicial do projeto)
 - P0 segurança: SafetyGuard permissivo (`core_module.cpp:101`), `ApplyState` escrevendo via `[rig+0]`/`+0xcd0`, NetworkGuard que falha aberto.
@@ -87,7 +81,7 @@ Em 2026-10-01 o checkout local do usuário ainda estava em `a35baa9` (antes das 
 ## Arquivos nesta pasta
 - `kb/`: base de conhecimento graduada (confirmed-facts, hypotheses, open-questions, glossary, history).
 - `analyst/`: relatório estático e adendo (o adendo contém o erro "L1 = B2", já refutado).
-- `captures/`: relatório de runtime rev 2, info do build, hashes do .text, scripts de captura.
-- `validation/`: plano de experimentos rev 2, template CSV, gates, fase 1a, preparação do G3, revisões do PR #3.
+- `captures/`: relatório de runtime rev 2, info do build, hashes do .text, scripts de captura. Está no `.gitignore`: existe só no checkout local do usuário, não é versionado.
+- `validation/`: plano de experimentos rev 2, template CSV, gates, fase 1a, preparação do G3, resultado do G3 (`G3-result.md`), revisões do PR #3 (a última, em `6f088f0`, é PASS; as seções iniciais FAIL foram superadas).
 - `orchestrator/`: inventário v1, briefings e spec do harness.
 As capturas brutas (~560 MB) ficaram fora do repo; estão no computador do assistente em `/workspace/captures/INV-01/raw/`.

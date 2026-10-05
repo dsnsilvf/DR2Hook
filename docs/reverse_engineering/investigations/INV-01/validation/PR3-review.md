@@ -1,5 +1,7 @@
 # PR 3 review: cursor/minor-fixes-physics-harness-739e (base a35baa9)
 
+> Nota (2026-10-04): este arquivo guarda três revisões em sequência. O FAIL das duas primeiras foi superado; o veredito final (head `6f088f0`) é PASS para o G3 em modo self-test. O PR #3 foi mergeado em `main` como `6b03139` e o G3 foi executado com PASS (`G3-result.md`).
+
 Reviewed 2026-09-30, 12:57-13:15 BRT, by the Experimental Validation Specialist. This was read-only with respect to the PR: no merge, no comment, no push. The user's machine was not touched.
 
 - Source: `git clone` of the branch onto the box at `/workspace/pr3`. HEAD is `c8eab24`, with parents `47ce206` → `f5b72b7` → `a35baa9`.

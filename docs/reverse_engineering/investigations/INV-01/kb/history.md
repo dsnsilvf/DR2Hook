@@ -19,7 +19,7 @@ Format: <date> | <ID> | <event: ADDED/PROMOTED/REFUTED/REPLACED/CONTRADICTION/FL
 2026-09-30 | H-017 | DOWNGRADED (part) | between/mid-tick survival → HYPOTHESIS | RE Orchestrator ruling
 2026-09-30 | H-013 | DOWNGRADED | build match → file-only until running image checked | RE Orchestrator ruling
 2026-09-30 | F-008 | RULING | annotation-only handling confirmed | RE Orchestrator
-2026-09-30 | INV-01 | PHASE 1a REPORTED | /workspace/validation/INV-01-phase1a.md; one car/location/session; F5–F7 confirmation pending; INV-01 stays OPEN | Validation Specialist via RE Orchestrator
+2026-09-30 | INV-01 | PHASE 1a REPORTED | /workspace/validation/INV-01-phase1a.md; one car/location/session; F5–F7 confirmation pending; INV-01 stays OPEN | autor não registrado em G3-result.md
 2026-09-30 | H-032..H-041, Q-022..Q-027 | ADDED | Phase 1a runtime, grades as written | Validation Specialist
 2026-09-30 | H-R06 | REFUTED | +0x1338 timer delta == dt; it is 2·dt per tick (observational, one session) | Validation Specialist
 2026-09-30 | H-R07 | REFUTED | +0x2508 = abs(v) literal; it is signed (observational, one session) | Validation Specialist
@@ -48,3 +48,4 @@ Format: <date> | <ID> | <event: ADDED/PROMOTED/REFUTED/REPLACED/CONTRADICTION/FL
 2026-09-30 | H-048 | GRADE SET | PROBABLE structure / HYPOTHESIS semantics | RE Orchestrator ruling
 2026-09-30 | Q-024 | ANSWERED (this session) | Fixed step decoupled from render rate | Memory Cartographer
 2026-09-30 | H-057, H-058, H-R11, Q-035, Q-036 | ADDED | From cartographer rev. 2 | Memory Cartographer
+2026-10-01 | INV-01 | G3 PASSED | Harness self-test (read-only, self_test=1) 2026-10-01 07:47-07:48 BRT: 9/9 prologues match disk, 9/9 hooks installed, 600 in-stage ticks, writes=0, reentrancy=0, 2985 sham-writes, 0 F5-F7 keys, exit code 0; validation/G3-result.md; no KB grades changed; INV-01 stays OPEN | autor não registrado em G3-result.md
