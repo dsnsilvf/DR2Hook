@@ -987,6 +987,31 @@ void DetourMakeGhostMaterials(void *self, void *model) {
 }
 
 // Lista da sessao: tipo (+0x2c) e o byte +0xb4 que faz o 2o passe pular a entrada.
+// Fotografia dos limites que o teste de N carros pode estourar: corpos de
+// fisica ativos (lista de 24), entradas da sessao (pool de 150), vetor de
+// registros (capacidade), mapa de controladores e carros desenhados.
+constexpr uintptr_t kPhysicsBodiesRva = 0x14201b930 - kImageBase;
+constexpr size_t kSessionVec = 0x3320; // vetor de registros da sessao: dados, +8 capacidade, +0x10 contagem
+int g_fillTarget = 5;                  // alvo do enchimento (imediato dos mov r13d, 5)
+void LogLimits(const char *when) {
+  uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
+  if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
+  const uint8_t *manager = ManagerPtr();
+  char buf[320];
+  std::snprintf(buf, sizeof(buf),
+                "GhostLab[limites] %s: corpos de fisica=%d/%d (teto 24), entradas da sessao=%u "
+                "(pool 150), vetor sessao=%llu/%llu, mapa de controladores=%llu, carros "
+                "desenhados=%d, alvo do enchimento=%d, N pedido=%d.",
+                when, Read<int32_t>(reinterpret_cast<const uint8_t *>(g_gameBase + kPhysicsBodiesRva), 0),
+                Read<int32_t>(reinterpret_cast<const uint8_t *>(g_gameBase + kPhysicsBodiesRva), 4),
+                Read<uint32_t>(session, 0x40),
+                static_cast<unsigned long long>(Read<uint64_t>(session, kSessionVec + 0x10)),
+                static_cast<unsigned long long>(Read<uint64_t>(session, kSessionVec + 8)),
+                static_cast<unsigned long long>(manager != nullptr ? Read<uint64_t>(manager, kManagerMapSize) : 0),
+                CountDrawnGhostCars(), g_fillTarget, WantedGhostCars());
+  Logger::Info(buf);
+}
+
 void LogStageEntries(const char *when) {
   uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
   if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
@@ -1090,6 +1115,9 @@ void DumpThreads() {
   Logger::Info("GhostLab[espera]: " + std::to_string(shown) + " thread(s) com chamadas do jogo.");
 }
 
+// Teto do experimento de limite (carros fantasma pedidos no arquivo de teste).
+constexpr int kMaxGhostCars = 32;
+
 // Quantos carros fantasma pedir (arquivo de teste); 0 = comportamento do jogo.
 int WantedGhostCars() {
   int want = 0;
@@ -1097,21 +1125,103 @@ int WantedGhostCars() {
     if (std::fscanf(f, "%d", &want) != 1) want = 0;
     std::fclose(f);
   }
-  return std::clamp(want, 0, 5);
+  return std::clamp(want, 0, kMaxGhostCars);
 }
 
 uint8_t g_realRecord[kGhostRecordSize];
 bool g_haveRealRecord = false;
 bool g_haveTypeZero = false;
-uint8_t g_fillerRecords[5][kGhostRecordSize];
+uint8_t g_fillerRecords[kMaxGhostCars][kGhostRecordSize];
 int g_realSeen = 0;
 int g_fillerUsed = 0;
+
+// ---- Mais de 5 carros (ghost-vectors-scan.md, secao 6) ----
+// Os vetores de registros de 0x38 bytes da sessao (+0x3320) e da montagem
+// (b+0x00, na pilha de 0x1405ba200) tem capacidade 5 e armazenamento embutido;
+// ninguem os libera, entao podem apontar para um buffer externo. O alvo do
+// enchimento (`5 - n`) e o imediato de dois `mov r13d, 5`.
+constexpr size_t kVecData = 0x00, kVecCap = 0x08, kVecCount = 0x10, kVecInline = 0x20;
+
+constexpr size_t kSessionVecInline = 0x3340; // embutido
+constexpr size_t kGhostVecElem = 0x38;
+constexpr uintptr_t kFillImmA = 0x1405ba802 - kImageBase; // mov r13d, 5 (lista vazia)
+constexpr uintptr_t kFillImmB = 0x1405ba989 - kImageBase; // mov r13d, 5 (normal)
+
+
+// Memoria do buffer sobrevive ao F8 (o core pode ser descarregado com a sessao
+// ainda apontando para ele).
+uint8_t *AllocVector() {
+  void *p = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  return static_cast<uint8_t *>(p);
+}
+
+// Move um vetor de 0x38 do embutido para um buffer externo com capacidade
+// kMaxGhostCars: copia os elementos, grava o ponteiro e so depois a capacidade.
+bool ExpandVector(uint8_t *vec, size_t dataOff, size_t capOff, size_t countOff,
+                  const uint8_t *inlineBuf, const char *name) {
+  if (Read<const uint8_t *>(vec, dataOff) != inlineBuf || Read<uint64_t>(vec, capOff) != 5) {
+    return false;
+  }
+  uint8_t *buffer = AllocVector();
+  if (buffer == nullptr) return false;
+  const uint64_t count = std::min<uint64_t>(Read<uint64_t>(vec, countOff), 5);
+  std::memcpy(buffer, inlineBuf, count * kGhostVecElem);
+  const uint64_t cap = kMaxGhostCars;
+  std::memcpy(vec + dataOff, &buffer, sizeof(buffer));
+  std::memcpy(vec + capOff, &cap, sizeof(cap));
+  Logger::Info(std::string("GhostLab[limite]: vetor de registros (") + name +
+               ") movido para buffer externo, capacidade " + std::to_string(kMaxGhostCars) +
+               " (" + std::to_string(count) + " elemento(s) copiados).");
+  return true;
+}
+
+void ExpandGhostVectors(uint8_t *assemblyVec) {
+  uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
+  if (UsablePointer(reinterpret_cast<uintptr_t>(session))) {
+    ExpandVector(session, kSessionVec, kSessionVec + 8, kSessionVec + 0x10,
+                 session + kSessionVecInline, "sessao");
+  }
+  if (UsablePointer(reinterpret_cast<uintptr_t>(assemblyVec))) {
+    ExpandVector(assemblyVec, kVecData, kVecCap, kVecCount, assemblyVec + kVecInline,
+                 "montagem");
+  }
+}
+
+// Troca o 5 dos dois `mov r13d, 5` do enchimento. So aceita 5..kMaxGhostCars.
+void SetFillTarget(int target) {
+  target = std::clamp(target, 5, kMaxGhostCars);
+  if (target == g_fillTarget) return;
+  for (uintptr_t rva : {kFillImmA, kFillImmB}) {
+    uint8_t *imm = reinterpret_cast<uint8_t *>(g_gameBase + rva);
+    // O opcode `41 bd` esta 2 bytes antes do imediato.
+    if (imm[-2] != 0x41 || imm[-1] != 0xbd) {
+      Logger::Warn("GhostLab[limite]: opcode do alvo do enchimento diferente do esperado; ignorado.");
+      return;
+    }
+  }
+  DWORD old = 0;
+  for (uintptr_t rva : {kFillImmA, kFillImmB}) {
+    uint8_t *imm = reinterpret_cast<uint8_t *>(g_gameBase + rva);
+    if (!VirtualProtect(imm, 4, PAGE_EXECUTE_READWRITE, &old)) continue;
+    const int32_t value = target;
+    std::memcpy(imm, &value, sizeof(value));
+    FlushInstructionCache(GetCurrentProcess(), imm, 4);
+    VirtualProtect(imm, 4, old, &old);
+  }
+  g_fillTarget = target;
+  Logger::Info("GhostLab[limite]: alvo do enchimento = " + std::to_string(target) + ".");
+}
 
 // Troca o registro de enchimento (+0x08 nulo) por copia de um registro real:
 // a entrada nasce sem +0xb4 e o spawn cria o carro.
 uintptr_t DetourAddGhostEntry(void *a, void *b, void *c, uintptr_t d, uint8_t *record,
                               uintptr_t f) {
   InFlight guard;
+  const int wantCars = WantedGhostCars();
+  if (wantCars > 0) {
+    SetFillTarget(wantCars); // 5 ou mais; 5 deixa o jogo como esta
+    if (wantCars > 5) ExpandGhostVectors(static_cast<uint8_t *>(b));
+  }
   if (UsablePointer(reinterpret_cast<uintptr_t>(record))) {
     if (Read<uintptr_t>(record, 0x08) != 0) {
       if (g_realSeen == 0) {
@@ -1136,7 +1246,7 @@ uintptr_t DetourAddGhostEntry(void *a, void *b, void *c, uintptr_t d, uint8_t *r
     } else {
       const int want = WantedGhostCars();
       if (want > 0 && g_haveRealRecord && g_realSeen + g_fillerUsed < want &&
-          g_fillerUsed < 5) {
+          g_fillerUsed < kMaxGhostCars) {
         uint8_t *copy = g_fillerRecords[g_fillerUsed++];
         std::memcpy(copy, g_realRecord, kGhostRecordSize);
         Logger::Info("GhostLab[limite]: registro vazio trocado por copia de um real (carro " +
@@ -1186,10 +1296,14 @@ void DetourSpawnVehicles(void *ctx) {
   LogStageEntries("antes do spawn");
   g_originalSpawn(ctx);
   LogStageEntries("depois do spawn");
+  LogLimits("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
     std::fclose(f);
     std::thread([] {
-      Sleep(25000);
+      Sleep(8000);
+      LogLimits("8 s depois");
+      Sleep(17000);
+      LogLimits("25 s depois");
       LogLoadState();
       DumpThreads();
     }).detach();
@@ -1333,6 +1447,7 @@ bool GhostLab::Install(uintptr_t gameBase) {
 
 void GhostLab::Shutdown() {
 #if defined(_WIN32)
+  SetFillTarget(5); // sem o hook, o enchimento ate N estouraria o vetor de 5
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
                        g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget}) {
     if (target != nullptr) MH_DisableHook(target);
