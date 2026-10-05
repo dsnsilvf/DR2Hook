@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -14,6 +15,7 @@
 #if defined(_WIN32)
 #include <MinHook.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #endif
 
 namespace dr2hook {
@@ -728,6 +730,62 @@ void UnflagGhostEntries() {
                " carros fantasma; " + std::to_string(cleared) + " entrada(s) liberada(s).");
 }
 
+// Vigia do teste: se a carga travar depois do spawn de teste, mostra onde cada
+// thread esta (RIP + retornos do jogo na pilha) 25 s depois. So roda com o
+// arquivo de teste ativo.
+bool Readable(uintptr_t a, size_t n) {
+  MEMORY_BASIC_INFORMATION mbi{};
+  if (VirtualQuery(reinterpret_cast<void *>(a), &mbi, sizeof(mbi)) == 0) return false;
+  if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+  return a + n <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+}
+
+void DumpThreads() {
+  const DWORD self = GetCurrentThreadId();
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snap == INVALID_HANDLE_VALUE) return;
+  THREADENTRY32 te{};
+  te.dwSize = sizeof(te);
+  int shown = 0;
+  for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+    if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == self) continue;
+    HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, te.th32ThreadID);
+    if (th == nullptr) continue;
+    if (SuspendThread(th) != static_cast<DWORD>(-1)) {
+      CONTEXT c{};
+      c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+      if (GetThreadContext(th, &c)) {
+        std::string chain;
+        int found = 0;
+        for (uintptr_t sp = c.Rsp; found < 20 && sp < c.Rsp + 0x6000; sp += 8) {
+          if (!Readable(sp, 8)) break;
+          const uintptr_t v = *reinterpret_cast<const uintptr_t *>(sp);
+          if (v < g_gameBase + 0x1000 || v >= g_gameBase + 0x1099000) continue;
+          const uint8_t *r = reinterpret_cast<const uint8_t *>(v);
+          if (r[-5] != 0xe8 && !(r[-6] == 0xff && r[-5] == 0x15) && r[-2] != 0xff) continue;
+          char one[24];
+          std::snprintf(one, sizeof(one), " %llx", static_cast<unsigned long long>(v));
+          chain += one;
+          ++found;
+        }
+        const bool inExe = c.Rip >= g_gameBase && c.Rip < g_gameBase + 0x1099000;
+        if (found > 0 || inExe) {
+          char buf[200];
+          std::snprintf(buf, sizeof(buf), "GhostLab[espera]: thread %lu rip=%llx%s retornos:",
+                        static_cast<unsigned long>(te.th32ThreadID),
+                        static_cast<unsigned long long>(c.Rip), inExe ? " (exe)" : "");
+          Logger::Info(std::string(buf) + chain);
+          ++shown;
+        }
+      }
+      ResumeThread(th);
+    }
+    CloseHandle(th);
+  }
+  CloseHandle(snap);
+  Logger::Info("GhostLab[espera]: " + std::to_string(shown) + " thread(s) com chamadas do jogo.");
+}
+
 void DetourSpawnVehicles(void *ctx) {
   InFlight guard;
   LogStageEntries("antes do spawn");
@@ -735,6 +793,13 @@ void DetourSpawnVehicles(void *ctx) {
   LogStageEntries("apos liberar");
   g_originalSpawn(ctx);
   LogStageEntries("depois do spawn");
+  if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
+    std::fclose(f);
+    std::thread([] {
+      Sleep(25000);
+      DumpThreads();
+    }).detach();
+  }
 }
 
 // Diagnostico de crash: registra violacoes de acesso (e afins) com o RIP, o
