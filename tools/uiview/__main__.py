@@ -24,12 +24,14 @@ def main() -> int:
                         help="malha de todos os modelos até 120 MB (carro, personagem, local, prop, "
                              "interior, LOD), um pacote por vez. Acima de 120 MB fica só no índice. "
                              "Reaproveita imagem e malha já geradas")
+    parser.add_argument("-j", "--jobs", type=int, default=None,
+                        help="processos para exportar os pacotes de modelo (padrão: metade dos núcleos, até 8)")
     parser.add_argument("--open", action="store_true", help="abre o visualizador no navegador ao terminar")
     args = parser.parse_args()
     if args.all_models and args.models.strip():
         parser.error("--all-models não combina com --models")
     tokens = [part.strip() for part in args.models.split(",") if part.strip()] or None
-    index = run(args.game, args.output, args.force_textures, args.scene_images_only, tokens, args.all_models)
+    index = run(args.game, args.output, args.force_textures, args.scene_images_only, tokens, args.all_models, args.jobs)
     if args.open:
         webbrowser.open("file://" + __import__("os").path.abspath(index))
     return 0

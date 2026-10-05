@@ -260,8 +260,98 @@ def _decide(kind: str, size: int, rel: str, path: str, tokens: list[str] | None,
     return parse_decision(kind, size, rel, path, tokens, all_models=all_models)
 
 
+def _default_jobs() -> int:
+    """Processos de exportação: metade dos núcleos (cada um abre PSSG de centenas de MB)."""
+    return max(1, min(8, (os.cpu_count() or 2) // 2))
+
+
+def _export_package(game: str, rel: str, out: str, force: bool, tokens: list[str] | None,
+                    all_models: bool) -> dict[str, Any]:
+    """Exporta um pacote. Roda num processo próprio: devolve as linhas de log em vez de imprimir."""
+    lines: list[str] = []
+    log = lines.append
+    models: list[dict[str, Any]] = []
+    assets: list[dict[str, Any]] = []
+    counts = {"parsed": 0, "reused": 0, "hard": 0}
+    seen_tex: set[tuple[str, str]] = set()
+    seen_tex_ids: dict[tuple[str, str], list[str]] = {}
+
+    def done() -> dict[str, Any]:
+        return {"log": lines, "models": models, "assets": assets, **counts}
+
+    def remember_index(path: str, kind: str, size: int, decision: str) -> None:
+        if size > HARD_CAP:
+            counts["hard"] += 1
+            log(f"  só índice, acima de 120 MB: {path} ({size / (1024 * 1024):.0f} MB)")
+        models.append(_empty(rel, path, kind, size, _note(decision, kind, size, tokens, None)))
+
+    try:
+        arc = open_package(game, rel)
+    except Exception as exc:
+        log(f"modelo: não abriu {rel}: {exc}")
+        return done()
+    files = dict(_files(arc))
+    chosen = [(path, size, classify_path(path)) for path, size in files.items()]
+    chosen = [(p, s, k) for p, s, k in chosen if k]
+    if not any(_decide(k, s, rel, p, tokens, all_models) == "parse" for p, s, k in chosen):
+        for path, size, kind in chosen:
+            remember_index(path, kind, size, _decide(kind, size, rel, path, tokens, all_models))
+        return done()
+    log(f"modelo: {rel}")
+    for path, size, kind in chosen:
+        decision = _decide(kind, size, rel, path, tokens, all_models)
+        if decision != "parse":
+            remember_index(path, kind, size, decision)
+            continue
+        row = _empty(rel, path, kind, size, _note(decision, kind, size, tokens, None))
+        geom_rel = f"models/{row['id']}.bin"
+        geom_abs = os.path.join(out, geom_rel)
+        summary = None if force else summarize_geom(geom_abs)
+        fresh = summary is None
+        if summary is None:
+            try:
+                data = arc.read(path)
+                pssg = PSSGFile(data)
+                meshes = extract_meshes(pssg.root) if pssg.root is not None else []
+                del pssg
+            except Exception as exc:
+                row["note"] = f"não lido: {exc}"
+                models.append(row)
+                log(f"  não lido {path}: {exc}")
+                continue
+            del data
+            if not meshes:
+                row["note"] = _note(decision, kind, size, tokens, 0)
+                models.append(row)
+                continue
+            os.makedirs(os.path.join(out, "models"), exist_ok=True)
+            with open(geom_abs, "wb") as fh:
+                fh.write(pack_geom(meshes))
+            summary = {
+                "meshes": len(meshes),
+                "mats": list(dict.fromkeys(m["material"] for m in meshes)),
+                "verts": sum(len(m["positions"]) for m in meshes),
+                "tris": sum(len(m["indices"]) // 3 for m in meshes),
+            }
+            del meshes
+        else:
+            counts["reused"] += 1
+        tex_ids = _bind_textures(arc, rel, path, files, out, force, log, assets, seen_tex, seen_tex_ids)
+        row.update({**summary, "tex": tex_ids, "geom": geom_rel, "note": ""})
+        if kind in CAR_KINDS:
+            row["car"] = _export_car(arc, rel, path, row, out, force, log)
+        models.append(row)
+        counts["parsed"] += 1
+        origin = "nova" if fresh else "reaproveitada"
+        log(f"  {row['n']}: {summary['meshes']} malhas, {summary['verts']} vértices, {len(tex_ids)} texturas ({origin})")
+    del arc
+    gc.collect()
+    return done()
+
+
 def export_models(game: str, out: str, force: bool, log: Callable[[str], None],
-                  tokens: list[str] | None, all_models: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                  tokens: list[str] | None, all_models: bool = False,
+                  jobs: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     cache_path = os.path.join(out, "data", "model_cache.json")
     pkg_sig = []
     for rel in package_list(game):
@@ -283,85 +373,38 @@ def export_models(game: str, out: str, force: bool, log: Callable[[str], None],
         log("modelos: todos os PSSG de até 120 MB (carro, personagem, local, prop, interior, LOD); acima disso, só o índice")
     models: list[dict[str, Any]] = []
     assets: list[dict[str, Any]] = []
-    parsed = 0
-    reused_n = 0
-    hard_n = 0
-    seen_tex: set[tuple[str, str]] = set()
-    seen_tex_ids: dict[tuple[str, str], list[str]] = {}
+    parsed = reused_n = hard_n = 0
+    known: set[str] = set()
 
-    def remember_index(rel: str, path: str, kind: str, size: int, decision: str) -> None:
-        nonlocal hard_n
-        if size > HARD_CAP:
-            hard_n += 1
-            log(f"  só índice, acima de 120 MB: {path} ({size / (1024 * 1024):.0f} MB)")
-        models.append(_empty(rel, path, kind, size, _note(decision, kind, size, tokens, None)))
+    rels = package_list(game)
+    workers = max(1, min(jobs or _default_jobs(), len(rels)))
+    args = [(game, rel, out, force, tokens, all_models) for rel in rels]
+    if workers == 1:
+        results = (_export_package(*a) for a in args)
+        pool = None
+    else:
+        from concurrent.futures import ProcessPoolExecutor
 
-    for rel in package_list(game):
-        try:
-            arc = open_package(game, rel)
-        except Exception as exc:
-            log(f"modelo: não abriu {rel}: {exc}")
-            continue
-        files = dict(_files(arc))
-        chosen = [(path, size, classify_path(path)) for path, size in files.items()]
-        chosen = [(p, s, k) for p, s, k in chosen if k]
-        if not any(_decide(k, s, rel, p, tokens, all_models) == "parse" for p, s, k in chosen):
-            for path, size, kind in chosen:
-                remember_index(rel, path, kind, size, _decide(kind, size, rel, path, tokens, all_models))
-            del arc
-            continue
-        log(f"modelo: {rel}")
-        for path, size, kind in chosen:
-            decision = _decide(kind, size, rel, path, tokens, all_models)
-            row = _empty(rel, path, kind, size, _note(decision, kind, size, tokens, None))
-            if decision != "parse":
-                if size > HARD_CAP:
-                    hard_n += 1
-                    log(f"  só índice, acima de 120 MB: {path} ({size / (1024 * 1024):.0f} MB)")
-                models.append(row)
-                continue
-            geom_rel = f"models/{row['id']}.bin"
-            geom_abs = os.path.join(out, geom_rel)
-            summary = None if force else summarize_geom(geom_abs)
-            fresh = summary is None
-            if summary is None:
-                try:
-                    data = arc.read(path)
-                    pssg = PSSGFile(data)
-                    meshes = extract_meshes(pssg.root) if pssg.root is not None else []
-                    del pssg
-                except Exception as exc:
-                    row["note"] = f"não lido: {exc}"
-                    models.append(row)
-                    log(f"  não lido {path}: {exc}")
-                    continue
-                del data
-                if not meshes:
-                    row["note"] = _note(decision, kind, size, tokens, 0)
-                    models.append(row)
-                    continue
-                os.makedirs(os.path.join(out, "models"), exist_ok=True)
-                with open(geom_abs, "wb") as fh:
-                    fh.write(pack_geom(meshes))
-                summary = {
-                    "meshes": len(meshes),
-                    "mats": list(dict.fromkeys(m["material"] for m in meshes)),
-                    "verts": sum(len(m["positions"]) for m in meshes),
-                    "tris": sum(len(m["indices"]) // 3 for m in meshes),
-                }
-                del meshes
-            else:
-                reused_n += 1
-            tex_ids = _bind_textures(arc, rel, path, files, out, force, log, assets, seen_tex, seen_tex_ids)
-            row.update({**summary, "tex": tex_ids, "geom": geom_rel, "note": ""})
-            if kind in CAR_KINDS:
-                row["car"] = _export_car(arc, rel, path, row, out, force, log)
-            models.append(row)
-            parsed += 1
-            origin = "nova" if fresh else "reaproveitada"
-            log(f"  {row['n']}: {summary['meshes']} malhas, {summary['verts']} vértices, {len(tex_ids)} texturas ({origin})")
-        del arc
-        gc.collect()
+        log(f"modelos: {workers} processos")
+        pool = ProcessPoolExecutor(max_workers=workers)
+        futures = [pool.submit(_export_package, *a) for a in args]
+        results = (f.result() for f in futures)
+    try:
+        for result in results:
+            for line in result["log"]:
+                log(line)
+            models.extend(result["models"])
+            for asset in result["assets"]:
+                ident = f"{asset['g']}/{asset['n']}"
+                if ident not in known:
+                    known.add(ident)
+                    assets.append(asset)
+            parsed += result["parsed"]
+            reused_n += result["reused"]
+            hard_n += result["hard"]
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     info = {
         "partial": bool(tokens) and not all_models,

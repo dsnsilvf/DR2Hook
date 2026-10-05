@@ -453,12 +453,12 @@ def _copy_web(out: str) -> None:
 
 
 def run(game: str, out: str, force_textures: bool = False, scene_images_only: bool = False,
-        models: list[str] | None = None, all_models: bool = False) -> str:
+        models: list[str] | None = None, all_models: bool = False, jobs: int | None = None) -> str:
     reader = Reader(game)
     os.makedirs(os.path.join(out, "data"), exist_ok=True)
     assets_js = os.path.join(out, "data", "assets.js")
     if all_models and not force_textures and os.path.exists(assets_js):
-        return _refresh_models(game, out, log)
+        return _refresh_models(game, out, log, jobs)
 
     log("telas, estados e fluxo")
     ui = export_screens(reader)
@@ -495,7 +495,7 @@ def run(game: str, out: str, force_textures: bool = False, scene_images_only: bo
 
     from tools.uiview.models import export_models
 
-    model_assets, model_data = export_models(game, out, force_textures, log, models, all_models=all_models)
+    model_assets, model_data = export_models(game, out, force_textures, log, models, all_models=all_models, jobs=jobs)
     # A galeria das cenas fica com a primeira ocorrência do nome; as texturas de
     # modelo entram depois e não substituem uma textura de UI homônima.
     known = {(a["g"], a["n"]) for a in assets}
@@ -521,12 +521,12 @@ def run(game: str, out: str, force_textures: bool = False, scene_images_only: bo
     return os.path.join(out, "index.html")
 
 
-def _refresh_models(game: str, out: str, log) -> str:
+def _refresh_models(game: str, out: str, log, jobs: int | None = None) -> str:
     """Só os modelos, um pacote por vez. A interface já exportada permanece."""
     from tools.uiview.models import export_models
 
     log("modelos: interface já exportada, só as malhas")
-    model_assets, model_data = export_models(game, out, False, log, None, all_models=True)
+    model_assets, model_data = export_models(game, out, False, log, None, all_models=True, jobs=jobs)
     assets = _load_js(os.path.join(out, "data", "assets.js"), "ASSET_DATA")
     known = {(a["g"], a["n"]) for a in assets}
     for asset in model_assets:

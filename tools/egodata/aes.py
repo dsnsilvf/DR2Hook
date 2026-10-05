@@ -76,7 +76,7 @@ def _decryption_keys(key: bytes) -> tuple[list[list[int]], int]:
     return dk, nr
 
 
-def decrypt_ecb(data: bytes, key: bytes) -> bytes:
+def _py_decrypt_ecb(data: bytes, key: bytes) -> bytes:
     dk, nr = _decryption_keys(key)
     t0, t1, t2, t3 = _T
     inv = _INV_SBOX
@@ -130,7 +130,7 @@ def _round_keys(key: bytes) -> tuple[list[list[int]], int]:
     return [w[4 * r : 4 * r + 4] for r in range(nr + 1)], nr
 
 
-def encrypt_ecb(data: bytes, key: bytes) -> bytes:
+def _py_encrypt_ecb(data: bytes, key: bytes) -> bytes:
     rk, nr = _round_keys(key)
     t0, t1, t2, t3 = _TE
     sb = _SBOX
@@ -158,3 +158,65 @@ def encrypt_ecb(data: bytes, key: bytes) -> bytes:
         )
         out[o : o + 16] = b"".join(v.to_bytes(4, "big") for v in words)
     return bytes(out)
+
+
+def _load_native():
+    """AES-ECB do libcrypto (OpenSSL) via ctypes; None se a biblioteca não estiver disponível."""
+    import ctypes
+    import ctypes.util
+
+    name = ctypes.util.find_library("crypto")
+    if not name:
+        return None
+    try:
+        lib = ctypes.CDLL(name)
+        lib.EVP_CIPHER_CTX_new.restype = ctypes.c_void_p
+        lib.EVP_CIPHER_CTX_free.argtypes = [ctypes.c_void_p]
+        lib.EVP_CIPHER_CTX_set_padding.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        ciphers = {}
+        for size in (16, 24, 32):
+            fn = getattr(lib, f"EVP_aes_{size * 8}_ecb")
+            fn.restype = ctypes.c_void_p
+            ciphers[size] = fn()
+        init = {True: lib.EVP_EncryptInit_ex, False: lib.EVP_DecryptInit_ex}
+        update = {True: lib.EVP_EncryptUpdate, False: lib.EVP_DecryptUpdate}
+        for fn in (*init.values(),):
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        for fn in (*update.values(),):
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_int]
+    except (OSError, AttributeError):
+        return None
+
+    def run(data: bytes, key: bytes, encrypt: bool) -> bytes:
+        whole = len(data) & ~15
+        if not whole:
+            return bytes(data)
+        ctx = lib.EVP_CIPHER_CTX_new()
+        try:
+            if not init[encrypt](ctx, ciphers[len(key)], None, key, None):
+                raise ValueError("EVP_*Init_ex falhou")
+            lib.EVP_CIPHER_CTX_set_padding(ctx, 0)
+            out = ctypes.create_string_buffer(whole + 16)
+            n = ctypes.c_int(0)
+            if not update[encrypt](ctx, out, ctypes.byref(n), bytes(data[:whole]), whole) or n.value != whole:
+                raise ValueError("EVP_*Update falhou")
+            return out.raw[:whole] + bytes(data[whole:])
+        finally:
+            lib.EVP_CIPHER_CTX_free(ctx)
+
+    return run
+
+
+_NATIVE = _load_native()
+
+
+def decrypt_ecb(data: bytes, key: bytes) -> bytes:
+    if _NATIVE is not None and len(key) in (16, 24, 32):
+        return _NATIVE(data, key, False)
+    return _py_decrypt_ecb(data, key)
+
+
+def encrypt_ecb(data: bytes, key: bytes) -> bytes:
+    if _NATIVE is not None and len(key) in (16, 24, 32):
+        return _NATIVE(data, key, True)
+    return _py_encrypt_ecb(data, key)

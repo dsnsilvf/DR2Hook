@@ -2,6 +2,9 @@
 
 import unittest
 
+import os
+
+from tools.egodata import aes
 from tools.egodata.aes import decrypt_ecb, encrypt_ecb
 
 
@@ -17,6 +20,14 @@ class AesEncryptTest(unittest.TestCase):
         out = encrypt_ecb(data, key)
         self.assertEqual(out[48:], data[48:])
         self.assertEqual(decrypt_ecb(out, key), data)
+
+    def test_native_matches_pure_python(self):
+        if aes._NATIVE is None:
+            self.skipTest("libcrypto indisponível")
+        for size in (16, 24, 32):
+            key, data = os.urandom(size), os.urandom(16 * 40 + 5)
+            self.assertEqual(encrypt_ecb(data, key), aes._py_encrypt_ecb(data, key))
+            self.assertEqual(decrypt_ecb(data, key), aes._py_decrypt_ecb(data, key))
 
 
 if __name__ == "__main__":
