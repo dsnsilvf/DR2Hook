@@ -22,6 +22,7 @@ from typing import Any, Callable
 from tools.egodata.nefs import NefsArchive
 from tools.pssg import PSSGFile
 from tools.uiview.content import export_pssg_images, safe_name
+from tools.uiview.carmodel import CAR_REV, build_car_model, pack_resources
 from tools.uiview.mesh import extract_meshes, pack_geom, summarize_geom
 
 # Revisão do formato da malha e das regras de seleção. Entra na assinatura do cache.
@@ -29,6 +30,8 @@ MESH_REV = 2
 HARD_CAP = 120 * 1024 * 1024
 SOFT_CAP = 40 * 1024 * 1024
 PRIMARY = {"carro", "personagem", "local", "prop", "generico"}
+# Tipos que ganham a árvore estrutural do Car Model Explorer (`models/<id>.car.json`).
+CAR_KINDS = {"carro", "lod", "interior"}
 
 
 def classify_path(path: str) -> str | None:
@@ -182,7 +185,7 @@ def _empty(src: str, path: str, kind: str, size: int, note: str) -> dict[str, An
     return {
         "id": _model_id(src, path), "n": os.path.basename(path).replace(".pssg", ""), "k": kind,
         "src": src, "path": path, "bytes": size, "meshes": None, "mats": [], "verts": None,
-        "tris": None, "tex": [], "geom": None, "note": note,
+        "tris": None, "tex": [], "geom": None, "car": None, "note": note,
     }
 
 
@@ -220,6 +223,39 @@ def _bind_textures(arc: NefsArchive, rel: str, path: str, files: dict[str, int],
     return tex_ids
 
 
+def _export_car(arc: NefsArchive, rel: str, path: str, row: dict[str, Any], out: str, force: bool,
+                log: Callable[[str], None]) -> str | None:
+    """Grava a árvore (`.car.json`) e os buffers compartilhados (`.car.bin`) de um carro."""
+    json_rel = f"models/{row['id']}.car.json"
+    bin_rel = f"models/{row['id']}.car.bin"
+    json_abs, bin_abs = os.path.join(out, json_rel), os.path.join(out, bin_rel)
+    if not force and os.path.exists(json_abs) and os.path.exists(bin_abs):
+        try:
+            if json.load(open(json_abs, encoding="utf-8")).get("rev") == CAR_REV:
+                return json_rel
+        except (OSError, ValueError):
+            pass
+    try:
+        pssg = PSSGFile(arc.read(path))
+        if pssg.root is None:
+            return None
+        model, resources = build_car_model(pssg.root, row["id"], {"package": rel, "path": path, "bytes": row["bytes"]})
+    except Exception as exc:
+        log(f"  árvore do carro não lida {path}: {exc}")
+        return None
+    if not resources:
+        return None
+    os.makedirs(os.path.join(out, "models"), exist_ok=True)
+    with open(bin_abs, "wb") as fh:
+        fh.write(pack_resources(resources))
+    model["bin"] = bin_rel
+    with open(json_abs, "w", encoding="utf-8") as fh:
+        json.dump(model, fh, separators=(",", ":"))
+    lods = ", ".join(f"{l['name']}={l['nodes']} nós/{l['slices']} fatias" for l in model["lods"]) or "sem LOD"
+    log(f"  árvore {row['n']}: {lods}; {len(resources)} buffers; {len(model['notes'])} notas")
+    return json_rel
+
+
 def _decide(kind: str, size: int, rel: str, path: str, tokens: list[str] | None, all_models: bool) -> str:
     return parse_decision(kind, size, rel, path, tokens, all_models=all_models)
 
@@ -232,7 +268,7 @@ def export_models(game: str, out: str, force: bool, log: Callable[[str], None],
         full = os.path.join(game, rel)
         st = os.stat(full)
         pkg_sig.append([rel, st.st_size, int(st.st_mtime)])
-    signature = {"rev": MESH_REV, "tokens": [] if all_models else (tokens or []),
+    signature = {"rev": MESH_REV, "car": CAR_REV, "tokens": [] if all_models else (tokens or []),
                  "all": bool(all_models), "pkgs": pkg_sig}
     if not force and os.path.exists(cache_path):
         try:
@@ -318,6 +354,8 @@ def export_models(game: str, out: str, force: bool, log: Callable[[str], None],
                 reused_n += 1
             tex_ids = _bind_textures(arc, rel, path, files, out, force, log, assets, seen_tex, seen_tex_ids)
             row.update({**summary, "tex": tex_ids, "geom": geom_rel, "note": ""})
+            if kind in CAR_KINDS:
+                row["car"] = _export_car(arc, rel, path, row, out, force, log)
             models.append(row)
             parsed += 1
             origin = "nova" if fresh else "reaproveitada"
@@ -347,5 +385,7 @@ def _cache_ok(out: str, cached: dict[str, Any]) -> bool:
             return False
     for model in cached.get("models", []):
         if model.get("geom") and not os.path.exists(os.path.join(out, model["geom"])):
+            return False
+        if model.get("car") and not os.path.exists(os.path.join(out, model["car"])):
             return False
     return True
