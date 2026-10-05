@@ -1,20 +1,25 @@
-// DR2 Viewer3D: janela SDL3 com contexto OpenGL 3.3 core.
+// DR2 Viewer3D: janela SDL3 com contexto OpenGL 3.3 core e câmera orbital do Track Explorer.
 //
 //   viewer3d [--frames N] [--screenshot arq.ppm]
 //
 // Com --frames, roda N quadros, imprime "OK renderer=... gl=... frames=N" e sai com 0.
 // Com --screenshot, grava o último quadro em PPM antes de sair.
 
+#include "render/camera.hpp"
 #include "render/gl.hpp"
 
 #include <SDL3/SDL.h>
+#include <glm/gtc/type_ptr.hpp>
 
+#include <cstddef>
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -111,52 +116,162 @@ private:
     SDL_GLContext context_ = nullptr;
 };
 
-const char* const kTriangleVs = R"glsl(#version 330 core
-layout(location = 0) in vec2 aPos;
+const char* const kColorVs = R"glsl(#version 330 core
+layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aCol;
-uniform float uAspect;
+uniform mat4 uMvp;
 out vec3 vCol;
-void main() { vCol = aCol; gl_Position = vec4(aPos.x / uAspect, aPos.y, 0.0, 1.0); }
+void main() { vCol = aCol; gl_Position = uMvp * vec4(aPos, 1.0); }
 )glsl";
 
-const char* const kTriangleFs = R"glsl(#version 330 core
+const char* const kColorFs = R"glsl(#version 330 core
 in vec3 vCol;
 out vec4 oColor;
 void main() { oColor = vec4(vCol, 1.0); }
 )glsl";
 
-// Triângulo de teste da etapa 2: posição xy e cor rgb por vértice.
-class Triangle {
+struct ColorVertex {
+    glm::vec3 pos;
+    glm::vec3 col;
+};
+
+// Malha de cor por vértice, desenhada com glDrawArrays.
+class ColorMesh {
 public:
-    Triangle() : program_(kTriangleVs, kTriangleFs), aspect_(program_.uniform("uAspect")) {
-        const float verts[] = {
-            -0.6f, -0.5f, 1.0f, 0.0f, 0.0f,
-             0.6f, -0.5f, 0.0f, 1.0f, 0.0f,
-             0.0f,  0.6f, 0.0f, 0.0f, 1.0f,
-        };
+    ColorMesh(GLenum mode, const std::vector<ColorVertex>& verts) : mode_(mode), count_(static_cast<GLsizei>(verts.size())) {
         vao_.bind();
-        vbo_.upload(GL_ARRAY_BUFFER, verts, sizeof verts);
+        vbo_.upload(GL_ARRAY_BUFFER, verts.data(), verts.size() * sizeof(ColorVertex));
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ColorVertex), reinterpret_cast<void*>(offsetof(ColorVertex, pos)));
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ColorVertex), reinterpret_cast<void*>(offsetof(ColorVertex, col)));
         glBindVertexArray(0);
     }
-
-    void draw(float aspect) const {
-        program_.use();
-        glUniform1f(aspect_, aspect);
+    void draw() const {
         vao_.bind();
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(mode_, 0, count_);
         glBindVertexArray(0);
     }
 
 private:
-    dr2::gl::Program program_;
-    GLint aspect_;
+    GLenum mode_;
+    GLsizei count_;
     dr2::gl::Vao vao_;
     dr2::gl::Buffer vbo_;
 };
+
+// Cubo de `size` metros, uma cor por face, 12 triângulos.
+std::vector<ColorVertex> cube_vertices(glm::vec3 c, float size) {
+    const float h = size * 0.5f;
+    // Cada face: eixo normal (0 = x, 1 = y, 2 = z), sinal e cor.
+    struct Face { int axis; float sign; glm::vec3 col; };
+    const Face faces[] = {
+        {0, +1.0f, {0.90f, 0.30f, 0.25f}}, {0, -1.0f, {0.95f, 0.65f, 0.20f}},
+        {1, +1.0f, {0.35f, 0.80f, 0.35f}}, {1, -1.0f, {0.25f, 0.45f, 0.30f}},
+        {2, +1.0f, {0.30f, 0.50f, 0.95f}}, {2, -1.0f, {0.70f, 0.35f, 0.85f}},
+    };
+    std::vector<ColorVertex> out;
+    for (const Face& f : faces) {
+        const int u = (f.axis + 1) % 3, v = (f.axis + 2) % 3;
+        glm::vec3 corner[4];
+        const float su[4] = {-1, 1, 1, -1}, sv[4] = {-1, -1, 1, 1};
+        for (int k = 0; k < 4; ++k) {
+            glm::vec3 p(0.0f);
+            p[f.axis] = f.sign * h;
+            p[u] = su[k] * h;
+            p[v] = sv[k] * h;
+            corner[k] = c + p;
+        }
+        for (int k : {0, 1, 2, 0, 2, 3}) out.push_back({corner[k], f.col});
+    }
+    return out;
+}
+
+// Grade de linhas no plano y = c.y: `extent` metros de lado, uma linha a cada `step`.
+std::vector<ColorVertex> grid_vertices(glm::vec3 c, float extent, float step) {
+    const glm::vec3 col(0.30f, 0.32f, 0.36f);
+    const float h = extent * 0.5f;
+    const int n = static_cast<int>(extent / step);
+    std::vector<ColorVertex> out;
+    for (int i = 0; i <= n; ++i) {
+        const float t = -h + static_cast<float>(i) * step;
+        out.push_back({c + glm::vec3(t, 0.0f, -h), col});
+        out.push_back({c + glm::vec3(t, 0.0f, h), col});
+        out.push_back({c + glm::vec3(-h, 0.0f, t), col});
+        out.push_back({c + glm::vec3(h, 0.0f, t), col});
+    }
+    return out;
+}
+
+// Cena de teste da etapa 3: cubo de 10 m no alvo inicial da câmera e grade de 200 × 200 m.
+class TestScene {
+public:
+    explicit TestScene(glm::vec3 center)
+        : program_(kColorVs, kColorFs),
+          mvp_(program_.uniform("uMvp")),
+          cube_(GL_TRIANGLES, cube_vertices(center, 10.0f)),
+          grid_(GL_LINES, grid_vertices(center, 200.0f, 10.0f)) {}
+
+    void draw(const glm::mat4& view_proj) const {
+        program_.use();
+        glUniformMatrix4fv(mvp_, 1, GL_FALSE, glm::value_ptr(view_proj));
+        grid_.draw();
+        cube_.draw();
+    }
+
+private:
+    dr2::gl::Program program_;
+    GLint mvp_;
+    ColorMesh cube_;
+    ColorMesh grid_;
+};
+
+// Arraste em curso: orbitar ou pan (decidido no clique, como no web).
+struct Drag {
+    bool active = false;
+    bool pan = false;
+};
+
+// Traduz eventos SDL em chamadas da câmera. Devolve false para sair.
+bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& drag) {
+    switch (event.type) {
+    case SDL_EVENT_QUIT:
+        return false;
+    case SDL_EVENT_KEY_DOWN:
+        if (event.key.key == SDLK_ESCAPE) return false;
+        if (event.key.key == SDLK_F) cam.reset();
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT) {
+            drag.active = true;
+            drag.pan = event.button.button == SDL_BUTTON_RIGHT || (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+        }
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT) drag.active = false;
+        break;
+    case SDL_EVENT_MOUSE_MOTION:
+        if (drag.active) {
+            if (drag.pan) cam.pan(event.motion.xrel, event.motion.yrel);
+            else cam.orbit(event.motion.xrel, event.motion.yrel);
+        }
+        break;
+    case SDL_EVENT_MOUSE_WHEEL:
+        cam.zoom(event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+// WASD a cada quadro, pelo estado do teclado (segurar a tecla anda continuamente).
+void walk_keys(dr2::render::OrbitCamera& cam, float dt) {
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    const float ahead = (keys[SDL_SCANCODE_W] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_S] ? 1.0f : 0.0f);
+    const float side = (keys[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_A] ? 1.0f : 0.0f);
+    if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
+}
 
 int run(const Options& opt) {
     Platform platform;
@@ -164,28 +279,35 @@ int run(const Options& opt) {
     const std::string renderer = gl_string(GL_RENDERER);
     const std::string version = gl_string(GL_VERSION);
 
-    Triangle triangle;
+    dr2::render::OrbitCamera cam;
+    TestScene scene(cam.target);
+    glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
+    Drag drag;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 title_t0 = SDL_GetPerformanceCounter();
+    Uint64 last_t = title_t0;
     long title_frames = 0;
     long frames = 0;
     bool running = true;
 
     while (running) {
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) running = false;
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) running = false;
-        }
+        while (SDL_PollEvent(&event))
+            if (!handle_event(event, cam, drag)) running = false;
+        const Uint64 frame_t = SDL_GetPerformanceCounter();
+        const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
+        last_t = frame_t;
+        walk_keys(cam, dt);
 
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(window, &w, &h);
         glViewport(0, 0, w, h);
         glClearColor(0.55f, 0.68f, 0.82f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        triangle.draw(h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f);
+        const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
+        scene.draw(cam.proj(aspect) * cam.view());
         dr2::gl::check("quadro");
 
         ++frames;
