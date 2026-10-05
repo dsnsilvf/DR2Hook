@@ -249,7 +249,7 @@ function carFixWheels() {
       const wide = pos.length / 3 > 65535;
       const arr = wide ? Uint32Array.from(ind) : Uint16Array.from(ind);
       const mk = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
-      const fix = { wide, ind: arr, count: arr.length, lb: null,
+      const fix = { wide, ind: arr, pos: Float32Array.from(pos), count: arr.length, lb: null,
         pb: mk(gl.ARRAY_BUFFER, Float32Array.from(pos)), ub: mk(gl.ARRAY_BUFFER, Float32Array.from(uv)), ib: mk(gl.ELEMENT_ARRAY_BUFFER, arr) };
       s._fix = fix;
       cv.fixes.push(fix);
@@ -704,7 +704,12 @@ function carGL() {
     cv.yaw = d.yaw - dx * 0.008;
     cv.pitch = Math.max(-1.4, Math.min(1.4, d.pitch + dy * 0.008));
   });
-  canvas.addEventListener("pointerup", () => { cv.drag = null; });
+  canvas.addEventListener("pointerup", (e) => {
+    const d = cv.drag;
+    cv.drag = null;
+    // Clique sem arrastar (e sem pan) seleciona a peça sob o cursor.
+    if (d && !d.pan && e.button === 0 && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) carPick(e, canvas);
+  });
   canvas.addEventListener("pointercancel", () => { cv.drag = null; });
   canvas.addEventListener("wheel", (e) => {
     cv.dist = Math.max(0.3, Math.min(60, cv.dist * (e.deltaY > 0 ? 1.08 : 0.92)));
@@ -712,6 +717,95 @@ function carGL() {
   }, { passive: false });
   requestAnimationFrame(frame);
   return gl;
+}
+
+// ------------------------------------------------------------ seleção por clique
+
+// Inversa de uma matriz afim 4x4 em coluna-maior (rotação/escala + translação).
+function carInvAffine(m) {
+  const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-12) return null;
+  const k = 1 / det;
+  const r = [(e * i - f * h) * k, (c * h - b * i) * k, (b * f - c * e) * k,
+    (f * g - d * i) * k, (a * i - c * g) * k, (c * d - a * f) * k,
+    (d * h - e * g) * k, (b * g - a * h) * k, (a * e - b * d) * k];
+  const tx = m[12], ty = m[13], tz = m[14];
+  return { r, t: [-(r[0] * tx + r[1] * ty + r[2] * tz), -(r[3] * tx + r[4] * ty + r[5] * tz), -(r[6] * tx + r[7] * ty + r[8] * tz)] };
+}
+
+// Menor distância de um raio (o, v) a um triângulo da fatia (Möller–Trumbore), ou Infinity.
+function carRaySlice(s, o, v) {
+  const r = s._fix || cv.res.get(s.rds);
+  if (!r || !r.pos || !r.ind) return Infinity;
+  const io = s._fix ? 0 : s.io, ic = s._fix ? s._fix.count : s.ic;
+  const P = r.pos, I = r.ind;
+  let best = Infinity;
+  for (let t = io; t + 2 < io + ic; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
+    const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
+    const px = v[1] * e2z - v[2] * e2y, py = v[2] * e2x - v[0] * e2z, pz = v[0] * e2y - v[1] * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det;
+    const tx = o[0] - P[a], ty = o[1] - P[a + 1], tz = o[2] - P[a + 2];
+    const u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < 0 || u > 1) continue;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+    const w = (v[0] * qx + v[1] * qy + v[2] * qz) * inv;
+    if (w < 0 || u + w > 1) continue;
+    const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    if (dist > 1e-5 && dist < best) best = dist;
+  }
+  return best;
+}
+
+function carReveal(n) {
+  for (let c = n; c._parent; c = c._parent) {
+    cv.expanded.add(c._parent.uid);
+    const g = carGroupOf(c);
+    if (g) cv.expanded.add(`g:${c._parent.uid}:${g}`);
+  }
+}
+
+function carPick(e, canvas) {
+  if (!cv.data) return;
+  const rect = canvas.getBoundingClientRect();
+  const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  const ny = 1 - ((e.clientY - rect.top) / rect.height) * 2;
+  const cam = carCamera();
+  let f = [cam.look[0] - cam.eye[0], cam.look[1] - cam.eye[1], cam.look[2] - cam.eye[2]];
+  const fl = Math.hypot(...f) || 1; f = f.map((x) => x / fl);
+  let rt = [-f[2], 0, f[0]];
+  const rl = Math.hypot(...rt) || 1; rt = rt.map((x) => x / rl);
+  const up = [rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]];
+  const th = Math.tan(0.45), asp = rect.width / Math.max(1, rect.height);
+  const dir = [0, 1, 2].map((k) => f[k] + rt[k] * nx * th * asp + up[k] * ny * th);
+  let best = null, bestGlass = null;
+  for (const d of cv.draw || []) {
+    const s = d.s;
+    let o = cam.eye, v = dir;
+    if (!s._fix) {
+      if (!d.n._m) d.n._m = new Float32Array(d.n.world);
+      const inv = carInvAffine(d.n._m);
+      if (!inv) continue;
+      const { r, t } = inv;
+      o = [r[0] * cam.eye[0] + r[1] * cam.eye[1] + r[2] * cam.eye[2] + t[0], r[3] * cam.eye[0] + r[4] * cam.eye[1] + r[5] * cam.eye[2] + t[1], r[6] * cam.eye[0] + r[7] * cam.eye[1] + r[8] * cam.eye[2] + t[2]];
+      v = [r[0] * dir[0] + r[1] * dir[1] + r[2] * dir[2], r[3] * dir[0] + r[4] * dir[1] + r[5] * dir[2], r[6] * dir[0] + r[7] * dir[1] + r[8] * dir[2]];
+    }
+    const dist = carRaySlice(s, o, v);
+    if (!isFinite(dist)) continue;
+    const glass = cv.glass && carIsBlend(s.material);
+    if (glass) { if (!bestGlass || dist < bestGlass.dist) bestGlass = { dist, n: d.n }; }
+    else if (!best || dist < best.dist) best = { dist, n: d.n };
+  }
+  const hit = best || bestGlass;
+  if (!hit) { if (cv.selected) carSelect(null); return; }
+  carReveal(hit.n);
+  carSelect("n:" + hit.n.uid);
+  const row = document.querySelector(`#list .tree-row[data-id="n:${hit.n.uid}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
 }
 
 function carCamera() {
