@@ -1125,7 +1125,12 @@ int WantedGhostCars() {
     if (std::fscanf(f, "%d", &want) != 1) want = 0;
     std::fclose(f);
   }
-  return std::clamp(want, 0, 23); // 24 corpos de fisica / objetos de render: jogador + 23
+  // 15 fantasmas + jogador = 16 e o maximo estavel: acima disso o jogo crasha
+  // (arrays/locais de 16 posicoes na rotina por carro, exe+0x49d260; ver
+  // docs/reverse_engineering/investigations/ghost-limit-ladder-2026-10-05.md).
+  // DR2HOOK_GHOST_EXPERIMENT libera ate 23 (24 corpos de fisica) so para pesquisa.
+  const int cap = std::getenv("DR2HOOK_GHOST_EXPERIMENT") ? 23 : 15;
+  return std::clamp(want, 0, cap);
 }
 
 uint8_t g_realRecord[kGhostRecordSize];

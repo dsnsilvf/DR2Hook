@@ -51,3 +51,14 @@ Ampliar o array embutido dos 16 objetos de render de carro (`0x1730` bytes cada,
 - **A mensagem do toast** ("Ghost data copy 4; ghost cars drawn: 5 (the game creates only 2).") é do F7 de teste; com 4 cópias o F7 só repete "feitas 4: sem slot livre" (o gerenciador tem 5 slots). Com os clones automáticos o F7 deixa de ser necessário.
 - **`AddGhostEntry` só roda na carga da especial**: o Reiniciar (`restart_race`) não recria as entradas; os dados dos clones (slots) são refeitos pelo `AutoClones` a cada 0,5 s.
 - Estado deixado na pasta do jogo: `dr2hook_ghost_cars.txt` = 15, `dr2hook_ghost_trace.txt.off` (rastreio desligado), `dr2hook_autostage.ini` com `enabled = 0`, core `b335229`.
+
+## Tentativa de passar de 15 (2026-10-05, core `5ceef66`/`065f1b5`) — falhou
+
+Patch `PatchRenderObjectArray` (array de 16 objetos de render de 0x1730 bytes em `+0x2110` trocado por buffer externo de 24, rascunho do `dwords[16]` em `+0x194a8`, laço de construção e dois laços de busca 16→24). Log: `array de objetos de render trocado por buffer externo de 24 elementos (ok)`, 24 entradas, 23 controladores.
+
+- O crash antigo (`exe+0x463af2`, registro de participante lixo) **sumiu**; o spawn terminou.
+- Novo crash logo depois (`exe+0x49d260`, escrita em `0x140469cf0`): rotina de limpeza de lista (`0x14049d230`) chamada de `0x1404a79cd`, dentro da função por carro `0x1404a4920` (chamada de `0x1404a94b0`). No crash o laço do chamador estava no **índice 16** (`r15 = 0x80`, passo 8; arg 5 = elemento de render nº 10 do buffer novo): o ponteiro `[obj + 0x1620 + 8*i]` caiu em `obj+0x16a0`, onde está o objeto estático "dummy" (`0x141276930`), não uma lista.
+- O objeto (`[rbp+0xbd0]` do chamador) tem **3 arrays de 16 ponteiros** em `+0x1520`, `+0x15a0`, `+0x1620` (0x80 bytes cada; cada carro aponta para 3 blocos de 0x80 dentro de uma alocação de 0x180), lidos sem checagem em `0x1404a944e/9456/953b/95c5/95cf/99c8/99fe/aa14e/aa24d` e varridos com `lea ...,[+0x1520]` em `0x1404aa0db/aa4af`.
+- A função do chamador tem frame de ~0xc88 bytes com **vetores locais de 16 posições** (16 × 0x88 com destrutor em `0x1404aa506`, laços `cmp ..,0x10` em `0x1404aa476/aa498`). Passar de 16 exige refazer frames de pilha, não só relocar arrays estáticos.
+
+Conclusão: **o máximo prático continua 15 fantasmas + jogador**. O core agora limita N a 15 por padrão; `DR2HOOK_GHOST_EXPERIMENT=1` no ambiente libera até 23 (crasha).
