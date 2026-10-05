@@ -16,7 +16,7 @@ from typing import Any
 
 from tools.egodata import bxml, cfgxml, lng
 from tools.egodata.cli import _open
-from tools.pssg import PSSGFile, PSSGNode
+from tools.egodata.pssg import PSSGFile, PSSGNode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

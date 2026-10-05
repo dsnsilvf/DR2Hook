@@ -41,7 +41,7 @@ This is the core of DR2Hook. Findings are split by subsystem and carry confidenc
 | **`dr2rec`** ([docs](docs/tools/dr2rec.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `python3 -m tools.dr2rec`. |
 | **`egodata`** (`tools/egodata/`) | Reads and writes EGO game data: NEFS archives (including writing a modified copy), AES, binary XML, text files. |
 | **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
-| **`pssg`** (`tools/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
+| **`pssg`** (`tools/egodata/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
 | **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
 | `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
 
@@ -203,7 +203,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
 | `docs/` | [Index](docs/README.md): `guides/` (install, Lua mods, remote commands), `architecture/`, `tools/` (dr2rec, UI Viewer) |
 | `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
-| `tools/dr2rec/`, `tools/egodata/`, `tools/dr2save.py`, `tools/dr2ghost.py`, `tools/pssg.py` | Offline research tools (Python) |
+| `tools/dr2rec/`, `tools/egodata/` (NEFS, BXML, PSSG), `tools/dr2save.py`, `tools/dr2ghost.py` | Offline research tools (Python) |
 | `tools/uiview/` | DR2 UI Viewer: Car Model Explorer, Track Explorer / editor, exporter and track edit tool |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
 | `src/core/hooks.cpp` | `Present`, window procedure, and Winsock hooks (resident in proxy) |

@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from tools.egodata import cfgxml
-from tools.pssg import PSSGFile
+from tools.egodata.pssg import PSSGFile
 
 FULL_MAX = 2048
 THUMB_MAX = 256

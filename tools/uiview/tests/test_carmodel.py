@@ -3,7 +3,7 @@
 import struct
 import unittest
 
-from tools.pssg import PSSGAttribute, PSSGNode
+from tools.egodata.pssg import PSSGAttribute, PSSGNode
 from tools.uiview.carmodel import build_car_model, lod_label, pack_resources, unpack_resources
 
 

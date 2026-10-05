@@ -38,7 +38,7 @@ import struct
 import sys
 from typing import Any
 
-from tools.pssg import PSSGNode
+from tools.egodata.pssg import PSSGNode
 from tools.uiview.mesh import (
     _IDENT,
     _attr,

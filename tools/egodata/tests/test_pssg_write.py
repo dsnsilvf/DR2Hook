@@ -4,7 +4,7 @@ import struct
 import unittest
 import zlib
 
-from tools.pssg import PSSGFile
+from tools.egodata.pssg import PSSGFile
 
 
 def attr(aid, raw):

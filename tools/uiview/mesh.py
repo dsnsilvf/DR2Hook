@@ -28,7 +28,7 @@ import re
 import struct
 from typing import Any
 
-from tools.pssg import PSSGNode
+from tools.egodata.pssg import PSSGNode
 
 GEOM_MAGIC = b"DR2M"
 _IDENT = (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)

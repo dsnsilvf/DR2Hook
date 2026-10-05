@@ -22,7 +22,7 @@ from typing import Any
 
 from tools.egodata import bxml
 from tools.egodata.nefs import NefsArchive
-from tools.pssg import PSSGFile, PSSGNode
+from tools.egodata.pssg import PSSGFile, PSSGNode
 from tools.uiview import mesh
 
 _ID_UNSAFE = re.compile(r"[^A-Za-z0-9_]+")

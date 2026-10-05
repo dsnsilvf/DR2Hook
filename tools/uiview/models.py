@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 from tools.egodata import bxml
 from tools.egodata.nefs import NefsArchive
-from tools.pssg import PSSGFile
+from tools.egodata.pssg import PSSGFile
 from tools.uiview.content import export_pssg_images, safe_name
 from tools.uiview.carmodel import CAR_REV, build_car_model, pack_resources
 from tools.uiview.mesh import extract_meshes, pack_geom, summarize_geom

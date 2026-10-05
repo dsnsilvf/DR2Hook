@@ -93,7 +93,7 @@ Hipóteses (Gemini; endereços vistos por ele no binário/dump, não testados em
 
 - `tools/dr2save.py`: decifra os saves (contêiner e `GHST`).
 - `tools/dr2ghost.py`: lê o `GHST` (cabeçalho, metadados, canais) e exporta a trajetória em CSV.
-- `tools/pssg.py`: parser PSSG escrito pelo Gemini (usado no texto rico; ver `ui_tabs.md`).
+- `tools/egodata/pssg.py`: parser PSSG escrito pelo Gemini (usado no texto rico; ver `ui_tabs.md`).
 - `investigations/gemini/ghost-runtime.md`, `investigations/gemini/pssg-ui-text.md`: relatórios brutos.
 
 ## 6. GhostLab: testes no jogo (2026-10-02, tarde)

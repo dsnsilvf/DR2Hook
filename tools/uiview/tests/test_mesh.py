@@ -3,7 +3,7 @@
 import struct
 import unittest
 
-from tools.pssg import PSSGAttribute, PSSGNode
+from tools.egodata.pssg import PSSGAttribute, PSSGNode
 from tools.uiview.mesh import decode_half, extract_meshes, pack_geom, summarize_geom, transform_point, unpack_geom
 from tools.uiview.content import texture_name
 from tools.uiview.models import HARD_CAP, SOFT_CAP, classify_path, parse_decision, surface_suffix

@@ -8,7 +8,7 @@ Levantamento de 2026-10-05, feito para o Track Explorer ([../UIVIEW.md](../tools
 
 ## Terreno e pista: `tracksplit.pssg`
 
-PSSG normal (`tools/pssg.py`, `tools/uiview/mesh.py`). Tem a malha do terreno e da pista; lê em ~0,4 s. O tamanho do arquivo vem das texturas, não da geometria.
+PSSG normal (`tools/egodata/pssg.py`, `tools/uiview/mesh.py`). Tem a malha do terreno e da pista; lê em ~0,4 s. O tamanho do arquivo vem das texturas, não da geometria.
 
 - Blocos `batched_track.fx` (a pista densa) não declaram textura e a cor de vértice é branca com alfa 0.
 - Blocos `terrain_wsm_*` usam a cor de vértice como **peso de mistura**, não como cor.
