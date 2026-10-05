@@ -136,7 +136,9 @@ Validado no jogo: **3 carros fantasma aparecendo** (jogador + 3).
 - O controlador do carro extra nasce com `+0x63 = 0` (6º argumento de `AddGhostEntry`); o atualizador sai sem ele e `EvaluateGhostState` nunca roda para ele. O mod liga `+0x62` e `+0x63` de todo controlador cujo slot é cópia (`LinkAllCloneControllers`).
 - `GhostCarValues` ganha uma entrada por carro (4 ponteiros em `bloco+0x1a0f0..0x1a108`); sem erro.
 - Teste: arquivo `dr2hook_ghost_cars.txt` com o total de carros fantasma (0 a 5). Carregamento completo da especial (o Reiniciar não recria veículos).
-- Pendente: 4 e 5 carros; vários Reiniciar; sair da especial (cópia de registro compartilha o ponteiro da volta: risco de double free na desmontagem).
+- 4 carros validados na tela (copiando o registro de tipo 0, o fantasma próprio: `registro+0xb0 == 0`, `+0x00 = 1`; o tipo 2 é o `RecordingGhost`, nasce oculto).
+- 5 carros: carga ok, 5 controladores ligados, 4 posições avaliadas distintas e 6 objetos de render no packer, mas o usuário viu só 2: **pendente** (ver `investigations/ghost-limit-handoff-2026-10-04.md`).
+- Pendente: sair da especial com vários carros; vários Reiniciar; passar de 5 (`ghost-slots-analysis.md`, `ghost-vectors-scan.md`).
 
 ### 6.4 Transparência e aura (resolvidas em 2026-10-02, noite)
 
