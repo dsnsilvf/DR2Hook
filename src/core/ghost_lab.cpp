@@ -1303,7 +1303,20 @@ void LogLoadState() {
   }
 }
 
-void ArmWriteWatch(const std::vector<uintptr_t> &addrs); // definido mais abaixo
+void ArmWriteWatch(const std::vector<uintptr_t> &addrs,
+                   const std::vector<int> &lens = {}); // definido mais abaixo
+uint8_t *g_renderBuffer = nullptr; // array externo de objetos de render (PatchRenderObjectArray)
+std::atomic<uintptr_t> g_watchAddrs[4] = {};
+
+// Diagnostico de N > 15: o objeto de render 16 fica sem modelo (+0x1c8 nulo, crash
+// exe+0xc3ab09). Vigia a flag de pedido de modelo (+0x1b1) e o modelo (+0x1c8) dos
+// objetos 15 (funciona) e 16, para achar quem os escreve no 15 e nao no 16.
+void ArmRenderWatch() {
+  if (WantedGhostCars() < 16 || g_renderBuffer == nullptr) return;
+  const uintptr_t ro15 = reinterpret_cast<uintptr_t>(g_renderBuffer) + 15 * 0x1730;
+  const uintptr_t ro16 = reinterpret_cast<uintptr_t>(g_renderBuffer) + 16 * 0x1730;
+  ArmWriteWatch({ro15 + 0x1b1, ro15 + 0x1c8, ro16 + 0x1b1, ro16 + 0x1c8}, {1, 8, 1, 8});
+}
 std::vector<uint8_t *> DriverObjects();                   // idem
 
 // Diagnostico de N > 15: vigia o elemento 16 do array antigo de parametros dos pilotos
@@ -1328,7 +1341,9 @@ void DetourSpawnVehicles(void *ctx) {
   g_stageCtx = ctx;
   g_realSeen = 0;
   LogStageEntries("antes do spawn");
+  ArmRenderWatch();
   g_originalSpawn(ctx);
+  ArmRenderWatch();
   LogStageEntries("depois do spawn");
   LogLimits("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
@@ -1337,6 +1352,7 @@ void DetourSpawnVehicles(void *ctx) {
       Sleep(8000);
       LogLimits("8 s depois");
       Sleep(17000);
+      if (g_watchAddrs[0].load() != 0) ArmWriteWatch({}); // desarma
       LogLimits("25 s depois");
       LogLoadState();
       DumpThreads();
@@ -1348,7 +1364,6 @@ void DetourSpawnVehicles(void *ctx) {
 // endereco acessado e os retornos do jogo na pilha. Nao trata a excecao.
 void *g_crashHandler = nullptr;
 std::atomic<int> g_crashLogged{0};
-std::atomic<uintptr_t> g_watchAddrs[4] = {};
 std::atomic<int> g_watchLogged{0};
 
 // Enderecos de retorno no exe achados na pilha a partir de rsp (precedidos de call).
@@ -1381,12 +1396,19 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
     size_t which = 0;
     while (which < 3 && !(hit & (1ull << which))) ++which;
     const uintptr_t a = g_watchAddrs[which].load();
-    if (a != 0 && g_watchLogged.fetch_add(1) < 12) {
-      char buf[320];
+    if (a != 0 && g_watchLogged.fetch_add(1) < 40) {
+      char buf[420];
+      uint64_t v[4] = {};
+      for (int k = 0; k < 4; ++k) {
+        const uintptr_t wa = g_watchAddrs[k].load();
+        if (wa != 0) std::memcpy(&v[k], reinterpret_cast<const void *>(wa & ~7ull), 8);
+      }
       std::snprintf(buf, sizeof(buf),
-                    "GhostLab[watch]: escrita em %p = %08x (rip=0x%llx, depois da instrucao) "
-                    "thread=%lu rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx",
-                    reinterpret_cast<void *>(a), *reinterpret_cast<const uint32_t *>(a),
+                    "GhostLab[watch]: escrita (dr6=%llx) valores %llx %llx %llx %llx (rip=0x%llx, depois "
+                    "da instrucao) thread=%lu rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx",
+                    static_cast<unsigned long long>(hit), static_cast<unsigned long long>(v[0]),
+                    static_cast<unsigned long long>(v[1]), static_cast<unsigned long long>(v[2]),
+                    static_cast<unsigned long long>(v[3]),
                     static_cast<unsigned long long>(w->Rip), static_cast<unsigned long>(GetCurrentThreadId()),
                     static_cast<unsigned long long>(w->Rax), static_cast<unsigned long long>(w->Rbx),
                     static_cast<unsigned long long>(w->Rcx), static_cast<unsigned long long>(w->Rdx),
@@ -1505,10 +1527,12 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
 // Watchpoint de hardware (DR0, escrita de 4 bytes) em todas as threads: acha quem escreve
 // num endereco (ex.: o elemento 16 de um array de 16). O VEH acima registra cada escrita.
 // Feito por uma thread auxiliar para tambem armar a thread que chamou.
-void ArmWriteWatch(const std::vector<uintptr_t> &addrs) {
-  for (size_t i = 0; i < 4; ++i) g_watchAddrs[i].store(i < addrs.size() ? addrs[i] : 0);
-  g_watchLogged.store(0);
-  std::thread([&addrs] {
+void ArmWriteWatch(const std::vector<uintptr_t> &addrs, const std::vector<int> &lens) {
+  if (!addrs.empty()) {
+    for (size_t i = 0; i < 4; ++i) g_watchAddrs[i].store(i < addrs.size() ? addrs[i] : 0);
+    g_watchLogged.store(0);
+  }
+  std::thread([&addrs, &lens] {
     const DWORD self = GetCurrentThreadId();
     const DWORD pid = GetCurrentProcessId();
     int armed = 0, failed = 0;
@@ -1532,13 +1556,15 @@ void ArmWriteWatch(const std::vector<uintptr_t> &addrs) {
           ctx.Dr7 = 0;
           for (size_t i = 0; i < addrs.size() && i < 4; ++i) {
             *dr[i] = addrs[i];
-            ctx.Dr7 |= (1ull << (2 * i)) | (0xdull << (16 + 4 * i)); // Ln, escrita, 4 bytes
+            const int len = i < lens.size() ? lens[i] : 4;
+            const uint64_t lenBits = len == 1 ? 0 : len == 2 ? 1 : len == 8 ? 2 : 3;
+            ctx.Dr7 |= (1ull << (2 * i)) | ((1ull | (lenBits << 2)) << (16 + 4 * i)); // Ln, escrita
           }
           ctx.Dr6 = 0;
           if (SetThreadContext(t, &ctx)) {
             CONTEXT check{};
             check.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-            (GetThreadContext(t, &check) && check.Dr0 == addrs[0]) ? ++armed : ++failed;
+            (GetThreadContext(t, &check) && check.Dr7 == ctx.Dr7) ? ++armed : ++failed;
           } else {
             ++failed;
           }
@@ -1553,9 +1579,13 @@ void ArmWriteWatch(const std::vector<uintptr_t> &addrs) {
     char msg[160];
     std::snprintf(msg, sizeof(msg),
                   "GhostLab[watch]: %zu enderecos (1o %p) vigiados em %d threads (%d falhas).",
-                  addrs.size(), reinterpret_cast<void *>(addrs[0]), armed, failed);
+                  addrs.size(), addrs.empty() ? nullptr : reinterpret_cast<void *>(addrs[0]),
+                  armed, failed);
     Logger::Info(msg);
   }).join();
+  if (addrs.empty()) {
+    for (auto &w : g_watchAddrs) w.store(0);
+  }
 }
 
 bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
@@ -1742,6 +1772,7 @@ void PatchRenderObjectArray() {
     return;
   }
   uint8_t *scratch = buffer + ((arrayBytes + 0xf) & ~static_cast<size_t>(0xf));
+  g_renderBuffer = buffer;
   auto rel32 = [&](uintptr_t instr, size_t len, const void *target) {
     return static_cast<int32_t>(reinterpret_cast<intptr_t>(target) -
                                 static_cast<intptr_t>(instr + len));
