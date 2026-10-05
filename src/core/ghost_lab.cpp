@@ -1344,9 +1344,7 @@ void DetourSpawnVehicles(void *ctx) {
   g_stageCtx = ctx;
   g_realSeen = 0;
   LogStageEntries("antes do spawn");
-  ArmRenderWatch();
   g_originalSpawn(ctx);
-  ArmRenderWatch();
   LogStageEntries("depois do spawn");
   LogLimits("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
@@ -2172,6 +2170,78 @@ void HookDriverHandlers() {
   Logger::Info(msg);
 }
 
+// ---- Mais de 15 fantasmas: modelos 3D dos carros 16+ ----
+// Os modelos sao carregados pela fila 0x140b923a0 do dono estatico 0x14159d9e0, que guarda
+// o nome do modelo de 16 veiculos (+0x118 + i*0x18, gravado pelo setter 0x140b99960) e so
+// percorre 16; o objeto de render 16 ficava sem modelo (+0x1c8 nulo, crash exe+0xc3ab09)
+// e o nome do veiculo 16 caia sobre a tabela seguinte (+0x298). As tabelas nao da para
+// relocar (um acesso usa disp8). Em vez disso: o setter ignora veiculos >= 16 e, depois de
+// cada passada da fila, os objetos de render 16..23 ativos e sem modelo recebem o modelo pela
+// mesma chamada que a fila faz (0x1409690d0) e os mesmos avisos depois dela.
+constexpr uintptr_t kModelOwnerVa = 0x14159d9e0;
+constexpr uintptr_t kSetModelNameRva = 0x140b99960 - kImageBase;
+constexpr uint8_t kSetModelNamePrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10};
+constexpr uintptr_t kModelQueueRva = 0x140b923a0 - kImageBase;
+constexpr uint8_t kModelQueuePrologue[] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57};
+constexpr uintptr_t kLoadCarModelVa = 0x1409690d0;   // (rm, idx, 0, [dono+0x108], [dono+0x100])
+constexpr uintptr_t kClearModelFlagVa = 0x140986220; // (rm, idx): flag[idx] = 0
+using RegFn = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+RegFn g_originalSetModelName = nullptr;
+RegFn g_originalModelQueue = nullptr;
+void *g_setModelNameTarget = nullptr;
+void *g_modelQueueTarget = nullptr;
+std::atomic<int> g_extraModelsLogged{0};
+
+uint64_t DetourSetModelName(uint64_t owner, uint64_t index, uint64_t name, uint64_t r9) {
+  if (static_cast<int>(index) >= 16) return 0;
+  return g_originalSetModelName(owner, index, name, r9);
+}
+
+void LoadExtraCarModels(uint8_t *owner) {
+  if (g_renderBuffer == nullptr || owner == nullptr) return;
+  uint8_t *rm = *reinterpret_cast<uint8_t **>(owner + 0xf8);
+  if (rm == nullptr || *reinterpret_cast<uint8_t **>(rm + 0x2108) != g_renderBuffer) return;
+  using LoadFn = void (*)(void *, int, uint64_t, void *, void *);
+  using ClearFn = void (*)(void *, int);
+  using NotifyFn = void (*)(void *, int);
+  auto load = reinterpret_cast<LoadFn>(GameVa(kLoadCarModelVa));
+  auto clear = reinterpret_cast<ClearFn>(GameVa(kClearModelFlagVa));
+  for (int idx = 16; idx < kCarSlots; ++idx) {
+    uint8_t *ro = g_renderBuffer + static_cast<size_t>(idx) * kRenderObjectSize;
+    if (ro[0x1b0] == 0 || *reinterpret_cast<void **>(ro + 0x1c8) != nullptr) continue;
+    load(rm, idx, 0, *reinterpret_cast<void **>(owner + 0x108), *reinterpret_cast<void **>(owner + 0x100));
+    if (void *notify = *reinterpret_cast<void **>(owner + 0x2b0)) {
+      reinterpret_cast<NotifyFn>((*reinterpret_cast<void ***>(notify))[1])(notify, idx);
+    }
+    if (ro[0x1b1] != 0) clear(rm, idx);
+    if (g_extraModelsLogged.fetch_add(1) < 8) {
+      char msg[120];
+      std::snprintf(msg, sizeof(msg), "GhostLab[modelos]: objeto de render %d recebeu modelo %p.", idx,
+                    *reinterpret_cast<void **>(ro + 0x1c8));
+      Logger::Info(msg);
+    }
+  }
+}
+
+uint64_t DetourModelQueue(uint64_t owner, uint64_t rdx, uint64_t r8, uint64_t r9) {
+  const uint64_t result = g_originalModelQueue(owner, rdx, r8, r9);
+  LoadExtraCarModels(reinterpret_cast<uint8_t *>(owner));
+  return result;
+}
+
+void HookCarModels() {
+  if (g_setModelNameTarget == nullptr)
+    Hook(kSetModelNameRva, kSetModelNamePrologue, sizeof(kSetModelNamePrologue),
+         reinterpret_cast<void *>(&DetourSetModelName), reinterpret_cast<void **>(&g_originalSetModelName),
+         &g_setModelNameTarget, "SetModelName");
+  if (g_modelQueueTarget == nullptr)
+    Hook(kModelQueueRva, kModelQueuePrologue, sizeof(kModelQueuePrologue),
+         reinterpret_cast<void *>(&DetourModelQueue), reinterpret_cast<void **>(&g_originalModelQueue),
+         &g_modelQueueTarget, "ModelQueue");
+  Logger::Info(std::string("GhostLab[modelos]: setter ") + (g_setModelNameTarget ? "ok" : "FALHOU") +
+               ", fila " + (g_modelQueueTarget ? "ok" : "FALHOU") + ".");
+}
+
 void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) {
   void *result = g_originalDriverCtor(self, a, b, c, d, e);
   if (g_vehicleSlotsWanted && result != nullptr) ApplyDriverParams(static_cast<uint8_t *>(result));
@@ -2181,6 +2251,7 @@ void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) 
 void PatchDriverParams() {
   if (!g_vehicleSlotsWanted) return; // so junto com o VEHICLE_SYSTEM ampliado
   HookDriverHandlers();
+  HookCarModels();
   if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SIZE", nullptr, 0) == 0) {
     Logger::Warn("GhostLab[pilotos]: dxgi.dll sem a ampliacao do objeto de pilotos; "
                  "atualize a dxgi.dll e reabra o jogo.");
@@ -2270,7 +2341,8 @@ void GhostLab::Shutdown() {
   SetFillTarget(5); // sem o hook, o enchimento ate N estouraria o vetor de 5
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
                        g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget,
-                       g_vehicleCtorTarget, g_driverCtorTarget}) {
+                       g_vehicleCtorTarget, g_driverCtorTarget, g_setModelNameTarget,
+                       g_modelQueueTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
   for (void *target : g_driverHandlerTarget) {
@@ -2285,7 +2357,8 @@ void GhostLab::Shutdown() {
   }
   for (void **target : {&g_evaluateTarget, &g_makeGhostTarget, &g_packTarget,
                         &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget, &g_addEntryTarget,
-                        &g_vehicleCtorTarget, &g_driverCtorTarget}) {
+                        &g_vehicleCtorTarget, &g_driverCtorTarget, &g_setModelNameTarget,
+                        &g_modelQueueTarget}) {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;
