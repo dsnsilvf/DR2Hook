@@ -1128,8 +1128,15 @@ int WantedGhostCars() {
   // 15 fantasmas + jogador = 16 e o maximo estavel: acima disso o jogo crasha
   // (arrays/locais de 16 posicoes na rotina por carro, exe+0x49d260; ver
   // docs/reverse_engineering/investigations/ghost-limit-ladder-2026-10-05.md).
-  // DR2HOOK_GHOST_EXPERIMENT libera ate 23 (24 corpos de fisica) so para pesquisa.
-  const int cap = std::getenv("DR2HOOK_GHOST_EXPERIMENT") ? 23 : 15;
+  // O arquivo dr2hook_ghost_experiment.txt (ou DR2HOOK_GHOST_EXPERIMENT no ambiente)
+  // libera ate 23 (24 corpos de fisica) para a pesquisa de N > 15.
+  static const bool experiment = [] {
+    if (std::getenv("DR2HOOK_GHOST_EXPERIMENT") != nullptr) return true;
+    FILE *f = std::fopen("dr2hook_ghost_experiment.txt", "r");
+    if (f != nullptr) std::fclose(f);
+    return f != nullptr;
+  }();
+  const int cap = experiment ? 23 : 15;
   return std::clamp(want, 0, cap);
 }
 
@@ -1576,6 +1583,229 @@ void PatchRenderObjectArray() {
   Logger::Info(msg);
 }
 
+// ---- Mais de 15 fantasmas: VEHICLE_SYSTEM e a funcao de atualizacao por carro ----
+// O objeto VEHICLE_SYSTEM (singleton em 0x14168cb68, construtor 0x140464370) tem 3 arrays
+// de 16 ponteiros por carro em +0x1520/+0x15a0/+0x1620 (tabelas de 0x78 bytes criadas no
+// construtor). A funcao 0x1404a8830 os le pelo indice do carro e guarda na pilha 16
+// rotulos de 0x88 bytes (rbp+0x300 + i*0x88); o carro 17 estoura os dois
+// (ghost-limit-ladder-2026-10-05.md). Aqui:
+// - a dxgi.dll aumenta o objeto para 0x1900 (vehicle_system_patch.cpp); os arrays de 24
+//   ficam em +0x16c0/+0x1780/+0x1840: os 16 ponteiros sao copiados e 8 tabelas criadas
+//   (copia do codigo inline do construtor);
+// - o frame da funcao cresce kFrameGrow bytes e o rbp desce o mesmo tanto: os locais e
+//   rbp-rsp (0x100) nao mudam, e os acessos acima dos rotulos (args salvos, +0xbb0..)
+//   ganham +kFrameGrow; os lacos de 16 passam a 24.
+constexpr uintptr_t kVehicleSystemGlobalVa = 0x14168cb68;
+constexpr uintptr_t kVehicleSystemCtorRva = 0x140464370 - kImageBase;
+constexpr uint8_t kVehicleSystemCtorPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89,
+                                                  0x4c, 0x24, 0x08, 0x55, 0x56, 0x57};
+constexpr uintptr_t kReserveVectorVa = 0x1409236c0; // reserve(vetor, n) -> erro
+constexpr int kCarSlots = 24;
+constexpr size_t kOldSlotArrays[3] = {0x1520, 0x15a0, 0x1620};
+constexpr size_t kNewSlotArrays[3] = {0x16c0, 0x1780, 0x1840}; // ate 0x1900
+constexpr int32_t kFrameGrow = (kCarSlots - 16) * 0x88;       // 0x440
+
+struct DispPatch {
+  uintptr_t va; // endereco do campo de 4 bytes
+  uint32_t from;
+  uint32_t to;
+};
+
+uint8_t *GameVa(uintptr_t va) { return reinterpret_cast<uint8_t *>(g_gameBase + (va - kImageBase)); }
+
+std::vector<DispPatch> VehicleSystemPatches() {
+  std::vector<DispPatch> list;
+  // Acessos [rbp+d] com d >= 0xb80 (tools: rbptab.py sobre a desmontagem de 0x1404a8830).
+  static const uintptr_t kRbp[][2] = {
+      {0x1404a888c, 0xbd8}, {0x1404a88b1, 0xbd8}, {0x1404a8952, 0xbe0}, {0x1404a8ba6, 0xbe0},
+      {0x1404a8bb0, 0xbe0}, {0x1404a8bfb, 0xbe0}, {0x1404a8c05, 0xbe0}, {0x1404a8cbd, 0xbe8},
+      {0x1404a8f81, 0xbd0}, {0x1404a8fa5, 0xbd8}, {0x1404a90fd, 0xbe0}, {0x1404a9106, 0xbe0},
+      {0x1404a913a, 0xbe8}, {0x1404a9143, 0xbe8}, {0x1404a9201, 0xbe0}, {0x1404a9215, 0xbe8},
+      {0x1404a9234, 0xbd0}, {0x1404a940f, 0xbd8}, {0x1404a9443, 0xbd0}, {0x1404a9481, 0xbd8},
+      {0x1404a94ce, 0xbd0}, {0x1404a9509, 0xbe0}, {0x1404a952d, 0xbd0}, {0x1404a954d, 0xbd0},
+      {0x1404a966a, 0xbd8}, {0x1404a978e, 0xbd0}, {0x1404a98b7, 0xbd0}, {0x1404a98f0, 0xbd0},
+      {0x1404a98fe, 0xbd8}, {0x1404a990e, 0xbd0}, {0x1404a9924, 0xbd0}, {0x1404a9985, 0xbe8},
+      {0x1404a999a, 0xbe0}, {0x1404a99ac, 0xbd8}, {0x1404a99c2, 0xbd0}, {0x1404a9a51, 0xbd8},
+      {0x1404a9ad6, 0xbd8}, {0x1404a9d1d, 0xbd0}, {0x1404aa0d0, 0xbd0}, {0x1404aa0f3, 0xbd0},
+      {0x1404aa22c, 0xbd0}, {0x1404aa36e, 0xbe0}, {0x1404aa378, 0xbe0}, {0x1404aa3c9, 0xbe8},
+      {0x1404aa43d, 0xbd0}, {0x1404aa509, 0xbb0}};
+  for (const auto &r : kRbp) {
+    list.push_back({r[0], static_cast<uint32_t>(r[1]), static_cast<uint32_t>(r[1] + kFrameGrow)});
+  }
+  // Prologo/epilogo: lea rbp,[rsp-0xb88]; sub rsp,0xc88; add rsp,0xc88.
+  list.push_back({0x1404a8845, static_cast<uint32_t>(-0xb88),
+                  static_cast<uint32_t>(-0xb88 - kFrameGrow)});
+  list.push_back({0x1404a884c, 0xc88, 0xc88 + kFrameGrow});
+  list.push_back({0x1404aa533, 0xc88, 0xc88 + kFrameGrow});
+  // Arrays por carro do VEHICLE_SYSTEM.
+  static const uintptr_t kSlots[][2] = {
+      {0x1404a9452, 0x1520}, {0x1404a945a, 0x1620}, {0x1404a953f, 0x1620},
+      {0x1404a95c9, 0x1620}, {0x1404a95d3, 0x1520}, {0x1404a99cc, 0x15a0},
+      {0x1404a9a02, 0x1520}, {0x1404aa0de, 0x1520}, {0x1404aa152, 0x1520},
+      {0x1404aa251, 0x1520}, {0x1404aa4b2, 0x1520}};
+  for (const auto &s : kSlots) {
+    const int k = s[1] == 0x1520 ? 0 : (s[1] == 0x15a0 ? 1 : 2);
+    list.push_back({s[0], static_cast<uint32_t>(s[1]), static_cast<uint32_t>(kNewSlotArrays[k])});
+  }
+  // Laco de 0x1404aa4af: [rsi+0x80] e [rsi+0x100] = os outros dois arrays.
+  list.push_back({0x1404aa4c3, 0x100, static_cast<uint32_t>(kNewSlotArrays[2] - kNewSlotArrays[0])});
+  list.push_back({0x1404aa4d5, 0x80, static_cast<uint32_t>(kNewSlotArrays[1] - kNewSlotArrays[0])});
+  return list;
+}
+
+struct BytePatch {
+  uintptr_t va;
+  uint8_t from;
+  uint8_t to;
+};
+// Lacos de 16: construcao e destruicao dos rotulos (mov ecx,0x10) e os tres lacos finais
+// por indice de carro (cmp ..,0x10).
+constexpr BytePatch kVehicleSystemLoops[] = {{0x1404a8a78, 0x10, kCarSlots},
+                                             {0x1404aa50e, 0x10, kCarSlots},
+                                             {0x1404aa457, 0x10, kCarSlots},
+                                             {0x1404aa478, 0x10, kCarSlots},
+                                             {0x1404aa49b, 0x10, kCarSlots}};
+
+// Copia de uma tabela de 0x78 bytes como o construtor faz (0x1404645d0..): lista vazia
+// em +0x20 e vetor de 8 baldes em +0x48 apontando para ela.
+uint8_t *MakeSlotTable(void *allocator) {
+  using AllocFn = void *(*)(void *self, uint64_t size, uint64_t align, uint64_t flags);
+  using ReserveFn = int (*)(void *vec, uint64_t count);
+  auto alloc = reinterpret_cast<AllocFn>((*static_cast<void ***>(allocator))[3]);
+  auto *t = static_cast<uint8_t *>(alloc(allocator, 0x78, 1, 0));
+  if (t == nullptr) return nullptr;
+  auto q = [t](size_t off) -> uint64_t & { return *reinterpret_cast<uint64_t *>(t + off); };
+  uint8_t *list = t + 0x20;
+  q(0x00) = reinterpret_cast<uint64_t>(allocator);
+  q(0x08) = reinterpret_cast<uint64_t>(allocator);
+  q(0x10) = 0;
+  q(0x18) = 0;
+  q(0x20) = reinterpret_cast<uint64_t>(list);
+  q(0x28) = reinterpret_cast<uint64_t>(list);
+  q(0x30) = 0;
+  q(0x38) = 0;
+  q(0x40) = ~0ull;
+  q(0x48) = reinterpret_cast<uint64_t>(allocator);
+  q(0x50) = 0;
+  q(0x58) = 0;
+  q(0x60) = 0;
+  q(0x68) = ~0ull;
+  auto reserve = reinterpret_cast<ReserveFn>(GameVa(kReserveVectorVa));
+  if (reserve(t + 0x48, 8) != 0) return nullptr;
+  for (int k = 0; k < 8; ++k) {
+    auto *end = reinterpret_cast<uint64_t *>(q(0x58));
+    if (end != nullptr) *end = reinterpret_cast<uint64_t>(list);
+    q(0x58) += 8;
+  }
+  return t;
+}
+
+bool g_vehicleSlotsWanted = false;
+void *g_vehicleCtorTarget = nullptr;
+using VehicleCtorFn = void *(*)(void *, void *, void *, void *, void *);
+VehicleCtorFn g_originalVehicleCtor = nullptr;
+
+// Arrays de 24 no objeto + patches de codigo. Uma vez por processo (marcador no ambiente).
+void ApplyVehicleSystemSlots(uint8_t *vs) {
+  if (GetEnvironmentVariableA("DR2HOOK_VEHSYS_SLOTS", nullptr, 0) != 0) return;
+  const std::vector<DispPatch> patches = VehicleSystemPatches();
+  for (const auto &p : patches) {
+    uint32_t cur = 0;
+    std::memcpy(&cur, GameVa(p.va), 4);
+    if (cur != p.from) {
+      char msg[160];
+      std::snprintf(msg, sizeof(msg),
+                    "GhostLab[veiculos]: campo em %p = 0x%x (esperado 0x%x); nada trocado.",
+                    static_cast<void *>(GameVa(p.va)), cur, p.from);
+      Logger::Warn(msg);
+      return;
+    }
+  }
+  for (const auto &b : kVehicleSystemLoops) {
+    if (*GameVa(b.va) != b.from) {
+      Logger::Warn("GhostLab[veiculos]: limite de laco diferente do esperado; nada trocado.");
+      return;
+    }
+  }
+  // Unwind de 0x1404a8830: UWOP_ALLOC_LARGE com o tamanho/8 no slot seguinte.
+  DWORD64 imageBase = 0;
+  PRUNTIME_FUNCTION fn =
+      RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(GameVa(0x1404a8830)), &imageBase, nullptr);
+  uint8_t *unwindSize = nullptr;
+  if (fn != nullptr) {
+    uint8_t *info = reinterpret_cast<uint8_t *>(imageBase + fn->UnwindData);
+    const uint8_t expected[] = {0x20, 0x01, 0x91, 0x01};
+    if (std::memcmp(info + 4, expected, 4) == 0) unwindSize = info + 6;
+  }
+  // Tabelas: os 16 ponteiros originais e 8 novas.
+  void *allocator = *reinterpret_cast<void **>(*reinterpret_cast<uint8_t **>(vs + kOldSlotArrays[0]));
+  if (allocator == nullptr) {
+    Logger::Warn("GhostLab[veiculos]: tabela 0 sem alocador; nada trocado.");
+    return;
+  }
+  for (int a = 0; a < 3; ++a) {
+    auto *dst = reinterpret_cast<uint8_t **>(vs + kNewSlotArrays[a]);
+    auto *src = reinterpret_cast<uint8_t **>(vs + kOldSlotArrays[a]);
+    for (int i = 0; i < 16; ++i) dst[i] = src[i];
+    for (int i = 16; i < kCarSlots; ++i) {
+      dst[i] = MakeSlotTable(allocator);
+      if (dst[i] == nullptr) {
+        Logger::Warn("GhostLab[veiculos]: falha ao criar tabela por carro; nada trocado.");
+        return;
+      }
+    }
+  }
+  bool ok = true;
+  for (const auto &b : kVehicleSystemLoops) ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(b.va)), &b.to, 1) && ok;
+  for (const auto &p : patches) {
+    ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(p.va)), reinterpret_cast<const uint8_t *>(&p.to), 4) && ok;
+  }
+  if (unwindSize != nullptr) {
+    const uint16_t slots = static_cast<uint16_t>((0xc88 + kFrameGrow) / 8);
+    PatchBytes(reinterpret_cast<uintptr_t>(unwindSize), reinterpret_cast<const uint8_t *>(&slots), 2);
+  }
+  SetEnvironmentVariableA("DR2HOOK_VEHSYS_SLOTS", "1");
+  char msg[220];
+  std::snprintf(msg, sizeof(msg),
+                "GhostLab[veiculos]: VEHICLE_SYSTEM %p com %d posicoes por carro; %zu campos e "
+                "%zu lacos trocados, unwind %s (%s).",
+                static_cast<void *>(vs), kCarSlots, patches.size(),
+                sizeof(kVehicleSystemLoops) / sizeof(kVehicleSystemLoops[0]),
+                unwindSize ? "ajustado" : "NAO achado", ok ? "ok" : "FALHOU parcialmente");
+  Logger::Info(msg);
+}
+
+void *DetourVehicleCtor(void *self, void *a, void *b, void *c, void *d) {
+  void *result = g_originalVehicleCtor(self, a, b, c, d);
+  if (g_vehicleSlotsWanted && result != nullptr) ApplyVehicleSystemSlots(static_cast<uint8_t *>(result));
+  return result;
+}
+
+void PatchVehicleSystemSlots() {
+  if (WantedGhostCars() < 16) return;
+  if (GetEnvironmentVariableA("DR2HOOK_VEHSYS_SLOTS", nullptr, 0) != 0) {
+    Logger::Info("GhostLab[veiculos]: arrays por carro ja ampliados neste processo.");
+    return;
+  }
+  if (GetEnvironmentVariableA("DR2HOOK_VEHSYS_SIZE", nullptr, 0) == 0) {
+    Logger::Warn("GhostLab[veiculos]: dxgi.dll sem a ampliacao do VEHICLE_SYSTEM; "
+                 "atualize a dxgi.dll e reabra o jogo.");
+    return;
+  }
+  g_vehicleSlotsWanted = true;
+  auto *vs = *reinterpret_cast<uint8_t **>(GameVa(kVehicleSystemGlobalVa));
+  if (vs != nullptr) {
+    Logger::Info("GhostLab[veiculos]: VEHICLE_SYSTEM ja existe; ampliando agora.");
+    ApplyVehicleSystemSlots(vs);
+    return;
+  }
+  Logger::Info("GhostLab[veiculos]: VEHICLE_SYSTEM ainda nao existe; esperando o construtor.");
+  Hook(kVehicleSystemCtorRva, kVehicleSystemCtorPrologue, sizeof(kVehicleSystemCtorPrologue),
+       reinterpret_cast<void *>(&DetourVehicleCtor),
+       reinterpret_cast<void **>(&g_originalVehicleCtor), &g_vehicleCtorTarget,
+       "VehicleSystemCtor");
+}
+
 #endif
 
 } // namespace
@@ -1590,6 +1820,7 @@ bool GhostLab::Install(uintptr_t gameBase) {
     return false;
   }
   PatchRenderObjectArray(); // so com dr2hook_ghost_cars.txt >= 16
+  PatchVehicleSystemSlots(); // idem; precisa da dxgi.dll que amplia o VEHICLE_SYSTEM
   const bool evaluate =
       Hook(kEvaluateRva, kEvaluatePrologue, sizeof(kEvaluatePrologue),
            reinterpret_cast<void *>(&DetourEvaluate),
@@ -1644,7 +1875,8 @@ void GhostLab::Shutdown() {
 #if defined(_WIN32)
   SetFillTarget(5); // sem o hook, o enchimento ate N estouraria o vetor de 5
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
-                       g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget}) {
+                       g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget,
+                       g_vehicleCtorTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
   if (g_crashHandler != nullptr) {
@@ -1655,7 +1887,8 @@ void GhostLab::Shutdown() {
     Sleep(1);
   }
   for (void **target : {&g_evaluateTarget, &g_makeGhostTarget, &g_packTarget,
-                        &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget, &g_addEntryTarget}) {
+                        &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget, &g_addEntryTarget,
+                        &g_vehicleCtorTarget}) {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;

@@ -10,6 +10,7 @@
 #include "dr2hook/pssg_patch.h"
 #include "dr2hook/race_events.h"
 #include "dr2hook/ui_data.h"
+#include "dr2hook/vehicle_system_patch.h"
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   dr2hook::SetHostModule(static_cast<HMODULE>(lpParam));
@@ -17,6 +18,7 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   dr2hook::StartUiDataLog();
   dr2hook::LogAutoStageStatus();
   dr2hook::LogPssgPatchStatus();
+  dr2hook::LogVehicleSystemSizePatch();
   dr2hook::EnsureProxyInitialized();
 
   if (dr2hook::GetOriginalProc("CreateDXGIFactory") != nullptr) {
@@ -47,6 +49,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
     dr2hook::InstallUiDataHook(hModule);
     dr2hook::InstallAutoStageHook();
     dr2hook::InstallPssgPatch();
+    dr2hook::InstallVehicleSystemSizePatch();
     HANDLE hThread =
         CreateThread(nullptr, 0, DR2Hook_InitThread, hModule, 0, nullptr);
     if (hThread != nullptr) {
