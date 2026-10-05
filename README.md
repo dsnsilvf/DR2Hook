@@ -42,7 +42,7 @@ This is the core of DR2Hook. Findings are split by subsystem and carry confidenc
 | **`egodata`** (`tools/egodata/`) | Reads and writes EGO game data: NEFS archives (including writing a modified copy), AES, binary XML, text files. |
 | **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
 | **`pssg`** (`tools/egodata/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
-| **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
+| **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md): [cars](docs/tools/car_explorer.md), [tracks](docs/tools/track_explorer.md), [screens](docs/tools/ui_screens.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
 | `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`, `test_tools.sh`, `web_smoke.py`, `golden_export.py`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
 
 Physics tick harness switches (environment variable or INI key):
@@ -150,7 +150,7 @@ The core now reads and writes the rig velocities at the origin state block (`+0x
 
 ## 4. Asset tools: Car and Track Explorer
 
-`tools/uiview/` reads the game's own files (NEFS archives, PSSG models, XML) and shows them in a local web page. It never changes the game folder. Details and commands: [docs/tools/uiview.md](docs/tools/uiview.md).
+`tools/uiview/` reads the game's own files (NEFS archives, PSSG models, XML) and shows them in a local web page. It never changes the game folder. Details and commands: [docs/tools/uiview.md](docs/tools/uiview.md); one document per tool: [Car Model Explorer](docs/tools/car_explorer.md), [Track Explorer](docs/tools/track_explorer.md), [UI screens](docs/tools/ui_screens.md) (in Portuguese).
 
 | Tab | What it does |
 | --- | --- |

@@ -149,7 +149,7 @@ A ordem dos quatro blocos é RL, RR, FL, FR. A captura documentada em `docs/reve
   - Saves `GHST` e cifra decifrados (`tools/dr2save.py`, `tools/dr2ghost.py`), diferença ao vivo, cópias, fantasma sólido, pausa, até 15 fantasmas + jogador. Módulo Lua `Ghost`. Ver `docs/reverse_engineering/ghosts.md`.
 - [x] **Fase 10: Ferramentas de pesquisa e de assets** (depois da v0.1.0)
   - Canal de comandos remoto, câmera livre (F9), dano terminal (F11), harness da física com o gate G3 aprovado.
-  - `tools/uiview/`: Car Model Explorer e Track Explorer / editor de pistas, com escrita de `.nefs` novo. Ver `docs/tools/uiview.md` e `docs/reverse_engineering/track_formats.md`.
+  - `tools/uiview/`: Car Model Explorer e Track Explorer / editor de pistas, com escrita de `.nefs` novo. Ver `docs/tools/uiview.md` (visão geral), `docs/tools/car_explorer.md`, `docs/tools/track_explorer.md`, `docs/tools/ui_screens.md` e `docs/reverse_engineering/track_formats.md`.
 - [ ] **Pendente:** validar no jogo um `.nefs` de pista editado; decifrar a colisão (`.vcqtc`); reaplicar a restauração de velocidade no bloco de origem (`+0x2b0`/`+0x2c0`) e validar **With Momentum**; impor o `SafetyGuard` (hoje o core inicia em modo permissivo).
 
 ---
