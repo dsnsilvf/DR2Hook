@@ -1,6 +1,6 @@
 # INV-01: experiment plan (Experimental Validation Specialist)
 
-Date: 2026-09-30, rev 1 12:05 BRT; **rev 2 12:40 BRT** (America/Recife, UTC-3). Status: plan. Gates G0-G2 and Phase 1a R1-R6 were run later by the Validation Specialist (read-only; see §R2.1). Nothing in this revision touched the game. No machineId was used, nothing was attached to the game, and no game memory was read or written for this plan. Everything below was derived on the box from:
+Date: 2026-09-30, rev 1 12:05 BRT; **rev 2 12:40 BRT** (America/Recife, UTC-3). Status: plan. Gates G0-G2 and Phase 1a R1-R6 were run later by the Validation Specialist (read-only; see §R2.1). Gate G3 was run on 2026-10-01 and passed (see `G3-result.md`). Nothing in this revision touched the game. No machineId was used, nothing was attached to the game, and no game memory was read or written for this plan. Everything below was derived on the box from:
 - `/workspace/analyst/INV-01-static-report.md` (the "static report", SR) and `/workspace/analyst/dis/*`
 - `/workspace/orchestrator/briefs/INV-01-{static,runtime}.md`
 - `/workspace/captures/INV-01/` (`static_search_frozen.txt`, `frozen_snapshot.csv`, `raw/*.bin`, `scripts/*.py`)
@@ -110,7 +110,7 @@ E-B items are merged into rev 1 IDs; nothing is dropped silently. The harness ho
 | 2 | R7 | external read (**new**) | todo | **E-B2** pull gate: `con+0x14` every tick for 5 min plus one native reset (expect ≥ 0.1, FLT_MAX after the reset) | pread only | — |
 | 3 | R8 | external read (**new**) | todo | **E-B8** tick gate: proxy T.y (`[[con+0x840]+0x10]+0x1f0`), `[0x1420202d0]`, `[0x14201b788]`, ring-index advance per F | pread only | — |
 | 4 | R9 | offline + external read (**new**) | α part **DONE** (C6); c930 part todo | E-B10: +0x290/+0x2a0 lerp; **con+0xc930 == (+0x200 − +0x170)/dt** bit-exact on settled ticks (C5) | pread (add `con+0xc930` window) | — |
-| 5 | G3 | harness self-test | todo | — | all hooks, log-only | — |
+| 5 | G3 | harness self-test | **DONE** (PASS, 2026-10-01 07:47-07:48 BRT; `validation/G3-result.md`) | — | all hooks, log-only | — |
 | 6 | I1 | log-only hooks | todo | **E-B1** (order F/C/Present, overlap, threads) | H3, H1/H2, H4, H5, B1, B2, M1, M2, M3, H6, Present | — |
 | 7 | I2 | log-only | todo | — | M2/M3 | — |
 | 8 | I3 | log-only | todo | **E-B11** (reset path: `0x140999990`, `0x140db7740`, `0x140db95d0`, `0x14074a110`, `0x14074a3a0`, `0x14074a5e0`, `0x1407319c0`, `0x140515800` filtered to types 0x32/0x53) | H7 + those entries | — |
