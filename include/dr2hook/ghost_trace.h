@@ -18,6 +18,9 @@ public:
   static void OnEvaluate(const uint8_t *owner, const void *time, int result,
                          const uint8_t *out);
 
+  // Linha livre no rastreio (eventos do GhostLab, ex.: pausa dos clones).
+  static void Note(const char *text);
+
   static bool Enabled() { return s_enabled.load(std::memory_order_relaxed); }
 
 private:

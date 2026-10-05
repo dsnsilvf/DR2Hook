@@ -280,6 +280,19 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       return 1;
     }
 
+    // F6: pausa/despausa so os clones do fantasma (teste de clones; so com
+    // dr2hook_ghost_cars.txt, senao vale o F6 do checkpoint).
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F6 &&
+        (lParam & (1 << 30)) == 0 && dr2hook::GhostLab::TestModeActive()) {
+      const bool paused = dr2hook::GhostLab::ToggleClonePause();
+      if (dr2hook::OverlayManager::IsInitialized()) {
+        dr2hook::OverlayManager::AddNotification(
+            paused ? "Ghost clones paused." : "Ghost clones resumed.", 2.0f,
+            dr2hook::ToastType::Info);
+      }
+      return 1;
+    }
+
     // F11: insta crash, destroi o carro na hora (dano terminal).
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F11 &&
         (lParam & (1 << 30)) == 0) {

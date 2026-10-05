@@ -682,6 +682,104 @@ void LogOwnerPositions() {
   Logger::Info(line);
 }
 
+// ---- Pausa dos clones (F6) ----
+// O jogo calcula o tempo do fantasma em [ctl+0x58] = (uint64)(relogio*1e6) ^ chave
+// (chave no global 0x1415e3500) e o passa a EvaluateGhostState. O relogio so
+// avanca com a simulacao, entao na pausa do jogo tudo congela junto; aqui
+// congelamos so o tempo dos clones.
+constexpr uintptr_t kTimeKeyRva = 0x1415e3500 - kImageBase;
+std::atomic<bool> g_clonePaused{false};
+struct CloneFreeze {
+  bool active = false;
+  double frozenEff = 0;  // tempo efetivo do clone congelado
+  double pauseNow = 0;   // relogio do jogo quando pausou
+  double accum = 0;      // soma das pausas ja encerradas
+  double lastNow = 0;
+};
+CloneFreeze g_freeze; // so a thread do jogo
+
+uint64_t TimeKey() { return *reinterpret_cast<const uint64_t *>(g_gameBase + kTimeKeyRva); }
+double DecodeTime(uint64_t raw) {
+  return static_cast<double>(static_cast<int64_t>(raw ^ TimeKey())) / 1e6;
+}
+uint64_t EncodeTime(double seconds) {
+  if (seconds < 0) seconds = 0;
+  return static_cast<uint64_t>(seconds * 1e6) ^ TimeKey();
+}
+
+// Clone pausavel: copia conhecida (IsClone) ou, sem F7/ApplyClones (clones
+// do hook de AddGhostEntry), slot pronto com a mesma volta do 1o slot pronto
+// (a referencia) que nao e a propria referencia. Sem efeito colateral.
+bool IsPausableClone(const uint8_t *slot) {
+  if (IsClone(slot)) return true;
+  const std::vector<uint8_t *> slots = CollectSlots();
+  const uint8_t *reference = nullptr;
+  for (const uint8_t *s : slots) {
+    if (!IsReady(s)) continue;
+    if (reference == nullptr || s == g_source) reference = s;
+  }
+  if (reference == nullptr || slot == reference) return false;
+  LapKey a{}, b{};
+  uint32_t ta = 0, tb = 0;
+  return KeyOf(reference, a, ta) && KeyOf(slot, b, tb) && a == b;
+}
+
+// Reescreve o tempo de um clone antes de EvaluateGhostState. Devolve true se o
+// clone esta congelado (a velocidade da saida deve ser zerada).
+bool ApplyCloneFreeze(uint8_t *owner, uint64_t *time) {
+  const uint64_t rawIn = *time;
+  const double now = DecodeTime(rawIn);
+  if (!(now >= 0.0 && now < 1e5)) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      Logger::Warn("GhostLab[pausa]: tempo do clone fora do esperado; pausa ignorada.");
+    }
+    return false;
+  }
+  CloneFreeze &f = g_freeze;
+  if (f.lastNow > 0 && now + 0.5 < f.lastNow) {
+    // O relogio voltou (Reiniciar/nova especial): zera tudo.
+    Logger::Info("GhostLab[pausa]: relogio voltou (" + std::to_string(f.lastNow) + " -> " +
+                 std::to_string(now) + "); pausa dos clones desligada.");
+    f = CloneFreeze{};
+    g_clonePaused.store(false);
+  }
+  f.lastNow = now;
+  const bool want = g_clonePaused.load();
+  char note[400];
+  if (want && !f.active) {
+    f.active = true;
+    f.frozenEff = now - f.accum;
+    f.pauseNow = now;
+    std::snprintf(note, sizeof(note),
+                  "GhostLab[pausa]: clones PAUSADOS (relogio %.3f, tempo do clone %.3f, acumulado %.3f).",
+                  now, f.frozenEff, f.accum);
+    Logger::Info(note);
+    if (GhostTrace::Enabled()) GhostTrace::Note(note);
+  } else if (!want && f.active) {
+    f.accum += now - f.pauseNow;
+    f.active = false;
+    std::snprintf(note, sizeof(note),
+                  "GhostLab[pausa]: clones RETOMADOS (relogio %.3f, pausa de %.3f s, acumulado %.3f).",
+                  now, now - f.pauseNow, f.accum);
+    Logger::Info(note);
+    if (GhostTrace::Enabled()) GhostTrace::Note(note);
+  }
+  const double eff = f.active ? f.frozenEff : now - f.accum;
+  if (f.active || f.accum != 0.0) *time = EncodeTime(eff);
+  if (GhostTrace::Enabled()) {
+    std::snprintf(note, sizeof(note),
+                  "FREEZE own=%p paused=%d active=%d now=%.6f eff=%.6f accum=%.6f raw_in=%016llx "
+                  "raw_out=%016llx",
+                  owner, want ? 1 : 0, f.active ? 1 : 0, now, eff, f.accum,
+                  static_cast<unsigned long long>(rawIn),
+                  static_cast<unsigned long long>(*time));
+    GhostTrace::Note(note);
+  }
+  return f.active;
+}
+
 int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   InFlight guard;
   const int pending = g_cloneCount.exchange(-1);
@@ -713,7 +811,23 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   LinkCloneVehicle(owner);
   LinkAllCloneControllers();
   ApplyCollision(owner);
+  bool frozenClone = false;
+  if (time != nullptr && (g_clonePaused.load() || g_freeze.active || g_freeze.accum != 0.0)) {
+    const uint8_t *cloneSlot = Read<const uint8_t *>(owner, kOwnerSlot);
+    if (cloneSlot != nullptr && IsPausableClone(cloneSlot)) {
+      frozenClone = ApplyCloneFreeze(owner, static_cast<uint64_t *>(time));
+    }
+  }
   const int result = g_originalEvaluate(owner, time, arg, out);
+  if (frozenClone && result == 0 && out != nullptr && out[kOutValid] != 0) {
+    char note[200];
+    const float *v = reinterpret_cast<const float *>(out + 0x40);
+    std::snprintf(note, sizeof(note), "FREEZE-OUT own=%p vel_antes=%.3f,%.3f,%.3f pos=%.2f,%.2f,%.2f",
+                  owner, v[0], v[1], v[2], Read<float>(out, kOutPosition),
+                  Read<float>(out, kOutPosition + 4), Read<float>(out, kOutPosition + 8));
+    if (GhostTrace::Enabled()) GhostTrace::Note(note);
+    std::memset(out + 0x40, 0, 12); // velocidade 0: o corpo nao desliza
+  }
   if (GhostTrace::Enabled()) GhostTrace::OnEvaluate(owner, time, result, out);
   if (result == 0 && out != nullptr && out[kOutValid] != 0) RecordOwnerPos(owner, out);
   if (result != 0 || out == nullptr || out[kOutValid] == 0) return result;
@@ -1337,6 +1451,16 @@ void GhostLab::OnStageLoad() {
 }
 
 void GhostLab::OnStageStart() { g_collide.store(false); }
+
+bool GhostLab::ToggleClonePause() {
+  const bool paused = !g_clonePaused.load();
+  g_clonePaused.store(paused);
+  Logger::Info(std::string("GhostLab[pausa]: F6 -> pedido de pausa dos clones ") +
+               (paused ? "ligado." : "desligado."));
+  return paused;
+}
+
+bool GhostLab::ClonesPaused() { return g_clonePaused.load(); }
 
 bool GhostLab::ToggleCollision() {
   const bool collide = !g_collide.load();

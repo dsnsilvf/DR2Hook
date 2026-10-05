@@ -69,6 +69,13 @@ public:
   // > 0 adianta, < 0 atrasa.
   static bool SetTimeOffset(float seconds);
 
+  // F6 (so com dr2hook_ghost_cars.txt): pausa/despausa so as copias do fantasma
+  // (clones); o fantasma original e o jogo seguem. Congela o tempo passado a
+  // EvaluateGhostState e zera a velocidade; ao despausar o clone continua de
+  // onde parou (sem salto). Devolve o novo estado (true = pausados).
+  static bool ToggleClonePause();
+  static bool ClonesPaused();
+
   static void SetHudVisible(bool visible);
   static bool IsHudVisible();
 };

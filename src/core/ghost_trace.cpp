@@ -46,6 +46,7 @@ constexpr uint8_t kApplyPrologue[] = {0x40, 0x53, 0x48, 0x81, 0xec, 0x90, 0x00, 
 
 constexpr uintptr_t kTimeOffsetRva = 0x141f593e0 - kImageBase; // float
 constexpr uintptr_t kTimeFlagsRva = 0x141f593e4 - kImageBase;  // 2 bytes
+constexpr uintptr_t kTimeKeyRva = 0x1415e3500 - kImageBase;    // chave do tempo (t58)
 
 constexpr size_t kCtlVehicle = 0x00;
 constexpr size_t kCtlOwner = 0x08;
@@ -173,7 +174,12 @@ std::string Chain(const void *frame) {
     const uintptr_t v = *reinterpret_cast<const uintptr_t *>(sp);
     if (v < g_base + 0x1000 || v >= g_base + 0x1099000) continue;
     const uint8_t *ret = reinterpret_cast<const uint8_t *>(v);
-    if (ret[-5] != 0xe8 && !(ret[-6] == 0xff && ret[-5] == 0x15) && ret[-2] != 0xff) continue;
+    // call rel32, call [mem] (ff /2 com disp8/disp32/rip) e call reg.
+    const bool direct = ret[-5] == 0xe8;
+    const bool viaMem6 = ret[-6] == 0xff && (ret[-5] & 0x38) == 0x10;
+    const bool viaMem3 = ret[-3] == 0xff && (ret[-2] & 0x38) == 0x10;
+    const bool viaReg = ret[-2] == 0xff && (ret[-1] & 0x38) == 0x10;
+    if (!direct && !viaMem6 && !viaMem3 && !viaReg) continue;
     char one[24];
     std::snprintf(one, sizeof(one), " +%llx", Rva(ret));
     out += one;
@@ -313,12 +319,13 @@ uintptr_t DetourController(uint8_t *ctl, double clock, void *r8, void *r9) {
   const uint8_t *vehicle = Rd<const uint8_t *>(ctl, kCtlVehicle);
   const uint8_t *buffer = Rd<const uint8_t *>(ctl, kCtlBuffer);
   const uint64_t t58After = Rd<uint64_t>(ctl, kCtlTime);
-  double t58Double = 0;
-  std::memcpy(&t58Double, &t58After, sizeof(t58Double));
+  // [ctl+0x58] = (uint64)(relogio * 1e6) ^ chave
+  const uint64_t key = *reinterpret_cast<const uint64_t *>(g_base + kTimeKeyRva);
+  const double t58Double = static_cast<double>(static_cast<int64_t>(t58After ^ key)) / 1e6;
   const Vec3 out = buffer != nullptr ? ReadVec3(buffer + kBufPos) : Vec3{};
   const Vec3 body = BodyPos(vehicle);
   Line("CTL f=%llu c=%d ctl=%p veh=%p slot=%p st=%u pre[60=%u 61=%u 62=%u 63=%u t58=%016llx] "
-       "clock=%.6f post[60=%u 61=%u t58=%016llx d=%.6f spd=%.3f] out=%.2f,%.2f,%.2f "
+       "clock=%.6f post[60=%u 61=%u t58=%016llx dec=%.6f spd=%.3f] out=%.2f,%.2f,%.2f "
        "body=%.2f,%.2f,%.2f",
        static_cast<unsigned long long>(g_frame.load()), ControllerIndex(ctl), ctl, vehicle,
        slot, slotState, b60, b61, b62, b63, static_cast<unsigned long long>(t58), clock,
@@ -440,6 +447,14 @@ void GhostTrace::Shutdown() {
 #endif
 }
 
+void GhostTrace::Note(const char *text) {
+#if defined(_WIN32)
+  Line("%s", text);
+#else
+  (void)text;
+#endif
+}
+
 void GhostTrace::OnEvaluate(const uint8_t *owner, const void *time, int result,
                             const uint8_t *out) {
 #if defined(_WIN32)
@@ -448,14 +463,15 @@ void GhostTrace::OnEvaluate(const uint8_t *owner, const void *time, int result,
   double asDouble = 0;
   if (Readable(time, 8)) {
     std::memcpy(&raw, time, 8);
-    std::memcpy(&asDouble, time, 8);
+    const uint64_t key = *reinterpret_cast<const uint64_t *>(g_base + kTimeKeyRva);
+    asDouble = static_cast<double>(static_cast<int64_t>(raw ^ key)) / 1e6;
   }
   const bool good = out != nullptr && Readable(out, 0x78);
   const Vec3 pos = good ? ReadVec3(out + 0x30) : Vec3{};
   const Vec3 vel = good ? ReadVec3(out + 0x40) : Vec3{};
   const float offset = *reinterpret_cast<const float *>(g_base + kTimeOffsetRva);
   const uint8_t *flags = reinterpret_cast<const uint8_t *>(g_base + kTimeFlagsRva);
-  Line("EVAL f=%llu own=%p t=%016llx d=%.6f off=%.4f fl=%d,%d res=%d valid=%u "
+  Line("EVAL f=%llu own=%p t=%016llx dec=%.6f off=%.4f fl=%d,%d res=%d valid=%u "
        "pos=%.2f,%.2f,%.2f vel=%.3f,%.3f,%.3f prog=%.5f t58=%08x",
        static_cast<unsigned long long>(g_frame.load()), owner, static_cast<unsigned long long>(raw),
        asDouble, offset, flags[0], flags[1], result, good ? out[0x60] : 0u, pos.x, pos.y, pos.z,
