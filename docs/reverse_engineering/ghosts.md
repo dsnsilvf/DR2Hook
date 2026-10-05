@@ -267,3 +267,18 @@ Material: prompts e extratos do Grok em `captures/grok/` (r1, r2 e r3). Dumps D1
 
 - `tools/dr2ghost.py` lê o `GHST` (de um save cifrado ou de um `.ghst`) e exporta a trajetória em CSV (§1).
 - Leitura e escrita ao vivo durante os testes: `/proc/<pid>/mem` (o heap muda a cada execução; partir do global `[0x141695228]`).
+
+### 6.7 Pausa dos fantasmas, clones automáticos e N > 5 (2026-10-05)
+
+**5 carros validados (2026-10-05):** com `dr2hook_ghost_cars.txt` = 5 aparecem os 5 fantasmas (log `ghost cars drawn: 5`, 5 controladores avaliados por quadro). A dúvida do §6.3 ("só 2 vistos") ficou resolvida.
+
+**Clones sem F7:** `AutoClones` (`ghost_lab.cpp`), na thread do jogo, copia a volta do original para os slots vazios assim que ele está pronto (até N-1 clones, espaçados 1 s) e confere a cada 0,5 s (o Reiniciar apaga as cópias). Log `GhostLab[auto]`. O F7 continua somando cópias de teste.
+
+**Como o jogo pausa os fantasmas** (relatório completo: `investigations/ghost-pause-trace-report.md`; rastreio `GhostTrace`, liga com `dr2hook_ghost_trace.txt`):
+- Os fantasmas não têm flag de pausa. O agendador (`0x140b3ed70`) deixa de chamar a tarefa de simulação `0x1404b1040` (física `0x140dbc500` + fantasmas + veículos), que contém o sistema de fantasmas `0x140518bb0`. O relógio da corrida (passo fixo de 1/60 s) só avança dentro dela, então para junto e retoma sem salto. Hipótese forte (não confirmada): o flag é `nó+0x5e`, escrito em `0x1404b0f3d` a partir de `game+0x19a9`.
+- Atualizador de cada fantasma `0x140518400` (só chamado de `0x140518c78`): `[ctl+0x60] != 0` = pular uma vez; `[ctl+0x63] == 0` = sair; `[ctl+0x58]` = tempo passado a `EvaluateGhostState`, **`(uint64)(relógio·1e6) ^ chave`** com a chave no global `0x1415e3500`. Aplicação ao corpo: `0x1409cdaa0` (teleporta o corpo e grava a velocidade linear da amostra). Em `0x1405184ed` a saída do Evaluate fica na pilha.
+- Rastreio: em cada pausa `BEAT` mostra `sys=ctl=eval=apply=0`; o relógio continua de onde parou (45,031532 → 45,048198 depois de 2,9 s de pausa).
+
+**F6 (só com `dr2hook_ghost_cars.txt`): pausa/retoma todos os fantasmas** (validado). Hook de `EvaluateGhostState`: ao pausar guarda o tempo efetivo e reescreve `[ctl+0x58]` a cada quadro; zera `out+0x40` (velocidade); ao retomar acumula `pausado += agora - início` e passa `relógio - acumulado` recodificado com a chave. O relógio voltar (Reiniciar) zera o estado. O critério "só clones" foi descartado: o original também pausa. Logs `FREEZE`/`FREEZE-OUT` no rastreio e `GhostLab[pausa]` no log. Alternativas piores: `ctl+0x60 = 1` (o corpo desliza e o fantasma salta ao voltar).
+
+**Mais de 5 carros (implementado em `b335229`, ainda NÃO testado no jogo):** `dr2hook_ghost_cars.txt` com N de 6 a 32. Segue o plano de `investigations/ghost-vectors-scan.md` §6: no 1º `AddGhostEntry` de cada carga, o vetor de 0x38 da sessão (`+0x3320`) e o da montagem (`b+0x00`, na pilha de `0x1405ba200`) passam para buffers externos de capacidade 32 (`VirtualAlloc`, sobrevivem ao F8; copia os elementos, grava o ponteiro e depois a capacidade); os imediatos dos dois `mov r13d, 5` (`0x1405ba802`, `0x1405ba989`) viram N e são restaurados para 5 no `Shutdown`. `LogLimits` (`GhostLab[limites]`) registra corpos de física (`[0x14201b930]`, teto 24), entradas da sessão (pool 150), vetor, mapa de controladores e carros desenhados após o spawn, 8 s e 25 s depois. Riscos conhecidos: as cópias têm de ser tipo 0 (do 5º tipo 1 com id ≠ 0 em diante, `0x1405be820` transborda um array de 4 × 0x130); vetor local de 5 ponteiros em `0x1405bb66b` só trunca; 16 objetos de render (≈ 15 fantasmas) e 24 corpos de física (excedente não é atualizado).
