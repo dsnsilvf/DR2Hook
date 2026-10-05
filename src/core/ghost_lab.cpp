@@ -1313,9 +1313,12 @@ std::atomic<uintptr_t> g_watchAddrs[4] = {};
 // objetos 15 (funciona) e 16, para achar quem os escreve no 15 e nao no 16.
 void ArmRenderWatch() {
   if (WantedGhostCars() < 16 || g_renderBuffer == nullptr) return;
-  const uintptr_t ro15 = reinterpret_cast<uintptr_t>(g_renderBuffer) + 15 * 0x1730;
-  const uintptr_t ro16 = reinterpret_cast<uintptr_t>(g_renderBuffer) + 16 * 0x1730;
-  ArmWriteWatch({ro15 + 0x1b1, ro15 + 0x1c8, ro16 + 0x1b1, ro16 + 0x1c8}, {1, 8, 1, 8});
+  // Achado: o modelo do objeto 15 vem de 0x1409690d0, chamado pela fila de modelos
+  // 0x140b923a0, que percorre so 16 veiculos do dono estatico 0x14159d9e0 (nomes de modelo
+  // em +0x118 + i*0x18, habilitado em +0x298 + i). Agora: quem escreve essas tabelas.
+  const uintptr_t owner = g_gameBase + (0x14159d9e0 - kImageBase);
+  ArmWriteWatch({owner + 0x118, owner + 0x118 + 15 * 0x18, owner + 0x298, owner + 0x298 + 15},
+                {8, 8, 1, 1});
 }
 std::vector<uint8_t *> DriverObjects();                   // idem
 
