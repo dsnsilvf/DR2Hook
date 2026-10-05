@@ -1301,14 +1301,24 @@ void LogLoadState() {
   }
 }
 
-void ArmWriteWatch(uintptr_t addr); // definido mais abaixo
+void ArmWriteWatch(const std::vector<uintptr_t> &addrs); // definido mais abaixo
+std::vector<uint8_t *> DriverObjects();                   // idem
 
 // Diagnostico de N > 15: vigia o elemento 16 do array antigo de parametros dos pilotos
-// (obj+0x300+16*0x68+4 = obj+0x984, onde apareceu o 0.3 que derruba exe+0xb4f930).
+// (obj+0x300+16*0x68+4 = obj+0x984, onde apareceu o 0.3 que derruba exe+0xb4f930) em
+// cada objeto de pilotos conhecido (ate 4, DR0..DR3).
 void ArmDriverWatch() {
   if (WantedGhostCars() < 16) return;
-  auto *ds = *reinterpret_cast<uint8_t **>(g_gameBase + (0x14159dad0 - kImageBase));
-  if (ds != nullptr) ArmWriteWatch(reinterpret_cast<uintptr_t>(ds) + 0x984);
+  std::vector<uintptr_t> addrs;
+  for (uint8_t *ds : DriverObjects()) {
+    if (addrs.size() < 4) addrs.push_back(reinterpret_cast<uintptr_t>(ds) + 0x984);
+  }
+  auto *cur = *reinterpret_cast<uint8_t **>(g_gameBase + (0x14159dad0 - kImageBase));
+  const uintptr_t curAddr = reinterpret_cast<uintptr_t>(cur) + 0x984;
+  if (cur != nullptr && addrs.size() < 4 &&
+      std::find(addrs.begin(), addrs.end(), curAddr) == addrs.end())
+    addrs.push_back(curAddr);
+  if (!addrs.empty()) ArmWriteWatch(addrs);
 }
 
 void DetourSpawnVehicles(void *ctx) {
@@ -1338,7 +1348,7 @@ void DetourSpawnVehicles(void *ctx) {
 // endereco acessado e os retornos do jogo na pilha. Nao trata a excecao.
 void *g_crashHandler = nullptr;
 std::atomic<int> g_crashLogged{0};
-std::atomic<uintptr_t> g_watchAddr{0};
+std::atomic<uintptr_t> g_watchAddrs[4] = {};
 std::atomic<int> g_watchLogged{0};
 
 // Enderecos de retorno no exe achados na pilha a partir de rsp (precedidos de call).
@@ -1363,11 +1373,15 @@ std::string ReturnChain(uintptr_t rsp) {
 
 LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
   const DWORD code = info->ExceptionRecord->ExceptionCode;
-  if (code == EXCEPTION_SINGLE_STEP && g_watchAddr.load() != 0 && (info->ContextRecord->Dr6 & 1)) {
+  if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 0xf) != 0 &&
+      g_watchAddrs[0].load() != 0) {
     CONTEXT *w = info->ContextRecord;
+    const DWORD64 hit = w->Dr6 & 0xf;
     w->Dr6 = 0;
-    if (g_watchLogged.fetch_add(1) < 8) {
-      const uintptr_t a = g_watchAddr.load();
+    size_t which = 0;
+    while (which < 3 && !(hit & (1ull << which))) ++which;
+    const uintptr_t a = g_watchAddrs[which].load();
+    if (a != 0 && g_watchLogged.fetch_add(1) < 12) {
       char buf[320];
       std::snprintf(buf, sizeof(buf),
                     "GhostLab[watch]: escrita em %p = %08x (rip=0x%llx, depois da instrucao) "
@@ -1491,10 +1505,10 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
 // Watchpoint de hardware (DR0, escrita de 4 bytes) em todas as threads: acha quem escreve
 // num endereco (ex.: o elemento 16 de um array de 16). O VEH acima registra cada escrita.
 // Feito por uma thread auxiliar para tambem armar a thread que chamou.
-void ArmWriteWatch(uintptr_t addr) {
-  g_watchAddr.store(addr);
+void ArmWriteWatch(const std::vector<uintptr_t> &addrs) {
+  for (size_t i = 0; i < 4; ++i) g_watchAddrs[i].store(i < addrs.size() ? addrs[i] : 0);
   g_watchLogged.store(0);
-  std::thread([addr] {
+  std::thread([&addrs] {
     const DWORD self = GetCurrentThreadId();
     const DWORD pid = GetCurrentProcessId();
     int armed = 0, failed = 0;
@@ -1514,13 +1528,17 @@ void ArmWriteWatch(uintptr_t addr) {
         CONTEXT ctx{};
         ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
         if (GetThreadContext(t, &ctx)) {
-          ctx.Dr0 = addr;
-          ctx.Dr7 = (ctx.Dr7 & ~0xf0003ull) | 0xd0001ull; // L0, escrita, 4 bytes
+          DWORD64 *dr[4] = {&ctx.Dr0, &ctx.Dr1, &ctx.Dr2, &ctx.Dr3};
+          ctx.Dr7 = 0;
+          for (size_t i = 0; i < addrs.size() && i < 4; ++i) {
+            *dr[i] = addrs[i];
+            ctx.Dr7 |= (1ull << (2 * i)) | (0xdull << (16 + 4 * i)); // Ln, escrita, 4 bytes
+          }
           ctx.Dr6 = 0;
           if (SetThreadContext(t, &ctx)) {
             CONTEXT check{};
             check.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-            (GetThreadContext(t, &check) && check.Dr0 == addr) ? ++armed : ++failed;
+            (GetThreadContext(t, &check) && check.Dr0 == addrs[0]) ? ++armed : ++failed;
           } else {
             ++failed;
           }
@@ -1533,8 +1551,9 @@ void ArmWriteWatch(uintptr_t addr) {
     }
     CloseHandle(snap);
     char msg[160];
-    std::snprintf(msg, sizeof(msg), "GhostLab[watch]: escrita em %p vigiada em %d threads (%d falhas).",
-                  reinterpret_cast<void *>(addr), armed, failed);
+    std::snprintf(msg, sizeof(msg),
+                  "GhostLab[watch]: %zu enderecos (1o %p) vigiados em %d threads (%d falhas).",
+                  addrs.size(), reinterpret_cast<void *>(addrs[0]), armed, failed);
     Logger::Info(msg);
   }).join();
 }
@@ -1876,6 +1895,7 @@ void PatchVehicleSystemSlots() {
   if (WantedGhostCars() < 16) return;
   if (GetEnvironmentVariableA("DR2HOOK_VEHSYS_SLOTS", nullptr, 0) != 0) {
     Logger::Info("GhostLab[veiculos]: arrays por carro ja ampliados neste processo.");
+    g_vehicleSlotsWanted = true;
     return;
   }
   if (GetEnvironmentVariableA("DR2HOOK_VEHSYS_SIZE", nullptr, 0) == 0) {
@@ -1925,22 +1945,40 @@ void *g_driverCtorTarget = nullptr;
 using DriverCtorFn = void *(*)(void *, void *, void *, void *, void *, void *);
 DriverCtorFn g_originalDriverCtor = nullptr;
 
+// Objetos de pilotos vistos (ha mais de um: o da abertura e o de cada especial).
+std::mutex g_driverObjsMutex;
+std::vector<uint8_t *> g_driverObjs;
+
+std::vector<uint8_t *> DriverObjects() {
+  std::lock_guard<std::mutex> lock(g_driverObjsMutex);
+  return g_driverObjs;
+}
+
+// Cada objeto novo ganha o array de 24 (o construtor so inicializa os 16 antigos); o lea
+// e trocado uma vez por processo (marcador no ambiente).
 void ApplyDriverParams(uint8_t *ds) {
-  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) != 0) return;
-  uint32_t disp = 0;
-  std::memcpy(&disp, GameVa(kDriverParamsLeaVa), 4);
-  if (disp != kDriverParamsOld) {
-    Logger::Warn("GhostLab[pilotos]: lea dos parametros diferente do esperado; nada trocado.");
-    return;
+  {
+    std::lock_guard<std::mutex> lock(g_driverObjsMutex);
+    if (std::find(g_driverObjs.begin(), g_driverObjs.end(), ds) == g_driverObjs.end())
+      g_driverObjs.push_back(ds);
   }
   std::memcpy(ds + kDriverParamsNew, ds + kDriverParamsOld, 16 * kDriverParamSize);
   for (int i = 16; i < kCarSlots; ++i) {
     std::memcpy(ds + kDriverParamsNew + i * kDriverParamSize, kDriverParamDefaults, kDriverParamSize);
   }
-  const uint32_t to = kDriverParamsNew;
-  const bool ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(kDriverParamsLeaVa)),
-                             reinterpret_cast<const uint8_t *>(&to), 4);
-  SetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", "1");
+  bool ok = true;
+  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) == 0) {
+    uint32_t disp = 0;
+    std::memcpy(&disp, GameVa(kDriverParamsLeaVa), 4);
+    if (disp != kDriverParamsOld) {
+      Logger::Warn("GhostLab[pilotos]: lea dos parametros diferente do esperado; nada trocado.");
+      return;
+    }
+    const uint32_t to = kDriverParamsNew;
+    ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(kDriverParamsLeaVa)),
+                    reinterpret_cast<const uint8_t *>(&to), 4);
+    SetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", "1");
+  }
   char msg[160];
   std::snprintf(msg, sizeof(msg), "GhostLab[pilotos]: objeto %p com %d parametros por veiculo (%s).",
                 static_cast<void *>(ds), kCarSlots, ok ? "ok" : "FALHOU");
@@ -1955,18 +1993,19 @@ void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) 
 
 void PatchDriverParams() {
   if (!g_vehicleSlotsWanted) return; // so junto com o VEHICLE_SYSTEM ampliado
-  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) != 0) return;
   if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SIZE", nullptr, 0) == 0) {
     Logger::Warn("GhostLab[pilotos]: dxgi.dll sem a ampliacao do objeto de pilotos; "
                  "atualize a dxgi.dll e reabra o jogo.");
     return;
   }
+  // Objetos criados antes do core (ou antes de um F8) ficam sem o array novo, a menos
+  // que seja o do global; os seguintes passam pelo construtor.
   auto *ds = *reinterpret_cast<uint8_t **>(GameVa(kDriverSystemGlobalVa));
-  if (ds != nullptr) {
+  if (ds != nullptr && GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) == 0) {
     ApplyDriverParams(ds);
-    return;
+  } else if (ds == nullptr) {
+    Logger::Info("GhostLab[pilotos]: objeto ainda nao existe; esperando o construtor.");
   }
-  Logger::Info("GhostLab[pilotos]: objeto ainda nao existe; esperando o construtor.");
   Hook(kDriverSystemCtorRva, kDriverSystemCtorPrologue, sizeof(kDriverSystemCtorPrologue),
        reinterpret_cast<void *>(&DetourDriverCtor), reinterpret_cast<void **>(&g_originalDriverCtor),
        &g_driverCtorTarget, "DriverSystemCtor");
