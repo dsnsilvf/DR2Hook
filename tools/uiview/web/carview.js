@@ -9,7 +9,7 @@ const CAR_LIST = MODEL_LIST.filter((m) => m.car);
 const cv = {
   carId: null, loadedId: null, row: null, data: null,
   nodes: new Map(), slices: new Map(), lodRoots: new Map(),
-  res: new Map(), textures: new Map(), matTex: new Map(), matBlend: new Map(),
+  fixes: [], res: new Map(), textures: new Map(), matTex: new Map(), matBlend: new Map(),
   selected: null,                 // "n:<uid>" ou "s:<chave da fatia>"
   expanded: new Set(), hidden: new Set(), hiddenSlices: new Set(),
   lod: "LOD0", solo: false, wire: false, flat: false, flip: false, variant: "tarmac", glass: true,
@@ -74,8 +74,13 @@ function carFreeGpu() {
       gl.deleteBuffer(r.pb); gl.deleteBuffer(r.ub); gl.deleteBuffer(r.ib);
       if (r.lb) gl.deleteBuffer(r.lb);
     }
+    for (const f of cv.fixes) {
+      gl.deleteBuffer(f.pb); gl.deleteBuffer(f.ub); gl.deleteBuffer(f.ib);
+      if (f.lb) gl.deleteBuffer(f.lb);
+    }
   }
   cv.res.clear();
+  cv.fixes.length = 0;
 }
 
 function carUpload(list) {
@@ -87,7 +92,7 @@ function carUpload(list) {
     const ub = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ub); gl.bufferData(gl.ARRAY_BUFFER, r.uv, gl.STATIC_DRAW);
     const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, r.ind, gl.STATIC_DRAW);
     // Arestas para o wireframe: criadas só quando o usuário liga a opção.
-    cv.res.set(r.id, { id: r.id, verts: r.verts, tris: r.ind.length / 3, wide: r.wide, pb, ub, ib, lb: null, ind: r.ind });
+    cv.res.set(r.id, { id: r.id, verts: r.verts, tris: r.ind.length / 3, wide: r.wide, pb, ub, ib, lb: null, ind: r.ind, pos: r.pos, uv: r.uv });
   }
 }
 
@@ -104,6 +109,152 @@ function carLines(r) {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.lb);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lines, gl.STATIC_DRAW);
   return r.lb;
+}
+
+// ------------------------------------------------------------ correções de roda e disco
+// O UV gravado no barril da roda e no disco não serve para o atlas: os mesmos remendos do
+// Modelos (centro aberto, borracha por dentro, UV circular do rotor) rodam aqui, por LOD e
+// material, em coordenadas do carro. Cada fatia recebe um buffer próprio já corrigido, e a
+// malha original no arquivo continua intacta.
+
+function carFixKind(material) {
+  if (/disc_blur/i.test(material)) return null;
+  if (/disc/i.test(material)) return "disc";
+  if (/wheel/i.test(material) && !isTread(material)) return "wheel";
+  return null;
+}
+
+function carWheelMesh(items) {
+  const pos = [], uv = [], ind = [], owner = [];
+  for (const { s, n } of items) {
+    const r = cv.res.get(s.rds);
+    if (!r || !r.pos) continue;
+    const m = n.world;
+    const remap = new Map();
+    for (let k = 0; k < s.ic; k++) {
+      const old = r.ind[s.io + k];
+      let id = remap.get(old);
+      if (id === undefined) {
+        id = pos.length / 3;
+        remap.set(old, id);
+        const x = r.pos[old * 3], y = r.pos[old * 3 + 1], z = r.pos[old * 3 + 2];
+        pos.push(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]);
+        uv.push(r.uv[old * 2], r.uv[old * 2 + 1]);
+      }
+      ind.push(id);
+      if (k % 3 === 2) owner.push(s);
+    }
+  }
+  return { pos: Float32Array.from(pos), uv: Float32Array.from(uv), ind: Uint32Array.from(ind), owner };
+}
+
+// Mesmos cortes de openWheelCenter e rubberizeInnerWheel (content.js), mantendo o dono de cada triângulo.
+function carOpenCenter(mesh) {
+  const { groups, which } = assignWheels(mesh.pos);
+  if (!groups.length) return;
+  const rad = (i, g) => Math.hypot(mesh.pos[i * 3 + 1] - g.y, mesh.pos[i * 3 + 2] - g.z) / g.rmax;
+  const keep = [], owner = [];
+  for (let t = 0; t < mesh.ind.length; t += 3) {
+    const a = mesh.ind[t], b = mesh.ind[t + 1], c = mesh.ind[t + 2];
+    const u = (fract1(mesh.uv[a * 2]) + fract1(mesh.uv[b * 2]) + fract1(mesh.uv[c * 2])) / 3;
+    const v = (fract1(mesh.uv[a * 2 + 1]) + fract1(mesh.uv[b * 2 + 1]) + fract1(mesh.uv[c * 2 + 1])) / 3;
+    const gi = which[a];
+    const g = gi >= 0 && which[b] === gi && which[c] === gi ? groups[gi] : null;
+    const inner = g && g.rmax > 1e-4 && (rad(a, g) + rad(b, g) + rad(c, g)) / 3 < 0.36;
+    if (inner && u < 0.32 && v > 0.75) continue;
+    keep.push(a, b, c); owner.push(mesh.owner[t / 3]);
+  }
+  mesh.ind = Uint32Array.from(keep);
+  mesh.owner = owner;
+}
+
+function carRubberInner(mesh) {
+  const { groups } = assignWheels(mesh.pos);
+  if (!groups.length) return;
+  const n = mesh.pos.length / 3;
+  const which = new Int16Array(n).fill(-1);
+  const depth = new Float32Array(n);
+  groups.forEach((g, gi) => {
+    const side = Math.sign(g.x) || 1;
+    let face = g.x;
+    for (const i of g.ids) {
+      const x = mesh.pos[i * 3];
+      face = side < 0 ? Math.min(face, x) : Math.max(face, x);
+    }
+    for (const i of g.ids) { which[i] = gi; depth[i] = (face - mesh.pos[i * 3]) * side; }
+  });
+  const ind = mesh.ind;
+  const outer = new Uint8Array(n);
+  for (let t = 0; t < ind.length; t += 3) {
+    if (Math.max(depth[ind[t]], depth[ind[t + 1]], depth[ind[t + 2]]) < 0.1) outer[ind[t]] = outer[ind[t + 1]] = outer[ind[t + 2]] = 1;
+  }
+  const rubber = (g, i) => {
+    const dy = mesh.pos[i * 3 + 1] - g.y, dz = mesh.pos[i * 3 + 2] - g.z;
+    const ang = Math.atan2(dz, dy);
+    const r = Math.min(1, Math.hypot(dy, dz) / (g.rmax || 1));
+    return [0.16 + ((ang / (Math.PI * 2) + 1) % 1) * 0.18, 0.855 + r * 0.04];
+  };
+  const pos = Array.from(mesh.pos), uv = Array.from(mesh.uv), keep = [];
+  for (let t = 0; t < ind.length; t += 3) {
+    const tri = [ind[t], ind[t + 1], ind[t + 2]];
+    // Qualquer vértice fundo põe o triângulo inteiro na borracha: os que ligam a borda ao fundo
+    // do barril têm profundidade média baixa e, de outro modo, mostrariam o atlas inteiro.
+    const d = Math.max(depth[tri[0]], depth[tri[1]], depth[tri[2]]);
+    if (d >= 0.1 && tri.every((i) => which[i] >= 0)) {
+      for (let k = 0; k < 3; k++) {
+        const i = tri[k];
+        const rub = rubber(groups[which[i]], i);
+        if (outer[i]) {
+          tri[k] = pos.length / 3;
+          pos.push(mesh.pos[i * 3], mesh.pos[i * 3 + 1], mesh.pos[i * 3 + 2]);
+          uv.push(rub[0], rub[1]);
+        } else { uv[i * 2] = rub[0]; uv[i * 2 + 1] = rub[1]; }
+      }
+    }
+    keep.push(tri[0], tri[1], tri[2]);
+  }
+  mesh.pos = Float32Array.from(pos); mesh.uv = Float32Array.from(uv); mesh.ind = Uint32Array.from(keep);
+}
+
+function carFixWheels() {
+  const gl = cv.gl;
+  if (!gl || !cv.data) return;
+  const groups = new Map();
+  for (const s of cv.slices.values()) {
+    const kind = s.ok && carFixKind(s.material);
+    if (!kind) continue;
+    const key = kind + "|" + (s._node._lod || "") + "|" + s.material;
+    if (!groups.has(key)) groups.set(key, { kind, items: [] });
+    groups.get(key).items.push({ s, n: s._node });
+  }
+  for (const { kind, items } of groups.values()) {
+    const mesh = carWheelMesh(items);
+    if (!mesh.ind.length) continue;
+    if (kind === "disc") mapDiscUv(mesh);
+    else { carOpenCenter(mesh); carRubberInner(mesh); }
+    const tris = new Map(items.map((it) => [it.s, []]));
+    mesh.owner.forEach((s, t) => tris.get(s).push(t));
+    for (const [s, list] of tris) {
+      const remap = new Map(), pos = [], uv = [], ind = [];
+      for (const t of list) for (let k = 0; k < 3; k++) {
+        const old = mesh.ind[t * 3 + k];
+        let id = remap.get(old);
+        if (id === undefined) {
+          id = pos.length / 3; remap.set(old, id);
+          pos.push(mesh.pos[old * 3], mesh.pos[old * 3 + 1], mesh.pos[old * 3 + 2]);
+          uv.push(mesh.uv[old * 2], mesh.uv[old * 2 + 1]);
+        }
+        ind.push(id);
+      }
+      const wide = pos.length / 3 > 65535;
+      const arr = wide ? Uint32Array.from(ind) : Uint16Array.from(ind);
+      const mk = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+      const fix = { wide, ind: arr, count: arr.length, lb: null,
+        pb: mk(gl.ARRAY_BUFFER, Float32Array.from(pos)), ub: mk(gl.ARRAY_BUFFER, Float32Array.from(uv)), ib: mk(gl.ELEMENT_ARRAY_BUFFER, arr) };
+      s._fix = fix;
+      cv.fixes.push(fix);
+    }
+  }
 }
 
 function openCar(id) {
@@ -128,6 +279,7 @@ function openCar(id) {
   }).then((buf) => {
     if (!buf || cv.carId !== id) return;
     carUpload(parseCarRes(buf));
+    carFixWheels();
     const lods = cv.data.lods.map((l) => l.name);
     cv.lod = lods.includes("LOD0") ? "LOD0" : (lods[0] || "ALL");
     state.filter = cv.lod;
@@ -402,9 +554,10 @@ function carGL() {
     gl.uniform1i(loc.uLine, 0);
 
     const drawOne = (d, blend) => {
-      const r = cv.res.get(d.s.rds);
-      if (!r) return;
       const s = d.s;
+      const r = s._fix || cv.res.get(s.rds);
+      if (!r) return;
+      const io = s._fix ? 0 : s.io, ic = s._fix ? s._fix.count : s.ic;
       gl.bindBuffer(gl.ARRAY_BUFFER, r.pb);
       gl.enableVertexAttribArray(loc.pos);
       gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0);
@@ -412,7 +565,7 @@ function carGL() {
       gl.enableVertexAttribArray(loc.uv);
       gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, 0, 0);
       if (!d.n._m) d.n._m = new Float32Array(d.n.world);
-      gl.uniformMatrix4fv(loc.uModel, false, d.n._m);
+      gl.uniformMatrix4fv(loc.uModel, false, s._fix ? IDENT : d.n._m);
       gl.uniform1f(loc.uHi, d.hi ? 1 : 0);
       gl.uniform1f(loc.uAlpha, blend ? 0.4 : 1);
       gl.uniform1i(loc.uTread, isTread(s.material) ? 1 : 0);
@@ -432,11 +585,11 @@ function carGL() {
         gl.uniform1i(loc.uLine, 1);
         gl.uniform3f(loc.uColor, d.hi ? 1 : 0.7, d.hi ? 0.6 : 0.8, d.hi ? 0.15 : 0.9);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, carLines(r));
-        gl.drawElements(gl.LINES, s.ic * 2, type, s.io * 2 * size);
+        gl.drawElements(gl.LINES, ic * 2, type, io * 2 * size);
         gl.uniform1i(loc.uLine, 0);
       } else {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.ib);
-        gl.drawElements(gl.TRIANGLES, s.ic, type, s.io * size);
+        gl.drawElements(gl.TRIANGLES, ic, type, io * size);
       }
     };
     const opaque = [], glass = [];

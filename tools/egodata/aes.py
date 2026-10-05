@@ -1,4 +1,4 @@
-"""Decifração AES (ECB) em Python puro, por tabelas. Bytes finais fora de um bloco de 16 passam intactos."""
+"""AES (ECB) em Python puro, por tabelas, para decifrar e cifrar. Bytes finais fora de um bloco de 16 passam intactos."""
 
 _SBOX = [0] * 256
 _INV_SBOX = [0] * 256
@@ -101,6 +101,60 @@ def decrypt_ecb(data: bytes, key: bytes) -> bytes:
             ((inv[s1 >> 24] << 24) | (inv[(s0 >> 16) & 255] << 16) | (inv[(s3 >> 8) & 255] << 8) | inv[s2 & 255]) ^ k[1],
             ((inv[s2 >> 24] << 24) | (inv[(s1 >> 16) & 255] << 16) | (inv[(s0 >> 8) & 255] << 8) | inv[s3 & 255]) ^ k[2],
             ((inv[s3 >> 24] << 24) | (inv[(s2 >> 16) & 255] << 16) | (inv[(s1 >> 8) & 255] << 8) | inv[s0 & 255]) ^ k[3],
+        )
+        out[o : o + 16] = b"".join(v.to_bytes(4, "big") for v in words)
+    return bytes(out)
+
+
+_TE = [[0] * 256 for _ in range(4)]
+for _x in range(256):
+    _s = _SBOX[_x]
+    _w = (_mul(_s, 2) << 24) | (_s << 16) | (_s << 8) | _mul(_s, 3)
+    for _k in range(4):
+        _TE[_k][_x] = ((_w >> (8 * _k)) | (_w << (32 - 8 * _k))) & 0xFFFFFFFF
+
+
+def _round_keys(key: bytes) -> tuple[list[list[int]], int]:
+    nk = len(key) // 4
+    nr = nk + 6
+    w = [int.from_bytes(key[4 * i : 4 * i + 4], "big") for i in range(nk)]
+    rc = 1
+    for i in range(nk, 4 * (nr + 1)):
+        t = w[i - 1]
+        if i % nk == 0:
+            t = _sub_word(((t << 8) | (t >> 24)) & 0xFFFFFFFF) ^ (rc << 24)
+            rc = _xtime(rc)
+        elif nk > 6 and i % nk == 4:
+            t = _sub_word(t)
+        w.append(w[i - nk] ^ t)
+    return [w[4 * r : 4 * r + 4] for r in range(nr + 1)], nr
+
+
+def encrypt_ecb(data: bytes, key: bytes) -> bytes:
+    rk, nr = _round_keys(key)
+    t0, t1, t2, t3 = _TE
+    sb = _SBOX
+    out = bytearray(data)
+    for o in range(0, len(data) - 15, 16):
+        k = rk[0]
+        s0 = int.from_bytes(data[o : o + 4], "big") ^ k[0]
+        s1 = int.from_bytes(data[o + 4 : o + 8], "big") ^ k[1]
+        s2 = int.from_bytes(data[o + 8 : o + 12], "big") ^ k[2]
+        s3 = int.from_bytes(data[o + 12 : o + 16], "big") ^ k[3]
+        for r in range(1, nr):
+            k = rk[r]
+            s0, s1, s2, s3 = (
+                t0[s0 >> 24] ^ t1[(s1 >> 16) & 255] ^ t2[(s2 >> 8) & 255] ^ t3[s3 & 255] ^ k[0],
+                t0[s1 >> 24] ^ t1[(s2 >> 16) & 255] ^ t2[(s3 >> 8) & 255] ^ t3[s0 & 255] ^ k[1],
+                t0[s2 >> 24] ^ t1[(s3 >> 16) & 255] ^ t2[(s0 >> 8) & 255] ^ t3[s1 & 255] ^ k[2],
+                t0[s3 >> 24] ^ t1[(s0 >> 16) & 255] ^ t2[(s1 >> 8) & 255] ^ t3[s2 & 255] ^ k[3],
+            )
+        k = rk[nr]
+        words = (
+            ((sb[s0 >> 24] << 24) | (sb[(s1 >> 16) & 255] << 16) | (sb[(s2 >> 8) & 255] << 8) | sb[s3 & 255]) ^ k[0],
+            ((sb[s1 >> 24] << 24) | (sb[(s2 >> 16) & 255] << 16) | (sb[(s3 >> 8) & 255] << 8) | sb[s0 & 255]) ^ k[1],
+            ((sb[s2 >> 24] << 24) | (sb[(s3 >> 16) & 255] << 16) | (sb[(s0 >> 8) & 255] << 8) | sb[s1 & 255]) ^ k[2],
+            ((sb[s3 >> 24] << 24) | (sb[(s0 >> 16) & 255] << 16) | (sb[(s1 >> 8) & 255] << 8) | sb[s2 & 255]) ^ k[3],
         )
         out[o : o + 16] = b"".join(v.to_bytes(4, "big") for v in words)
     return bytes(out)
