@@ -410,6 +410,8 @@ function tvGL() {
         constant(IDENT);
       }
     }
+    // as linhas não são instâncias: sem isto herdariam a matriz da 1ª instância do último tipo desenhado
+    constant(IDENT);
     gl.uniform1i(loc.uLine, 1);
     gl.disable(gl.DEPTH_TEST);
     for (const l of tv.lines) {
