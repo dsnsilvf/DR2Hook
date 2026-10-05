@@ -176,7 +176,7 @@ Permite inspecionar o status das travas de Fair Play antes de realizar qualquer 
   Os hooks ficam no core (recarregados pelo F8, que volta o modo para `"normal"`); retorna `false` fora do Windows.
 
 ### Módulo `Ghost`
-Carros fantasma (GhostLab). Detalhes de como o jogo guarda e reproduz fantasmas: [ghosts.md](reverse_engineering/ghosts.md).
+Carros fantasma (GhostLab). Detalhes de como o jogo guarda e reproduz fantasmas: [ghosts.md](../reverse_engineering/ghosts.md).
 
 | Função | Parâmetros | Retorno | Descrição |
 | :--- | :--- | :--- | :--- |
@@ -186,7 +186,7 @@ Carros fantasma (GhostLab). Detalhes de como o jogo guarda e reproduz fantasmas:
 | `Ghost.setTimeOffset(seconds)` | `number` | `nil` | Desloca o fantasma no tempo (vantagem ou atraso). |
 | `Ghost.setHud(enabled)` | `boolean` | `nil` | Mostra ou esconde a diferença ao vivo no topo da tela. |
 
-Cópias além das que o jogo cria sozinho dependem do arquivo `dr2hook_ghost_cars.txt` (ver [INSTALL.md](INSTALL.md)). O máximo estável é **15 fantasmas + o jogador**.
+Cópias além das que o jogo cria sozinho dependem do arquivo `dr2hook_ghost_cars.txt` (ver [install.md](install.md)). O máximo estável é **15 fantasmas + o jogador**.
 
 ### Módulo `UI`
 Permite emitir mensagens e avisos visuais na tela através do sistema de notificações HUD do Dear ImGui.

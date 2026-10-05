@@ -1,6 +1,6 @@
 # Engenharia reversa da EGO Engine: DiRT Rally 2.0
 
-Reorganização do antigo `docs/REVERSE_ENGINEERING.md`. O texto técnico foi repartido por subsistema. Nenhuma descoberta, offset, endereço, fórmula ou classificação foi acrescentada a partir de fora desse material.
+Reorganização do antigo `docs/REVERSE_ENGINEERING.md` (removido; o índice geral agora é [`docs/README.md`](../README.md)). O texto técnico foi repartido por subsistema. Nenhuma descoberta, offset, endereço, fórmula ou classificação foi acrescentada a partir de fora desse material.
 
 A conclusão aceita hoje e a hipótese que ela substituiu ficam as duas no documento do subsistema. Quando o arquivo original usa `CONFIRMADO`, `PROVÁVEL`, `INCONCLUSIVO`, `REJEITADO`, `UNKNOWN`, `CONFIRMED` ou `INCONCLUSIVE`, o documento novo repete essa palavra.
 
@@ -34,10 +34,10 @@ Nome de string no executável não é variável localizada.
 - [Dano terminal](terminal_damage.md) — insta crash (F11), pausa e Reiniciar durante a destruição, o gate `host+0x2350` e o que fica preso depois
 - [Carregamento de especiais](stage_loading.md) — resolução de pistas, `BenchmarkManager`, hook do `AutoStage`, `LoadTrace`
 - [Travamentos da carga](loading_hangs.md) — usar uma carga travada como sonda do carregamento
-- [Formatos de pista](track_formats.md) — o que já foi decifrado em `locations/*.nefs` (terreno, objetos, árvores, ornamentos, traçado, JPAK) e o que falta; usado pelo Track Explorer ([../UIVIEW.md](../UIVIEW.md))
+- [Formatos de pista](track_formats.md) — o que já foi decifrado em `locations/*.nefs` (terreno, objetos, árvores, ornamentos, traçado, JPAK) e o que falta; usado pelo Track Explorer ([../UIVIEW.md](../tools/uiview.md))
 - [Fantasmas](ghosts.md) — saves `GHST`, slots, cópias, `GhostCarValues`, a curva de 5–50 m, o descarte com fator 1,0 (fantasma sólido), colisão, pausa dos fantasmas e o máximo de 15 fantasmas + jogador
 
-`python3 -m tools.dr2rec` grava a sessão e analisa depois. O manual está em [../BLACKBOX.md](../BLACKBOX.md). O recorder não reinterpreta os bytes. As âncoras que eram as seções 10.14–10.18 entram na captura para comparação, e o analyzer não reabre o significado delas. O byte em `+0x2cf0` fica fora da janela `0x0000:0x2600`; para observá-lo, a região precisa cobrir esse offset. A ferramenta só lê. Não escreve no processo e não fala com a RaceNet.
+`python3 -m tools.dr2rec` grava a sessão e analisa depois. O manual está em [../BLACKBOX.md](../tools/dr2rec.md). O recorder não reinterpreta os bytes. As âncoras que eram as seções 10.14–10.18 entram na captura para comparação, e o analyzer não reabre o significado delas. O byte em `+0x2cf0` fica fora da janela `0x0000:0x2600`; para observá-lo, a região precisa cobrir esse offset. A ferramenta só lê. Não escreve no processo e não fala com a RaceNet.
 
 ## Como a leitura vive no mod
 
@@ -93,4 +93,4 @@ Não havia material suficiente para um arquivo só deles:
 | 10.11 | [Telemetry](telemetry.md) |
 | 10.16–10.17 | [Vehicle Setup](vehicle_setup.md) |
 | 10.18 | [Tyres](tyres.md); canais de dano em [Damage](damage.md) |
-| 11. Caixa-preta | [../BLACKBOX.md](../BLACKBOX.md) e o parágrafo acima |
+| 11. Caixa-preta | [../BLACKBOX.md](../tools/dr2rec.md) e o parágrafo acima |

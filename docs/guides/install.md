@@ -59,8 +59,8 @@ O DR2Hook opera como uma biblioteca proxy manual (`dxgi.dll`). Sua instalação 
    - **`F9`**: câmera livre na especial (mouse olha, WASD move, Espaço/Q sobem e descem, Ctrl congela o movimento do teclado, `+`/`-` mudam a velocidade, Shift multiplica por 4).
    - **`F11`**: insta crash (destrói o carro, só offline), para estudar o fluxo de dano terminal.
 7. **Arquivos opcionais ao lado de `dirtrally2.exe`** (ferramentas de pesquisa; sem eles nada muda):
-   - `dr2hook_ghost_cars.txt`: um número (máximo efetivo **15**) com quantos carros fantasma o jogo cria na próxima carga completa da especial. Com o arquivo presente, **F7** soma uma cópia de teste e **F6** pausa e retoma os fantasmas, em vez das ações do checkpoint. Ver [ghosts.md](reverse_engineering/ghosts.md) §6.
-   - `dr2hook_cmd.txt`: comandos remotos executados pelo core e apagados em seguida. Ver [REMOTE_COMMANDS.md](REMOTE_COMMANDS.md).
+   - `dr2hook_ghost_cars.txt`: um número (máximo efetivo **15**) com quantos carros fantasma o jogo cria na próxima carga completa da especial. Com o arquivo presente, **F7** soma uma cópia de teste e **F6** pausa e retoma os fantasmas, em vez das ações do checkpoint. Ver [ghosts.md](../reverse_engineering/ghosts.md) §6.
+   - `dr2hook_cmd.txt`: comandos remotos executados pelo core e apagados em seguida. Ver [remote_commands.md](remote_commands.md).
 8. **Verificação de Log:**
    - Na pasta do jogo, verifique a criação do arquivo `dr2hook.log`. Ele registrará os hooks em `Present`, `WndProc`, Winsock (`ws2_32.dll`), a inicialização do motor Lua e o carregamento do mod `practice_mode`.
 

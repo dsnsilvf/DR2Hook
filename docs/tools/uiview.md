@@ -62,4 +62,4 @@ The viewer keeps, for each object that changed, its new 3×3 matrix and position
 - The dense road blocks (`batched_track.fx`) declare no texture and are drawn in a fixed dirt colour. Blended terrain blocks (`terrain_wsm_*`) use only their first diffuse texture.
 - Exporting all 40 stages would take tens of GB; only the stages you ask for are exported.
 
-File formats are in [reverse_engineering/track_formats.md](reverse_engineering/track_formats.md).
+File formats are in [reverse_engineering/track_formats.md](../reverse_engineering/track_formats.md).

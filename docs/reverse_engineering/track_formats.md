@@ -1,6 +1,6 @@
 # Formatos de pista (`locations/*.nefs`)
 
-Levantamento de 2026-10-05, feito para o Track Explorer ([../UIVIEW.md](../UIVIEW.md)). Tudo aqui foi **verificado** lendo os arquivos do jogo e conferindo com o resultado exportado (Montalegre rallycross e Poland rally 01), salvo onde está marcado como não decifrado. Nada disto foi testado dentro do jogo.
+Levantamento de 2026-10-05, feito para o Track Explorer ([../UIVIEW.md](../tools/uiview.md)). Tudo aqui foi **verificado** lendo os arquivos do jogo e conferindo com o resultado exportado (Montalegre rallycross e Poland rally 01), salvo onde está marcado como não decifrado. Nada disto foi testado dentro do jogo.
 
 ## Onde ficam
 
@@ -52,4 +52,4 @@ Vértices dos `.vcqtc`, `track.vis`, `grass.grs`, `*.cqtc` (resetlines e cameral
 
 ## Escrita num `.nefs`
 
-`tools/egodata/nefs_write.py` (`replace_files`): copia o volume uma vez, acrescenta os arquivos novos no fim e atualiza as tabelas; o arquivo novo precisa ter o mesmo número de blocos de 64 KiB. Edição de objetos: [../UIVIEW.md](../UIVIEW.md). **Aceitação pelo jogo: não testada.**
+`tools/egodata/nefs_write.py` (`replace_files`): copia o volume uma vez, acrescenta os arquivos novos no fim e atualiza as tabelas; o arquivo novo precisa ter o mesmo número de blocos de 64 KiB. Edição de objetos: [../UIVIEW.md](../tools/uiview.md). **Aceitação pelo jogo: não testada.**

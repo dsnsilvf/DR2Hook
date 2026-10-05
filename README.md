@@ -14,7 +14,7 @@ The project is built in four layers, each one resting on the one before it:
 - **Ghost cars.** Save format (`GHST`) and cipher decoded, a live gap to the ghost, extra ghost copies, a solid (opaque) ghost, ghost collision research, and **up to 15 ghost cars plus the player** on one stage (the 16-car render limit was measured). See [ghosts.md](docs/reverse_engineering/ghosts.md).
 - **Stage lifecycle events in Lua.** `onStageLoad`, `onCountdown`, and `onStageStart` now fire from gameplay, plus `Race.setStartMode` (normal, no countdown, automatic, on throttle).
 - **Main-menu tab and richer native menu.** A **DR2 Hook** tab in the main menu, a right-hand panel per option, rich text, and per-mod saved settings (`settings.ini`).
-- **Remote command channel.** `dr2hook_cmd.txt` lets a tool or an AI drive the game without anyone at the keyboard ([docs](docs/REMOTE_COMMANDS.md)).
+- **Remote command channel.** `dr2hook_cmd.txt` lets a tool or an AI drive the game without anyone at the keyboard ([docs](docs/guides/remote_commands.md)).
 - **Free camera (F9) and terminal damage (F11)** with their reverse-engineering notes.
 - **Physics tick harness gate G3 passed.** The harness self-test ran in-game with no mismatches, and the rig velocities were moved to the origin block (`+0x2b0` / `+0x2c0`).
 - **Asset tools.** Save decryption (`dr2save`), ghost parsing (`dr2ghost`), NEFS writing, a PSSG parser and serializer, and the browser explorers for **cars** and **tracks**, which can move, rotate, delete, and duplicate stage objects and write the result into a *new* `.nefs`.
@@ -37,12 +37,12 @@ This is the core of DR2Hook. Findings are split by subsystem and carry confidenc
 
 | Tool | What it does |
 | --- | --- |
-| **Physics tick harness** ([docs](docs/physics_tick_harness.md)) | Opt-in hooks on the EGO physics tick path. Logs rig samples to CSV and can test queued writes and native calls on real tick boundaries. Off by default. |
-| **`dr2rec`** ([docs](docs/BLACKBOX.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `python3 -m tools.dr2rec`. |
+| **Physics tick harness** ([docs](docs/architecture/physics_tick_harness.md)) | Opt-in hooks on the EGO physics tick path. Logs rig samples to CSV and can test queued writes and native calls on real tick boundaries. Off by default. |
+| **`dr2rec`** ([docs](docs/tools/dr2rec.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `python3 -m tools.dr2rec`. |
 | **`egodata`** (`tools/egodata/`) | Reads and writes EGO game data: NEFS archives (including writing a modified copy), AES, binary XML, text files. |
 | **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
 | **`pssg`** (`tools/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
-| **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/UIVIEW.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
+| **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
 | `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
 
 Physics tick harness switches (environment variable or INI key):
@@ -76,7 +76,7 @@ What it provides:
 - **Native menus.** The pause menu and the main menu get a **DR2 Hook** entry that opens a game-native screen (built by patching the game's UI data at boot): open the overlay, reload Lua mods, reload the native core, and a **Mods** tab where each mod's `Menu` options appear, with a description panel per option, rich text, and saved settings. How it works: [menu.md](docs/reverse_engineering/menu.md), [ui_data.md](docs/reverse_engineering/ui_data.md), [ui_tabs.md](docs/reverse_engineering/ui_tabs.md), and [ui_limits.md](docs/reverse_engineering/ui_limits.md).
 - **Stage lifecycle.** The core watches the stage load, the countdown, and the start (including restarts) and passes them to Lua. An optional `AutoStage` hook and `LoadTrace` help with loading research ([stage_loading.md](docs/reverse_engineering/stage_loading.md)).
 - **GhostLab.** Native support for ghost cars: live time gap, copies of the ghost lap, opaque ghost, pausing the ghosts, and more ghost cars than the game normally allows.
-- **Remote commands.** A file-based command channel for testing without a person at the keyboard ([docs/REMOTE_COMMANDS.md](docs/REMOTE_COMMANDS.md)).
+- **Remote commands.** A file-based command channel for testing without a person at the keyboard ([docs/guides/remote_commands.md](docs/guides/remote_commands.md)).
 - **Hot reload.** **F8** unloads `dr2hook_core.dll` and loads a fresh copy while the game keeps running. Changes to `dxgi.dll` still need a game restart.
 - **NetworkGuard.** Remote network traffic is blocked while the loader is in the game (see [Fair play](#fair-play)).
 
@@ -122,7 +122,7 @@ end
 | `UI` | `notify(text, seconds)` |
 | `Menu` | `button`, `toggle`, `choice`, `get`, `set`, `describe` — options shown under **Pause → DR2 Hook → Mods** |
 
-Full reference: [docs/MODDING_GUIDE.md](docs/MODDING_GUIDE.md).
+Full reference: [docs/guides/modding_guide.md](docs/guides/modding_guide.md).
 
 ## 3. Example mod: Practice Mode
 
@@ -150,7 +150,7 @@ The core now reads and writes the rig velocities at the origin state block (`+0x
 
 ## 4. Asset tools: Car and Track Explorer
 
-`tools/uiview/` reads the game's own files (NEFS archives, PSSG models, XML) and shows them in a local web page. It never changes the game folder. Details and commands: [docs/UIVIEW.md](docs/UIVIEW.md).
+`tools/uiview/` reads the game's own files (NEFS archives, PSSG models, XML) and shows them in a local web page. It never changes the game folder. Details and commands: [docs/tools/uiview.md](docs/tools/uiview.md).
 
 | Tab | What it does |
 | --- | --- |
@@ -173,7 +173,7 @@ Copy `dxgi.dll`, `dr2hook_core.dll`, and the `mods/` folder into the game direct
 
 The game loads `dxgi.dll` at startup. The proxy forwards to the real `dxgi.dll` in `System32` and loads `dr2hook_core.dll` from the same folder.
 
-Windows and Linux / Steam Deck (Proton) steps: [docs/INSTALL.md](docs/INSTALL.md).
+Windows and Linux / Steam Deck (Proton) steps: [docs/guides/install.md](docs/guides/install.md).
 
 ## Build
 
@@ -201,7 +201,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | Path | Role |
 | --- | --- |
 | `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
-| `docs/` | Install, modding guide, harness, black box, architecture notes |
+| `docs/` | [Index](docs/README.md): `guides/` (install, Lua mods, remote commands), `architecture/`, `tools/` (dr2rec, UI Viewer) |
 | `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
 | `tools/dr2rec/`, `tools/egodata/`, `tools/dr2save.py`, `tools/dr2ghost.py`, `tools/pssg.py` | Offline research tools (Python) |
 | `tools/uiview/` | DR2 UI Viewer: Car Model Explorer, Track Explorer / editor, exporter and track edit tool |

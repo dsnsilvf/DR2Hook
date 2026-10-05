@@ -98,4 +98,4 @@ Não há, neste fio, uma hipótese de pneu que o material tenha marcado como rej
 - [Wheels](wheels.md) — o byte não está dentro do bloco de `0x420`
 - [Suspension](suspension.md) — o curso em `+0x1504` é outro campo
 - [PhysicsRig](physics_rig.md)
-- [../BLACKBOX.md](../BLACKBOX.md) — o byte fica fora da janela `0x0000:0x2600`
+- [../BLACKBOX.md](../tools/dr2rec.md) — o byte fica fora da janela `0x0000:0x2600`
