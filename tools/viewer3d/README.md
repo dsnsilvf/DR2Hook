@@ -45,7 +45,7 @@ Os mesmos do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview/web/
 | Ação | Entrada |
 | --- | --- |
 | Orbitar | botão esquerdo |
-| Pan | botão direito, ou Shift + esquerdo |
+| Pan | botão direito ou do meio, ou Shift + esquerdo |
 | Zoom | roda |
 | Andar | W A S D (Shift = ×3) |
 | Enquadrar | F (volta ao estado inicial) |

@@ -242,13 +242,18 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
         if (event.key.key == SDLK_F) cam.reset();
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT) {
+        if (event.button.button == SDL_BUTTON_LEFT) {
             drag.active = true;
-            drag.pan = event.button.button == SDL_BUTTON_RIGHT || (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+            drag.pan = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+        } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
+            drag.active = true;
+            drag.pan = true;
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT) drag.active = false;
+        if (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT ||
+            event.button.button == SDL_BUTTON_MIDDLE)
+            drag.active = false;
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (drag.active) {
