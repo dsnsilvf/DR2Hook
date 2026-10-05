@@ -1,0 +1,54 @@
+# DR2 Viewer3D
+
+Visualizador 3D nativo (C++20, SDL3, OpenGL 3.3 core) que vai abrir as pistas já exportadas pelo Python. Plano e etapas: [`docs/plans/viewer3d/`](../../docs/plans/viewer3d/README.md).
+
+## Dependências
+
+SDL3, GLEW, OpenGL e CMake ≥ 3.20 (Ninja opcional).
+
+| Sistema | Pacotes |
+| --- | --- |
+| CachyOS / Arch | `sdl3 glew` |
+| Ubuntu 24.04 | `libglew-dev libgl-dev`; o SDL3 não tem pacote: compile o fonte (`release-3.2.x` ou mais novo) e passe `-DCMAKE_PREFIX_PATH=<prefixo>` |
+
+## Compilar e rodar
+
+```bash
+cmake -S tools/viewer3d -B build/viewer3d -G Ninja
+cmake --build build/viewer3d
+./build/viewer3d/viewer3d                # janela; Esc ou fechar sai
+./build/viewer3d/viewer3d --frames 120   # roda 120 quadros, imprime "OK renderer=... gl=..." e sai com 0
+```
+
+Para usar a NVIDIA num notebook híbrido:
+
+```bash
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./build/viewer3d/viewer3d --frames 120
+```
+
+Se a janela não abrir em Wayland, tente `SDL_VIDEO_DRIVER=x11`.
+
+### Sem tela (CI, nuvem)
+
+Com Mesa (`libgl1-mesa-dri`) e Xvfb o contexto 3.3 core sai pelo llvmpipe, em software:
+
+```bash
+Xvfb :99 -screen 0 1600x900x24 &
+DISPLAY=:99 ./build/viewer3d/viewer3d --frames 120
+```
+
+## Opções
+
+| Opção | Efeito |
+| --- | --- |
+| `--frames N` | roda `N` quadros, imprime `OK renderer=<GL_RENDERER> gl=<GL_VERSION> frames=N` e sai com 0 |
+
+## Verificado
+
+| Etapa | Ambiente | Resultado |
+| --- | --- | --- |
+| 1 | Ubuntu 24.04, Xvfb, SDL 3.2.24, GLEW 2.2.0, Mesa 25.2.8 | `OK renderer=llvmpipe (LLVM 20.1.2, 256 bits) gl=4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.2 frames=120` |
+
+## Ideias
+
+(Fora do plano; anotar aqui e seguir.)
