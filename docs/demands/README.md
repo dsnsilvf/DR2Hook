@@ -7,8 +7,8 @@ Ideas people want from DR2Hook, kept apart from the reverse-engineering notes an
 | Demand | Status | Document |
 | --- | --- | --- |
 | Multiplayer through live ghost cars | Speculation, first experiment not run | [live-ghosts-multiplayer.md](live-ghosts-multiplayer.md) |
-| Map editor | Speculation, not started | [map-editor.md](map-editor.md) |
-| Vehicle editor / custom cars | Speculation, not started | [vehicle-editor.md](vehicle-editor.md) |
+| Map editor | Partly started: Track Explorer edits object placement offline; game acceptance untested | [map-editor.md](map-editor.md) |
+| Vehicle editor / custom cars | Speculation, not started (the Car Model Explorer reads car models) | [vehicle-editor.md](vehicle-editor.md) |
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
 
 ## How findings are labelled

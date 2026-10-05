@@ -142,6 +142,16 @@ A ordem dos quatro blocos é RL, RR, FL, FR. A captura documentada em `docs/reve
   - `dr2hook_core.dll` concentra overlay, telemetria, savestate e Lua.
   - `F8` copia o arquivo do disco para `dr2hook_core.N.dll`, descarrega o módulo anterior e carrega a cópia. O checkpoint em memória é descartado.
 
+- [x] **Fase 8: Menus nativos e ciclo de vida da especial** (depois da v0.1.0)
+  - Entrada **DR2 Hook** no menu de pausa e no menu principal, painel por opção, texto rico e configurações salvas por mod.
+  - Eventos `onStageLoad`, `onCountdown` e `onStageStart` no Lua; `Race.setStartMode`; `AutoStage` e `LoadTrace`.
+- [x] **Fase 9: Carros fantasma (GhostLab)** (depois da v0.1.0)
+  - Saves `GHST` e cifra decifrados (`tools/dr2save.py`, `tools/dr2ghost.py`), diferença ao vivo, cópias, fantasma sólido, pausa, até 15 fantasmas + jogador. Módulo Lua `Ghost`. Ver `docs/reverse_engineering/ghosts.md`.
+- [x] **Fase 10: Ferramentas de pesquisa e de assets** (depois da v0.1.0)
+  - Canal de comandos remoto, câmera livre (F9), dano terminal (F11), harness da física com o gate G3 aprovado.
+  - `tools/uiview/`: Car Model Explorer e Track Explorer / editor de pistas, com escrita de `.nefs` novo. Ver `docs/UIVIEW.md` e `docs/reverse_engineering/track_formats.md`.
+- [ ] **Pendente:** validar no jogo um `.nefs` de pista editado; decifrar a colisão (`.vcqtc`); reaplicar a restauração de velocidade no bloco de origem (`+0x2b0`/`+0x2c0`) e validar **With Momentum**; impor o `SafetyGuard` (hoje o core inicia em modo permissivo).
+
 ---
 
 ## 5. Registro de Decisões de Arquitetura (ADR)

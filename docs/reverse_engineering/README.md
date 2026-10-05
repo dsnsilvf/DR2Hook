@@ -30,7 +30,10 @@ Nome de string no executável não é variável localizada.
 - [UI Limits](ui_limits.md) — limites e capacidades da UI nativa: objetos, posições, behaviours, hot buttons, texto, diálogos e testes pendentes
 - [Câmera](camera.md) — dono, tick, olho em `+0x240`, base cima/direita/frente e a câmera livre do core (F9)
 - [Dano terminal](terminal_damage.md) — insta crash (F11), pausa e Reiniciar durante a destruição, o gate `host+0x2350` e o que fica preso depois
-- [Fantasmas](ghosts.md) — saves `GHST`, slots, cópias, `GhostCarValues`, a curva de 5–50 m e o descarte com fator 1,0 (fantasma sólido)
+- [Carregamento de especiais](stage_loading.md) — resolução de pistas, `BenchmarkManager`, hook do `AutoStage`, `LoadTrace`
+- [Travamentos da carga](loading_hangs.md) — usar uma carga travada como sonda do carregamento
+- [Formatos de pista](track_formats.md) — o que já foi decifrado em `locations/*.nefs` (terreno, objetos, árvores, ornamentos, traçado, JPAK) e o que falta; usado pelo Track Explorer ([../UIVIEW.md](../UIVIEW.md))
+- [Fantasmas](ghosts.md) — saves `GHST`, slots, cópias, `GhostCarValues`, a curva de 5–50 m, o descarte com fator 1,0 (fantasma sólido), colisão, pausa dos fantasmas e o máximo de 15 fantasmas + jogador
 
 `scripts/dr2rec` grava a sessão e analisa depois. O manual está em [../BLACKBOX.md](../BLACKBOX.md). O recorder não reinterpreta os bytes. As âncoras que eram as seções 10.14–10.18 entram na captura para comparação, e o analyzer não reabre o significado delas. O byte em `+0x2cf0` fica fora da janela `0x0000:0x2600`; para observá-lo, a região precisa cobrir esse offset. A ferramenta só lê. Não escreve no processo e não fala com a RaceNet.
 

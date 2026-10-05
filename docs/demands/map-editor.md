@@ -1,6 +1,10 @@
 # Map editor
 
-> **Speculation.** Not started. Nobody has checked whether the game accepts changed stage data.
+> **Partly started (2026-10-05).** The files are now read and the objects can be edited offline, but **nobody has checked whether the game accepts changed stage data.** The rest of this page is the original plan.
+
+## What exists now
+
+The **Track Explorer** ([docs/UIVIEW.md](../UIVIEW.md)) exports a stage from `locations/*.nefs` and shows terrain, objects, trees, ornaments, track limits, and the AI line. It can move, rotate, delete, and duplicate objects and write the result into a **new** `.nefs`. The formats are in [track_formats.md](../reverse_engineering/track_formats.md). Known gaps: stage collision (`track.jpk`) is not decoded and does not change; the edited package has not been tried in the game; creating new routes or editing terrain is not started.
 
 ## The idea
 

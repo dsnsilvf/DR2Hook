@@ -19,3 +19,10 @@ Nada foi acrescentado na repartição. Offsets, classificações e hipóteses re
 - [Telemetry](reverse_engineering/telemetry.md)
 - [Network Guard](reverse_engineering/network_guard.md)
 - [Executable](reverse_engineering/executable.md)
+- [Menu](reverse_engineering/menu.md), [UI Data](reverse_engineering/ui_data.md), [UI Tabs](reverse_engineering/ui_tabs.md), [UI Limits](reverse_engineering/ui_limits.md)
+- [Câmera](reverse_engineering/camera.md)
+- [Fantasmas](reverse_engineering/ghosts.md)
+- [Carregamento de especiais](reverse_engineering/stage_loading.md) e [travamentos da carga](reverse_engineering/loading_hangs.md)
+- [Formatos de pista](reverse_engineering/track_formats.md)
+
+Ferramentas que usam esse material: [UIVIEW.md](UIVIEW.md) (Car e Track Explorer) e [REMOTE_COMMANDS.md](REMOTE_COMMANDS.md) (canal de comandos).

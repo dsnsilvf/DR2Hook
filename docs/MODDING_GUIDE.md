@@ -1,4 +1,6 @@
-# Guia Oficial da API de Mods do DR2Hook v0.1.0
+# Guia Oficial da API de Mods do DR2Hook
+
+> Documenta a API da v0.1.0 e o que foi acrescentado depois dela (`onStageLoad`, `onCountdown`, `onStageStart`, `Race`, `Ghost`, `Menu.set` e `Menu.describe`). O pacote de release ainda se chama v0.1.0.
 
 Bem-vindo ao Guia Oficial de Desenvolvimento de Mods para o **DR2Hook v0.1.0** no *DiRT Rally 2.0*.
 
@@ -172,6 +174,19 @@ Permite inspecionar o status das travas de Fair Play antes de realizar qualquer 
   - `"automatic"`: larga sozinho assim que o carro está na linha.
   - `"on_throttle"`: larga ao pisar no acelerador.
   Os hooks ficam no core (recarregados pelo F8, que volta o modo para `"normal"`); retorna `false` fora do Windows.
+
+### Módulo `Ghost`
+Carros fantasma (GhostLab). Detalhes de como o jogo guarda e reproduz fantasmas: [ghosts.md](reverse_engineering/ghosts.md).
+
+| Função | Parâmetros | Retorno | Descrição |
+| :--- | :--- | :--- | :--- |
+| `Ghost.status()` | Nenhum | `table` | `{ active, slots, readySlots, lapSeconds, ghostSeconds, playerSeconds, delta, gapMeters, offTrackMeters }`. `delta` é a diferença de tempo para o fantasma (positivo = jogador atrás); `gapMeters`, a distância acumulada no trajeto. |
+| `Ghost.clone(count, spacing)` | `count` inteiro (`0` desliga), `spacing` em segundos (opcional, padrão `2.0`) | `nil` | Pede `count` cópias da volta do fantasma, espaçadas no tempo. O jogo recria os slots a cada especial: chame de novo em `onStageStart`. |
+| `Ghost.setOpaque(enabled)` | `boolean` | `nil` | Fantasma sólido em vez de translúcido. |
+| `Ghost.setTimeOffset(seconds)` | `number` | `nil` | Desloca o fantasma no tempo (vantagem ou atraso). |
+| `Ghost.setHud(enabled)` | `boolean` | `nil` | Mostra ou esconde a diferença ao vivo no topo da tela. |
+
+Cópias além das que o jogo cria sozinho dependem do arquivo `dr2hook_ghost_cars.txt` (ver [INSTALL.md](INSTALL.md)). O máximo estável é **15 fantasmas + o jogador**.
 
 ### Módulo `UI`
 Permite emitir mensagens e avisos visuais na tela através do sistema de notificações HUD do Dear ImGui.
