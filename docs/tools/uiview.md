@@ -18,6 +18,9 @@ Requirements: Python 3, the game installed (the path comes from `tools.egodata.c
 # UI screens, images and car models (default output: build/uiview)
 python -m tools.uiview [--game PASTA] [-o SAIDA] [--models 037] [--all-models] [--open]
 
+# only the mesh and textures of some car models (no game screens)
+python -m tools.uiview.car --models 037 -o build/uiview
+
 # export one or more stages (empty --tracks only re-indexes)
 python -m tools.uiview.track --tracks montalegre,poland_rally_01 -o build/uiview
 
@@ -29,6 +32,7 @@ python -m tools.uiview.track.edit montalegre.edits.json -o build/uiview/saves/mo
 ```
 
 Tests: `bash scripts/dev/test_tools.sh` (or `python3 -m unittest discover -s tools/uiview/tests -t .`).
+The web page has no unit tests: `python3 scripts/dev/web_smoke.py` loads it in a headless browser and fails on any JavaScript error. `python3 scripts/dev/golden_export.py <dir>` prints a hash per exported file, to prove that a refactor did not change the exporters' output.
 
 ## Layout
 

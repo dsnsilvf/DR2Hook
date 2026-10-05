@@ -6,6 +6,7 @@
 | [`architecture/`](architecture/) | Como o loader funciona por dentro: [exports do `dxgi.dll`](architecture/dxgi_exports.md), [harness do tick de física](architecture/physics_tick_harness.md) e a [decisão sobre savestate](architecture/adr_savestate_safety.md) |
 | [`tools/`](tools/) | Ferramentas fora do jogo: [`dr2rec`](tools/dr2rec.md) (caixa-preta de sessão) e [DR2 UI Viewer](tools/uiview.md) (Car e Track Explorer) |
 | [`reverse_engineering/`](reverse_engineering/README.md) | Engenharia reversa por subsistema, com grau de evidência em cada afirmação, e as investigações em `investigations/` |
+| [`plans/`](plans/README.md) | Planos de execução para outra IA ou pessoa: refatorar o Python em camadas, modularizar o web, documentar cada ferramenta e construir o [viewer 3D nativo](plans/viewer3d/README.md) em 7 etapas |
 | [`demands/`](demands/README.md) | Ideias ainda não iniciadas (multiplayer com fantasmas, editores). Tudo ali é especulação |
 
 Fora desta pasta: o [`README.md`](../README.md) da raiz (visão geral e roadmap) e o [`SSOT.md`](../SSOT.md) (especificação e estado das fases).

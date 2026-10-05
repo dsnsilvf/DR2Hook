@@ -43,7 +43,7 @@ This is the core of DR2Hook. Findings are split by subsystem and carry confidenc
 | **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
 | **`pssg`** (`tools/egodata/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
 | **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
-| `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
+| `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`, `test_tools.sh`, `web_smoke.py`, `golden_export.py`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
 
 Physics tick harness switches (environment variable or INI key):
 
@@ -205,6 +205,7 @@ During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtral
 | `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
 | `docs/` | [Index](docs/README.md): `guides/` (install, Lua mods, remote commands), `architecture/`, `tools/` (dr2rec, UI Viewer) |
 | `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
+| `docs/plans/` | Execution plans written for another person or AI: layered Python tools, modular web viewer, per-tool docs, and the [native 3D viewer](docs/plans/viewer3d/README.md) in 7 stages |
 | `tools/dr2rec/`, `tools/egodata/` (NEFS, BXML, PSSG), `tools/dr2save.py`, `tools/dr2ghost.py` | Offline research tools (Python) |
 | `tools/uiview/` | DR2 UI Viewer: `car/` (Car Model Explorer), `track/` (Track Explorer export and `.nefs` edit), `serve.py`, `web/` (HTML, `js/`, `css/`) |
 | `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
@@ -282,6 +283,10 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 - Re-validate **With Momentum** on the origin block.
 - Enforce `SafetyGuard` with a real offline/online signal (proposed INV-02).
 - Native desktop viewer for the asset tools (SDL3 + OpenGL), reading the files the Python exporter already writes, so large stages do not depend on the browser.
+
+### Planned, with a written plan
+
+A native (SDL3 + OpenGL) 3D viewer/editor for stages, in 7 small stages that read what the Python exporters already write: [docs/plans/viewer3d](docs/plans/viewer3d/README.md). Not started. The same folder has the plans for splitting the Python tools into layers and the web viewer into modules ([docs/plans](docs/plans/README.md)).
 
 ### Ideas under study (speculation, no promises)
 
