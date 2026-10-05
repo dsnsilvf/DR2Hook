@@ -2,6 +2,7 @@
 #include "dr2hook/logger.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #if defined(_WIN32)
@@ -11,23 +12,36 @@ namespace dr2hook {
 namespace {
 
 constexpr uintptr_t kImageBase = 0x140000000;
-// `mov edx,0x16c0` antes da alocação (0x140390661, construtor da aplicação) e
-// no delete do destrutor (0x1404694e9, `operator delete(p, 0x16c0)`).
-constexpr uintptr_t kAllocSizeVa = 0x140390661;
-constexpr uintptr_t kDeleteSizeVa = 0x1404694e9;
-constexpr uint32_t kNewSize = 0x1900;
 
-int g_result = 0; // 0 = não tentado, 1 = ok, -1 = bytes diferentes
+// `mov edx,<tamanho>` antes da alocação de objetos com arrays por carro de 16
+// posições; o core põe arrays de 24 no espaço extra (ghost_lab.cpp).
+struct SizePatch {
+  uintptr_t va;
+  uint32_t from;
+  uint32_t to;
+  const char *name;
+  const char *env; // avisa o core que o objeto nasce ampliado
+};
+constexpr SizePatch kPatches[] = {
+    // VEHICLE_SYSTEM (construtor da aplicação) e o delete do destrutor.
+    {0x140390661, 0x16c0, 0x1900, "VEHICLE_SYSTEM", "DR2HOOK_VEHSYS_SIZE"},
+    {0x1404694e9, 0x16c0, 0x1900, "VEHICLE_SYSTEM (delete)", nullptr},
+    // Pilotos/animações internas (0x140b46bc0): + 24 parâmetros de 0x68.
+    {0x140b93e82, 0xb180, 0xbb40, "pilotos", "DR2HOOK_DRIVERSYS_SIZE"},
+};
+constexpr size_t kPatchCount = sizeof(kPatches) / sizeof(kPatches[0]);
+int g_result[kPatchCount] = {}; // 0 = não tentado, 1 = ok, -1 = bytes diferentes
 
-bool PatchImm(uintptr_t base, uintptr_t va) {
-  uint8_t *p = reinterpret_cast<uint8_t *>(base + (va - kImageBase));
-  const uint8_t expected[] = {0xba, 0xc0, 0x16, 0x00, 0x00}; // mov edx,0x16c0
-  if (std::memcmp(p, expected, sizeof(expected)) != 0) return false;
+bool PatchImm(uintptr_t base, const SizePatch &p) {
+  uint8_t *at = reinterpret_cast<uint8_t *>(base + (p.va - kImageBase));
+  uint8_t expected[5] = {0xba}; // mov edx,imm32
+  std::memcpy(expected + 1, &p.from, 4);
+  if (std::memcmp(at, expected, sizeof(expected)) != 0) return false;
   DWORD old = 0;
-  if (!VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
-  std::memcpy(p + 1, &kNewSize, 4);
-  FlushInstructionCache(GetCurrentProcess(), p, 5);
-  VirtualProtect(p, 5, old, &old);
+  if (!VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
+  std::memcpy(at + 1, &p.to, 4);
+  FlushInstructionCache(GetCurrentProcess(), at, 5);
+  VirtualProtect(at, 5, old, &old);
   return true;
 }
 
@@ -36,21 +50,29 @@ bool PatchImm(uintptr_t base, uintptr_t va) {
 bool InstallVehicleSystemSizePatch() {
   const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
   if (base == 0) return false;
-  const bool alloc = PatchImm(base, kAllocSizeVa);
-  if (alloc) {
-    PatchImm(base, kDeleteSizeVa); // o delete com tamanho: só informativo
-    // O core confere isto antes de usar o espaço extra.
-    SetEnvironmentVariableA("DR2HOOK_VEHSYS_SIZE", "0x1900");
+  bool any = false;
+  for (size_t i = 0; i < kPatchCount; ++i) {
+    const bool ok = PatchImm(base, kPatches[i]);
+    g_result[i] = ok ? 1 : -1;
+    if (ok && kPatches[i].env != nullptr) SetEnvironmentVariableA(kPatches[i].env, "1");
+    any = any || ok;
   }
-  g_result = alloc ? 1 : -1;
-  return alloc;
+  return any;
 }
 
 void LogVehicleSystemSizePatch() {
-  if (g_result == 1) {
-    Logger::Info("VehicleSystem: alocacao ampliada para 0x1900 bytes.");
-  } else if (g_result == -1) {
-    Logger::Warn("VehicleSystem: bytes da alocacao diferentes do esperado; sem ampliacao.");
+  for (size_t i = 0; i < kPatchCount; ++i) {
+    char msg[160];
+    if (g_result[i] == 1) {
+      std::snprintf(msg, sizeof(msg), "VehicleSystem: alocacao de %s ampliada de 0x%x para 0x%x.",
+                    kPatches[i].name, kPatches[i].from, kPatches[i].to);
+      Logger::Info(msg);
+    } else if (g_result[i] == -1) {
+      std::snprintf(msg, sizeof(msg),
+                    "VehicleSystem: bytes da alocacao de %s diferentes do esperado; sem ampliacao.",
+                    kPatches[i].name);
+      Logger::Warn(msg);
+    }
   }
 }
 

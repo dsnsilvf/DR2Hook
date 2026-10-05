@@ -1806,6 +1806,81 @@ void PatchVehicleSystemSlots() {
        "VehicleSystemCtor");
 }
 
+// ---- Mais de 15 fantasmas: parametros de animacao dos pilotos ----
+// O objeto de pilotos/animacoes internas ([0x14159dad0], construtor 0x140b46bc0, 0xb180
+// bytes) tem 16 parametros de 0x68 bytes por veiculo em +0x300; 0x140b5a770 pega
+// `obj+0x300+vehicleIndex*0x68` sem checar, e o veiculo 16 escreve sobre o vetor em +0x980
+// (crash exe+0xb4f930). A dxgi.dll amplia o objeto para 0xbb40; o array de 24 fica em
+// +0xb180 (os 16 copiados + 8 com os valores do construtor) e o `lea r12,[rcx+0x300]`
+// passa a +0xb180. O construtor so inicializa os 16 (seu laco tambem da a capacidade 16
+// do vetor embutido em +0x980, entao nao e ampliado).
+constexpr uintptr_t kDriverSystemGlobalVa = 0x14159dad0;
+constexpr uintptr_t kDriverSystemCtorRva = 0x140b46bc0 - kImageBase;
+constexpr uint8_t kDriverSystemCtorPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
+                                                 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57};
+constexpr uintptr_t kDriverParamsLeaVa = 0x140b5a798; // disp de lea r12,[rcx+0x300]
+constexpr size_t kDriverParamsOld = 0x300;
+constexpr size_t kDriverParamsNew = 0xb180;
+constexpr size_t kDriverParamSize = 0x68;
+// Valores do construtor (0x140b46d11..0x140b46dbc), 26 floats por veiculo.
+constexpr uint32_t kDriverParamDefaults[26] = {
+    0,          0x3e99999a, 0x3e99999a, 0x3f333333, 0x3ecccccd, 0x3f333333, 0x3ecccccd,
+    0x3f333333, 0x3ecccccd, 0x3d4ccccd, 0x3d4ccccd, 0x3d4ccccd, 0x3d4ccccd, 0x3d4ccccd,
+    0x3d4ccccd, 0x3d4ccccd, 0x3d4ccccd, 0x3c23d70a, 0x3dcccccd, 0x3dcccccd, 0x3dcccccd,
+    0x3dcccccd, 0x3dcccccd, 0x3dcccccd, 0x3dcccccd, 0x3dcccccd};
+static_assert(sizeof(kDriverParamDefaults) == kDriverParamSize, "parametro de piloto");
+
+void *g_driverCtorTarget = nullptr;
+using DriverCtorFn = void *(*)(void *, void *, void *, void *, void *, void *);
+DriverCtorFn g_originalDriverCtor = nullptr;
+
+void ApplyDriverParams(uint8_t *ds) {
+  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) != 0) return;
+  uint32_t disp = 0;
+  std::memcpy(&disp, GameVa(kDriverParamsLeaVa), 4);
+  if (disp != kDriverParamsOld) {
+    Logger::Warn("GhostLab[pilotos]: lea dos parametros diferente do esperado; nada trocado.");
+    return;
+  }
+  std::memcpy(ds + kDriverParamsNew, ds + kDriverParamsOld, 16 * kDriverParamSize);
+  for (int i = 16; i < kCarSlots; ++i) {
+    std::memcpy(ds + kDriverParamsNew + i * kDriverParamSize, kDriverParamDefaults, kDriverParamSize);
+  }
+  const uint32_t to = kDriverParamsNew;
+  const bool ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(kDriverParamsLeaVa)),
+                             reinterpret_cast<const uint8_t *>(&to), 4);
+  SetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", "1");
+  char msg[160];
+  std::snprintf(msg, sizeof(msg), "GhostLab[pilotos]: objeto %p com %d parametros por veiculo (%s).",
+                static_cast<void *>(ds), kCarSlots, ok ? "ok" : "FALHOU");
+  Logger::Info(msg);
+}
+
+void *DetourDriverCtor(void *self, void *a, void *b, void *c, void *d, void *e) {
+  void *result = g_originalDriverCtor(self, a, b, c, d, e);
+  if (g_vehicleSlotsWanted && result != nullptr) ApplyDriverParams(static_cast<uint8_t *>(result));
+  return result;
+}
+
+void PatchDriverParams() {
+  if (!g_vehicleSlotsWanted) return; // so junto com o VEHICLE_SYSTEM ampliado
+  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SLOTS", nullptr, 0) != 0) return;
+  if (GetEnvironmentVariableA("DR2HOOK_DRIVERSYS_SIZE", nullptr, 0) == 0) {
+    Logger::Warn("GhostLab[pilotos]: dxgi.dll sem a ampliacao do objeto de pilotos; "
+                 "atualize a dxgi.dll e reabra o jogo.");
+    return;
+  }
+  auto *ds = *reinterpret_cast<uint8_t **>(GameVa(kDriverSystemGlobalVa));
+  if (ds != nullptr) {
+    ApplyDriverParams(ds);
+    return;
+  }
+  Logger::Info("GhostLab[pilotos]: objeto ainda nao existe; esperando o construtor.");
+  Hook(kDriverSystemCtorRva, kDriverSystemCtorPrologue, sizeof(kDriverSystemCtorPrologue),
+       reinterpret_cast<void *>(&DetourDriverCtor), reinterpret_cast<void **>(&g_originalDriverCtor),
+       &g_driverCtorTarget, "DriverSystemCtor");
+}
+
 #endif
 
 } // namespace
@@ -1821,6 +1896,7 @@ bool GhostLab::Install(uintptr_t gameBase) {
   }
   PatchRenderObjectArray(); // so com dr2hook_ghost_cars.txt >= 16
   PatchVehicleSystemSlots(); // idem; precisa da dxgi.dll que amplia o VEHICLE_SYSTEM
+  PatchDriverParams();       // idem, objeto de pilotos
   const bool evaluate =
       Hook(kEvaluateRva, kEvaluatePrologue, sizeof(kEvaluatePrologue),
            reinterpret_cast<void *>(&DetourEvaluate),
@@ -1876,7 +1952,7 @@ void GhostLab::Shutdown() {
   SetFillTarget(5); // sem o hook, o enchimento ate N estouraria o vetor de 5
   for (void *target : {g_evaluateTarget, g_makeGhostTarget, g_packTarget,
                        g_submitTarget, g_bodySleepTarget, g_spawnTarget, g_addEntryTarget,
-                       g_vehicleCtorTarget}) {
+                       g_vehicleCtorTarget, g_driverCtorTarget}) {
     if (target != nullptr) MH_DisableHook(target);
   }
   if (g_crashHandler != nullptr) {
@@ -1888,7 +1964,7 @@ void GhostLab::Shutdown() {
   }
   for (void **target : {&g_evaluateTarget, &g_makeGhostTarget, &g_packTarget,
                         &g_submitTarget, &g_bodySleepTarget, &g_spawnTarget, &g_addEntryTarget,
-                        &g_vehicleCtorTarget}) {
+                        &g_vehicleCtorTarget, &g_driverCtorTarget}) {
     if (*target != nullptr) {
       MH_RemoveHook(*target);
       *target = nullptr;
