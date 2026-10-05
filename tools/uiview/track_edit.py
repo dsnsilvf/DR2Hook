@@ -55,35 +55,70 @@ def ens_spans(text: str) -> list[tuple[int, int]]:
     return out
 
 
+ADDED = 0x80000000  # `idnum` de uma instância criada no viewer: ADDED + índice da instância copiada
+_ATTR = {n: re.compile(r'(\b%s=")([^"]*)(")' % n) for n in ("id", "instanceID", "instance_tag")}
+
+
+def _clone(chunk: str, k: int, ids: dict[str, int], matrix: list[float]) -> str:
+    """Cópia de uma instância com id, instanceID e instance_tag novos e a matriz dada."""
+    head, rest = chunk.split(">", 1)
+    head = _ATTR["id"].sub(lambda m: m.group(1) + m.group(2) + "_dup%d" % k + m.group(3), head, 1)
+    for name in ("instanceID", "instance_tag"):
+        head = _ATTR[name].sub(lambda m, n=name: m.group(1) + str(ids[n] + k) + m.group(3), head, 1)
+    tr = _TRANSFORM.search(rest)
+    old = [float(v) for v in tr.group(2).split()]
+    m = matrix
+    new = [m[0], m[1], m[2], old[3], m[3], m[4], m[5], old[7], m[6], m[7], m[8], old[11], m[9], m[10], m[11], old[15]]
+    return head + ">" + rest[: tr.start(2)] + " ".join(_fmt(v) for v in new) + " " + rest[tr.end(2):]
+
+
 def edit_ens(data: bytes, edits: list[dict[str, Any]]) -> bytes:
     text = data.decode("utf-8")
     spans = ens_spans(text)
-    by_index = {e["index"]: e for e in edits}
-    bad = [i for i in by_index if not 0 <= i < len(spans)]
+    by_index = {e["index"]: e for e in edits if not e.get("added")}
+    added: dict[int, list[dict[str, Any]]] = {}
+    for e in edits:
+        if e.get("added"):
+            added.setdefault(e["src"], []).append(e)
+    bad = [i for i in [*by_index, *added] if not 0 <= i < len(spans)]
     if bad:
         raise ValueError(f"objects.ens tem {len(spans)} instâncias; índice fora do arquivo: {bad[:5]}")
+    ids = {}
+    for name in ("instanceID", "instance_tag"):
+        vals = [int(v) for v in re.findall(r'\b%s="(\d+)"' % name, text)]
+        ids[name] = max(vals, default=0) + 1
     out: list[str] = []
     pos = 0
+    k = 0
     for n, (a, b) in enumerate(spans):
         e = by_index.get(n)
-        if e is None:
+        if e is None and n not in added:
             continue
         out.append(text[pos:a])
         pos = b
-        if e["deleted"]:
-            continue
         chunk = text[a:b]
-        tr = _TRANSFORM.search(chunk)
-        old = [float(v) for v in tr.group(2).split()]
-        m = e["m"]
-        new = [m[0], m[1], m[2], old[3], m[3], m[4], m[5], old[7], m[6], m[7], m[8], old[11], m[9], m[10], m[11], old[15]]
-        out.append(chunk[: tr.start(2)] + " ".join(_fmt(v) for v in new) + " " + chunk[tr.end(2):])
+        if e is None:
+            out.append(chunk)
+        elif not e["deleted"]:
+            out.append(_retransform(chunk, e["m"]))
+        for c in added.get(n, []):
+            if c.get("deleted"):
+                continue
+            out.append("\n\t\t" + _clone(chunk, k, ids, c["m"]))
+            k += 1
     out.append(text[pos:])
     result = "".join(out).encode("utf-8")
-    # completa com espaços: o arquivo não pode encolher para menos blocos de 64 KiB
     if len(result) < len(data):
+        # completa com espaços: o arquivo não pode encolher para menos blocos de 64 KiB
         result += b" " * (len(data) - len(result))
     return result
+
+
+def _retransform(chunk: str, m: list[float]) -> str:
+    tr = _TRANSFORM.search(chunk)
+    old = [float(v) for v in tr.group(2).split()]
+    new = [m[0], m[1], m[2], old[3], m[3], m[4], m[5], old[7], m[6], m[7], m[8], old[11], m[9], m[10], m[11], old[15]]
+    return chunk[: tr.start(2)] + " ".join(_fmt(v) for v in new) + " " + chunk[tr.end(2):]
 
 
 def edit_bin(data: bytes, edits: list[dict[str, Any]], layout: tuple) -> bytes:
@@ -92,6 +127,8 @@ def edit_bin(data: bytes, edits: list[dict[str, Any]], layout: tuple) -> bytes:
     count = struct.unpack_from("<I", data, count_at)[0]
     buf = bytearray(data)
     for e in edits:
+        if e.get("added"):
+            raise ValueError("duplicar só vale para objetos de objects.ens (ornamentos e árvores têm contagem fixa)")
         i = e["index"]
         if not 0 <= i < count:
             raise ValueError(f"registro {i} fora do arquivo ({count} registros)")

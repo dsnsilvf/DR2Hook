@@ -62,6 +62,21 @@ class TrackTests(unittest.TestCase):
         self.assertEqual(got[0]["m"][12:15], [11, 22, 33])
         self.assertEqual(got[0]["m"][15], 1)
 
+    def test_edit_ens_duplicates_instance(self):
+        edits = [{"index": -1, "added": True, "src": 1, "deleted": False, "m": ID12 + [5, 6, 7]},
+                 {"index": -1, "added": True, "src": 1, "deleted": True, "m": ID12 + [0, 0, 0]}]
+        data = track_edit.edit_ens(ENS.encode(), edits)
+        got = track.instances(data)
+        self.assertEqual(len(got), 4)
+        self.assertEqual(got[2]["m"][12:15], [5, 6, 7])
+        self.assertTrue(got[2]["id"].startswith(got[1]["id"] + "_dup"))
+        self.assertEqual([i["type"] for i in got][1:3], [got[1]["type"]] * 2)
+
+    def test_edit_bin_rejects_duplicate(self):
+        data = packed(1, 96, 72, 60, 48, 8, 44, [(1, 2, 3)])
+        with self.assertRaises(ValueError):
+            track_edit.edit_bin(data, [{"index": -1, "added": True, "src": 0, "deleted": False, "m": ID12 + [0, 0, 0]}], track_edit.BIN_LAYOUT["t"])
+
     def test_edit_ens_rejects_index_outside_file(self):
         with self.assertRaises(ValueError):
             track_edit.edit_ens(ENS.encode(), [{"index": 9, "deleted": False, "m": ID12 + [0, 0, 0]}])

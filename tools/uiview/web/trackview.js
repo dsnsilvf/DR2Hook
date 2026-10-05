@@ -597,8 +597,13 @@ function tvEditList() {
       const o = i * 12;
       let moved = false;
       for (let k = 0; k < 12 && !moved; k++) if (inst.m[o + k] !== inst.m0[o + k]) moved = true;
-      if (!moved && !inst.hidden[i]) continue;
       const name = tv.data.type_order[inst.type[i]];
+      if (inst.idnum[i] >= TV_ADDED) {
+        if (inst.hidden[i]) continue;
+        out.push({ route, kind: name[0], type: name.slice(2), added: true, src: inst.idnum[i] - TV_ADDED, index: -1, deleted: false, m: [...inst.m.slice(o, o + 12)], m0: [...inst.m0.slice(o, o + 12)] });
+        continue;
+      }
+      if (!moved && !inst.hidden[i]) continue;
       out.push({ route, kind: name[0], type: name.slice(2), index: inst.idnum[i], deleted: !!inst.hidden[i], m: [...inst.m.slice(o, o + 12)], m0: [...inst.m0.slice(o, o + 12)] });
     }
   }
@@ -609,11 +614,26 @@ function tvEdited() {
   const u = document.getElementById("trk-undo"), r = document.getElementById("trk-redo"), x = document.getElementById("trk-export");
   if (u) u.disabled = !tv.inst || tv.inst.histPos <= 0;
   if (r) r.disabled = !tv.inst || tv.inst.histPos >= tv.inst.hist.length;
+  const sv = document.getElementById("trk-save");
+  if (sv) sv.disabled = !tv.cache.size || [...tv.cache.values()].every((i) => !i.histPos && !i.hist.length);
   if (x) x.disabled = !tv.cache.size || [...tv.cache.values()].every((i) => !i.histPos && !i.hist.length);
 }
+const tvDoc = () => ({ format: "dr2-track-edits", version: 1, track: tv.id, src: (TRACKS.find((r) => r.id === tv.id) || {}).src, edits: tvEditList() });
+// grava um .nefs novo em build/uiview/saves pelo servidor local; sem servidor, cai no download do JSON
+async function tvSave() {
+  const note = document.getElementById("trk-note");
+  note.textContent = t("trk.saving");
+  try {
+    const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tvDoc()) });
+    const j = await r.json();
+    note.textContent = r.ok ? t("trk.saved", { path: j.path }) : String(j.error || r.status);
+  } catch (err) {
+    tvExport();
+    note.textContent = t("trk.nosave");
+  }
+}
 function tvExport() {
-  const edits = tvEditList();
-  const blob = new Blob([JSON.stringify({ format: "dr2-track-edits", version: 1, track: tv.id, src: (TRACKS.find((r) => r.id === tv.id) || {}).src, edits }, null, 1)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(tvDoc(), null, 1)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `${tv.id}.edits.json`;
@@ -631,6 +651,27 @@ function tvSpin(m, base, o, th) {
   }
 }
 
+// duplicar: a cópia entra no fim das matrizes e vai para o arquivo como instância nova (só objects.ens)
+const TV_ADDED = 0x80000000;
+function tvDuplicateSel() {
+  const inst = tv.inst, s0 = tv.sel;
+  if (s0 < 0 || tv.typeList[inst.type[s0]].name[0] !== "e") return;
+  const n = inst.n;
+  const type = new Uint16Array(n + 1), idnum = new Uint32Array(n + 1), m = new Float32Array((n + 1) * 12), m0 = new Float32Array((n + 1) * 12), hidden = new Uint8Array(n + 1);
+  type.set(inst.type); idnum.set(inst.idnum); m.set(inst.m); m0.set(inst.m0); hidden.set(inst.hidden);
+  type[n] = inst.type[s0];
+  idnum[n] = (inst.idnum[s0] >= TV_ADDED ? inst.idnum[s0] : TV_ADDED + inst.idnum[s0]);
+  m.set(inst.m.subarray(s0 * 12, s0 * 12 + 12), n * 12);
+  m[n * 12 + 9] += 2;
+  m0.set(m.subarray(n * 12, n * 12 + 12), n * 12);
+  hidden[n] = 1;
+  Object.assign(inst, { n: n + 1, type, idnum, m, m0, hidden });
+  tvGroups();
+  const before = tvSnap([n]);
+  inst.hidden[n] = 0; tv.visKey = "";
+  tvCommit(t("trk.hist.duplicate"), before, tvSnap([n]));
+  tvSelect(n);
+}
 function tvDeleteSel() {
   if (tv.sel < 0) return;
   const before = tvSnap([tv.sel]);
@@ -710,6 +751,7 @@ function tvInspect() {
     <div class="trk-edit">
       <button type="button" data-trk-turn="-15">-15°</button><button type="button" data-trk-turn="15">+15°</button>
       <button type="button" data-trk-turn="-90">-90°</button><button type="button" data-trk-turn="90">+90°</button>
+      ${f.ty.name[0] === "e" ? `<button type="button" data-trk-act="duplicate">${esc(t("trk.duplicate"))}</button>` : ""}
       <button type="button" data-trk-act="delete">${esc(t("trk.delete"))}</button>
       <button type="button" data-trk-act="restore">${esc(t("trk.restore"))}</button>
     </div>
@@ -757,6 +799,7 @@ function ensureTrackStage() {
       ${[["orbit", "trk.tool.orbit"], ["move", "trk.tool.move"], ["rotate", "trk.tool.rotate"]].map(([k, key]) => `<button type="button" class="tb-btn trk-tool${tv.tool === k ? " on" : ""}" data-trk-tool="${k}" title="${esc(t(key))}" aria-label="${esc(t(key))}">${carIco(k)}</button>`).join("")}
       <button type="button" class="tb-btn" id="trk-undo" title="${esc(t("car.undo"))}" aria-label="${esc(t("car.undo"))}" disabled>${carIco("undo")}</button>
       <button type="button" class="tb-btn" id="trk-redo" title="${esc(t("car.redo"))}" aria-label="${esc(t("car.redo"))}" disabled>${carIco("redo")}</button>
+      <button type="button" class="tb-btn" id="trk-save" title="${esc(t("trk.save"))}" disabled>${esc(t("trk.save"))}</button>
       <button type="button" class="tb-btn" id="trk-export" title="${esc(t("trk.export"))}" disabled>${esc(t("trk.export"))}</button>
     </div>
     <div class="trk-vp"><canvas class="gl" id="trk-view"></canvas></div>
@@ -769,6 +812,7 @@ function ensureTrackStage() {
   document.getElementById("trk-undo").addEventListener("click", tvUndo);
   document.getElementById("trk-redo").addEventListener("click", tvRedo);
   document.getElementById("trk-export").addEventListener("click", tvExport);
+  document.getElementById("trk-save").addEventListener("click", tvSave);
   document.getElementById("trk-frame").addEventListener("click", () => { if (tv.data) tvFrameRoute(); });
   contentEl.querySelectorAll("[data-trk]").forEach((c) => c.addEventListener("change", () => { tv[c.dataset.trk] = c.checked; }));
   try { tvGL(); } catch (err) { document.getElementById("trk-note").textContent = String((err && err.message) || err); }
@@ -801,6 +845,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     if (k === "z") { e.preventDefault(); if (e.shiftKey) tvRedo(); else tvUndo(); }
     else if (k === "y") { e.preventDefault(); tvRedo(); }
+    else if (k === "d") { e.preventDefault(); tvDuplicateSel(); }
     return;
   }
   if (k === "1") tvTool("orbit");
@@ -821,7 +866,7 @@ inspectEl.addEventListener("click", (e) => {
   const turn = e.target.closest("[data-trk-turn]");
   if (turn) { tvTurnSel(Number(turn.dataset.trkTurn)); return; }
   const act = e.target.closest("[data-trk-act]");
-  if (act) { if (act.dataset.trkAct === "delete") tvDeleteSel(); else tvRestoreSel(); }
+  if (act) { if (act.dataset.trkAct === "delete") tvDeleteSel(); else if (act.dataset.trkAct === "duplicate") tvDuplicateSel(); else tvRestoreSel(); }
 });
 inspectEl.addEventListener("change", (e) => {
   if (state.mode !== "tracks") return;
