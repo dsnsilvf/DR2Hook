@@ -780,8 +780,41 @@ bool ApplyCloneFreeze(uint8_t *owner, uint64_t *time) {
   return f.active;
 }
 
+int WantedGhostCars(); // definido mais abaixo (arquivo de teste)
+
+// Clones prontos sem F7: com dr2hook_ghost_cars.txt (N carros), assim que o
+// fantasma original esta pronto, copia a volta para os slots vazios (ate N-1
+// clones, 1 s de espacamento ou o ultimo do F7). Como o Reiniciar apaga as
+// copias, confere de novo a cada 0,5 s. So na thread do jogo.
+void AutoClones() {
+  static uint64_t lastCheck = 0;
+  const uint64_t now = GetTickCount64();
+  if (now - lastCheck < 500) return;
+  lastCheck = now;
+  const int wanted = WantedGhostCars();
+  if (wanted < 2) return;
+  const std::vector<uint8_t *> slots = CollectSlots();
+  int ready = 0, empty = 0, existing = 0;
+  for (uint8_t *slot : slots) {
+    if (!IsReady(slot)) {
+      ++empty;
+      continue;
+    }
+    ++ready;
+    if (IsClone(slot)) ++existing;
+  }
+  if (ready == 0 || empty == 0) return;
+  const int need = std::min({wanted - 1, static_cast<int>(slots.size()) - 1, existing + empty});
+  if (existing >= need) return;
+  const int stepMs = g_cloneStepMs.load();
+  Logger::Info("GhostLab[auto]: clones prontos sem F7 (existem " + std::to_string(existing) +
+               ", faltam " + std::to_string(need - existing) + ").");
+  ApplyClones(need, stepMs > 0 ? stepMs : 1000);
+}
+
 int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   InFlight guard;
+  AutoClones();
   const int pending = g_cloneCount.exchange(-1);
   if (pending >= 0) ApplyClones(pending, g_cloneStepMs.load());
   if (g_spawnPending.exchange(false)) {
