@@ -707,23 +707,6 @@ uint64_t EncodeTime(double seconds) {
   return static_cast<uint64_t>(seconds * 1e6) ^ TimeKey();
 }
 
-// Clone pausavel: copia conhecida (IsClone) ou, sem F7/ApplyClones (clones
-// do hook de AddGhostEntry), slot pronto com a mesma volta do 1o slot pronto
-// (a referencia) que nao e a propria referencia. Sem efeito colateral.
-bool IsPausableClone(const uint8_t *slot) {
-  if (IsClone(slot)) return true;
-  const std::vector<uint8_t *> slots = CollectSlots();
-  const uint8_t *reference = nullptr;
-  for (const uint8_t *s : slots) {
-    if (!IsReady(s)) continue;
-    if (reference == nullptr || s == g_source) reference = s;
-  }
-  if (reference == nullptr || slot == reference) return false;
-  LapKey a{}, b{};
-  uint32_t ta = 0, tb = 0;
-  return KeyOf(reference, a, ta) && KeyOf(slot, b, tb) && a == b;
-}
-
 // Reescreve o tempo de um clone antes de EvaluateGhostState. Devolve true se o
 // clone esta congelado (a velocidade da saida deve ser zerada).
 bool ApplyCloneFreeze(uint8_t *owner, uint64_t *time) {
@@ -753,7 +736,7 @@ bool ApplyCloneFreeze(uint8_t *owner, uint64_t *time) {
     f.frozenEff = now - f.accum;
     f.pauseNow = now;
     std::snprintf(note, sizeof(note),
-                  "GhostLab[pausa]: clones PAUSADOS (relogio %.3f, tempo do clone %.3f, acumulado %.3f).",
+                  "GhostLab[pausa]: fantasmas PAUSADOS (relogio %.3f, tempo do clone %.3f, acumulado %.3f).",
                   now, f.frozenEff, f.accum);
     Logger::Info(note);
     if (GhostTrace::Enabled()) GhostTrace::Note(note);
@@ -761,7 +744,7 @@ bool ApplyCloneFreeze(uint8_t *owner, uint64_t *time) {
     f.accum += now - f.pauseNow;
     f.active = false;
     std::snprintf(note, sizeof(note),
-                  "GhostLab[pausa]: clones RETOMADOS (relogio %.3f, pausa de %.3f s, acumulado %.3f).",
+                  "GhostLab[pausa]: fantasmas RETOMADOS (relogio %.3f, pausa de %.3f s, acumulado %.3f).",
                   now, now - f.pauseNow, f.accum);
     Logger::Info(note);
     if (GhostTrace::Enabled()) GhostTrace::Note(note);
@@ -847,7 +830,7 @@ int DetourEvaluate(uint8_t *owner, void *time, void *arg, uint8_t *out) {
   bool frozenClone = false;
   if (time != nullptr && (g_clonePaused.load() || g_freeze.active || g_freeze.accum != 0.0)) {
     const uint8_t *cloneSlot = Read<const uint8_t *>(owner, kOwnerSlot);
-    if (cloneSlot != nullptr && IsPausableClone(cloneSlot)) {
+    if (cloneSlot != nullptr) {
       frozenClone = ApplyCloneFreeze(owner, static_cast<uint64_t *>(time));
     }
   }

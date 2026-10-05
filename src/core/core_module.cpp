@@ -287,7 +287,7 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       const bool paused = dr2hook::GhostLab::ToggleClonePause();
       if (dr2hook::OverlayManager::IsInitialized()) {
         dr2hook::OverlayManager::AddNotification(
-            paused ? "Ghost clones paused." : "Ghost clones resumed.", 2.0f,
+            paused ? "Ghost cars paused." : "Ghost cars resumed.", 2.0f,
             dr2hook::ToastType::Info);
       }
       return 1;
