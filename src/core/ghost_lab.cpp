@@ -1301,12 +1301,24 @@ void LogLoadState() {
   }
 }
 
+void ArmWriteWatch(uintptr_t addr); // definido mais abaixo
+
+// Diagnostico de N > 15: vigia o elemento 16 do array antigo de parametros dos pilotos
+// (obj+0x300+16*0x68+4 = obj+0x984, onde apareceu o 0.3 que derruba exe+0xb4f930).
+void ArmDriverWatch() {
+  if (WantedGhostCars() < 16) return;
+  auto *ds = *reinterpret_cast<uint8_t **>(g_gameBase + (0x14159dad0 - kImageBase));
+  if (ds != nullptr) ArmWriteWatch(reinterpret_cast<uintptr_t>(ds) + 0x984);
+}
+
 void DetourSpawnVehicles(void *ctx) {
   InFlight guard;
   g_stageCtx = ctx;
   g_realSeen = 0;
   LogStageEntries("antes do spawn");
+  ArmDriverWatch();
   g_originalSpawn(ctx);
+  ArmDriverWatch();
   LogStageEntries("depois do spawn");
   LogLimits("depois do spawn");
   if (std::FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
@@ -1326,9 +1338,51 @@ void DetourSpawnVehicles(void *ctx) {
 // endereco acessado e os retornos do jogo na pilha. Nao trata a excecao.
 void *g_crashHandler = nullptr;
 std::atomic<int> g_crashLogged{0};
+std::atomic<uintptr_t> g_watchAddr{0};
+std::atomic<int> g_watchLogged{0};
+
+// Enderecos de retorno no exe achados na pilha a partir de rsp (precedidos de call).
+std::string ReturnChain(uintptr_t rsp) {
+  const uintptr_t base = g_gameBase;
+  const NT_TIB *tib = reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
+  const uintptr_t top = reinterpret_cast<uintptr_t>(tib->StackBase);
+  std::string chain;
+  int found = 0;
+  for (uintptr_t sp = rsp; sp + 8 <= top && sp < rsp + 0x8000 && found < 24; sp += 8) {
+    const uintptr_t v = *reinterpret_cast<const uintptr_t *>(sp);
+    if (v < base + 0x1000 || v >= base + 0x1099000) continue;
+    const uint8_t *ret = reinterpret_cast<const uint8_t *>(v);
+    if (ret[-5] != 0xe8 && !(ret[-6] == 0xff && ret[-5] == 0x15) && ret[-2] != 0xff) continue;
+    char one[40];
+    std::snprintf(one, sizeof(one), " 0x%llx", static_cast<unsigned long long>(v));
+    chain += one;
+    ++found;
+  }
+  return chain;
+}
 
 LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
   const DWORD code = info->ExceptionRecord->ExceptionCode;
+  if (code == EXCEPTION_SINGLE_STEP && g_watchAddr.load() != 0 && (info->ContextRecord->Dr6 & 1)) {
+    CONTEXT *w = info->ContextRecord;
+    w->Dr6 = 0;
+    if (g_watchLogged.fetch_add(1) < 8) {
+      const uintptr_t a = g_watchAddr.load();
+      char buf[320];
+      std::snprintf(buf, sizeof(buf),
+                    "GhostLab[watch]: escrita em %p = %08x (rip=0x%llx, depois da instrucao) "
+                    "thread=%lu rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx",
+                    reinterpret_cast<void *>(a), *reinterpret_cast<const uint32_t *>(a),
+                    static_cast<unsigned long long>(w->Rip), static_cast<unsigned long>(GetCurrentThreadId()),
+                    static_cast<unsigned long long>(w->Rax), static_cast<unsigned long long>(w->Rbx),
+                    static_cast<unsigned long long>(w->Rcx), static_cast<unsigned long long>(w->Rdx),
+                    static_cast<unsigned long long>(w->Rsi), static_cast<unsigned long long>(w->Rdi),
+                    static_cast<unsigned long long>(w->R8), static_cast<unsigned long long>(w->R9));
+      Logger::Error(buf);
+      Logger::Error("GhostLab[watch]: pilha:" + ReturnChain(w->Rsp));
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
   if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
       code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
       code != EXCEPTION_PRIV_INSTRUCTION) {
@@ -1430,22 +1484,59 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
       dumpAt("[crbp]", crbp, 0x10);
     }
   }
-  const NT_TIB *tib = reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
-  const uintptr_t top = reinterpret_cast<uintptr_t>(tib->StackBase);
-  std::string chain = "GhostLab[crash]: pilha (retornos no exe):";
-  int found = 0;
-  for (uintptr_t sp = c->Rsp; sp + 8 <= top && sp < c->Rsp + 0x8000 && found < 24; sp += 8) {
-    const uintptr_t v = *reinterpret_cast<const uintptr_t *>(sp);
-    if (v < base + 0x1000 || v >= base + 0x1099000) continue;
-    const uint8_t *ret = reinterpret_cast<const uint8_t *>(v);
-    if (ret[-5] != 0xe8 && !(ret[-6] == 0xff && ret[-5] == 0x15) && ret[-2] != 0xff) continue;
-    char one[40];
-    std::snprintf(one, sizeof(one), " 0x%llx", static_cast<unsigned long long>(v));
-    chain += one;
-    ++found;
-  }
-  Logger::Error(chain);
+  Logger::Error("GhostLab[crash]: pilha (retornos no exe):" + ReturnChain(c->Rsp));
   return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Watchpoint de hardware (DR0, escrita de 4 bytes) em todas as threads: acha quem escreve
+// num endereco (ex.: o elemento 16 de um array de 16). O VEH acima registra cada escrita.
+// Feito por uma thread auxiliar para tambem armar a thread que chamou.
+void ArmWriteWatch(uintptr_t addr) {
+  g_watchAddr.store(addr);
+  g_watchLogged.store(0);
+  std::thread([addr] {
+    const DWORD self = GetCurrentThreadId();
+    const DWORD pid = GetCurrentProcessId();
+    int armed = 0, failed = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+      if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+      HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE,
+                            te.th32ThreadID);
+      if (t == nullptr) {
+        ++failed;
+        continue;
+      }
+      if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+        CONTEXT ctx{};
+        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (GetThreadContext(t, &ctx)) {
+          ctx.Dr0 = addr;
+          ctx.Dr7 = (ctx.Dr7 & ~0xf0003ull) | 0xd0001ull; // L0, escrita, 4 bytes
+          ctx.Dr6 = 0;
+          if (SetThreadContext(t, &ctx)) {
+            CONTEXT check{};
+            check.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            (GetThreadContext(t, &check) && check.Dr0 == addr) ? ++armed : ++failed;
+          } else {
+            ++failed;
+          }
+        } else {
+          ++failed;
+        }
+        ResumeThread(t);
+      }
+      CloseHandle(t);
+    }
+    CloseHandle(snap);
+    char msg[160];
+    std::snprintf(msg, sizeof(msg), "GhostLab[watch]: escrita em %p vigiada em %d threads (%d falhas).",
+                  reinterpret_cast<void *>(addr), armed, failed);
+    Logger::Info(msg);
+  }).join();
 }
 
 bool Hook(uintptr_t rva, const uint8_t *prologue, size_t size, void *detour,
