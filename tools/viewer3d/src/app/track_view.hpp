@@ -5,6 +5,7 @@
 #include "core/track.hpp"
 #include "core/dr2i.hpp"
 #include "render/camera.hpp"
+#include "edit/edits_json.hpp"
 #include "edit/history.hpp"
 #include "render/instances.hpp"
 #include "render/lines.hpp"
@@ -29,6 +30,9 @@ public:
     // `out`: caminho do edits.json (vazio = default_out). Se ele existe e `resume`, as edições dele
     // voltam para a sessão (continuar de onde parou).
     TrackView(const std::string& dir, std::string out, bool resume = true);
+    ~TrackView();
+    TrackView(const TrackView&) = delete;
+    TrackView& operator=(const TrackView&) = delete;
     // <raiz>/saves/<id>.edits.json para uma pista em <raiz>/tracks/<id>; senão build/uiview/saves/.
     static std::string default_out(const std::string& dir, const std::string& id);
 
@@ -62,6 +66,13 @@ public:
     // (um crash ou um kill não perde a sessão). O Ctrl+S apaga o autosave.
     void autosave_tick(double period = 60.0);
     std::string autosave_path() const { return out_ + ".autosave.json"; }
+    bool has_autosave() const;
+    bool recover_autosave();
+    // Volta ao estado descrito por um edits.json em texto (rotas relidas do arquivo exportado, sem
+    // histórico); fica "não gravado". false (e a mensagem em status) se não deu.
+    bool recover(const std::string& edits_text, const std::string& from);
+    // edits.json de todas as rotas abertas, como o Ctrl+S gravaria.
+    std::string current_edits() const;
     void set_status(std::string msg);
     Tool tool() const { return tool_; }
     const Instances& instances() const { return inst_; }
@@ -104,7 +115,7 @@ public:
     bool& show_gates() { return show_gates_; }
     bool& show_ai() { return show_ai_; }
     float& draw_dist() { return draw_dist_; }
-    // Raio do terreno em metros a partir do olho (0 = sem limite, o padrão).
+    // Raio do terreno em metros a partir do alvo da câmera, no plano xz (0 = sem limite, o padrão).
     float& terrain_dist() { return terrain_dist_; }
     const render::InstanceRenderer& objects() const { return *objects_; }
     const render::Terrain& terrain() const { return *terrain_; }
@@ -148,8 +159,9 @@ private:
     unsigned saves_ = 0;
     mutable bool unsaved_ = false;
     mutable unsigned unsaved_rev_ = ~0u, unsaved_saves_ = ~0u;
-    std::string current_edits() const;
     void after_history();
+    bool wrote_autosave_ = false;
+    void apply_doc(const json::Value& doc, edit::ApplyReport& rep);
     struct Saved {
         Instances inst;
         edit::History hist;

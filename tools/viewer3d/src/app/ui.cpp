@@ -121,10 +121,13 @@ bool EditorUi::event(const SDL_Event& e) {
         const SDL_Scancode sc = e.key.scancode;
         const bool modifier = (e.key.key == SDLK_LCTRL || e.key.key == SDLK_RCTRL || e.key.key == SDLK_LSHIFT ||
                                e.key.key == SDLK_RSHIFT || e.key.key == SDLK_LALT || e.key.key == SDLK_RALT);
-        bool forward = modifier;
-        if (e.type == SDL_EVENT_KEY_DOWN) forward = forward || ui_keys;
-        else forward = forward || imgui_keys_[sc];
-        if (sc < SDL_SCANCODE_COUNT) imgui_keys_[sc] = e.type == SDL_EVENT_KEY_DOWN && forward;
+        // repetição e soltura de uma tecla cujo apertar foi ao ImGui continuam indo para ele (senão ela fica presa)
+        const bool held = sc < SDL_SCANCODE_COUNT && imgui_keys_[sc];
+        const bool forward = modifier || held || (e.type == SDL_EVENT_KEY_DOWN && ui_keys);
+        if (sc < SDL_SCANCODE_COUNT) {
+            if (e.type == SDL_EVENT_KEY_DOWN && forward) imgui_keys_[sc] = true;
+            if (e.type == SDL_EVENT_KEY_UP) imgui_keys_[sc] = false;
+        }
         if (forward) ImGui_ImplSDL3_ProcessEvent(&e);
         return e.type == SDL_EVENT_KEY_DOWN && ui_keys;
     }
@@ -240,6 +243,8 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
             tracks_scanned_ = false;  // relê ao abrir o submenu
         }
         if (ImGui::MenuItem("Gravar edits.json", "Ctrl+S", false, track != nullptr)) track->save();
+        if (ImGui::MenuItem("Recuperar autosave", nullptr, false, track && track->has_autosave())) track->recover_autosave();
+        if (track) tooltip("Volta às edições do último autosave (a cada 60 s); fica não gravado até o Ctrl+S");
         ImGui::Separator();
         if (ImGui::MenuItem("Sair", "Ctrl+Q") && ask_quit(track)) quit_request = true;
         ImGui::EndMenu();
@@ -674,7 +679,7 @@ void EditorUi::status_bar(TrackView* track, float fps, const Rect& area) {
             // a mensagem mais recente: a dos painéis (abrir pista) ou a da pista (gravar, rota)
             const bool mine = !message_.empty() && message_age() < track->status_age();
             const std::string& msg = mine ? message_ : track->status();
-            const bool bad = msg.starts_with("NÃO") || msg.starts_with("não ");
+            const bool bad = msg.starts_with("NÃO") || msg.starts_with("não ") || msg.starts_with("ATENÇÃO");
             // a mensagem some depois de um tempo (erros ficam mais) para não contradizer o estado atual
             const double age = mine ? message_age() : track->status_age();
             const bool fresh = !msg.empty() && age < (bad ? 30.0 : 8.0);

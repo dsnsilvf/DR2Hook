@@ -72,21 +72,22 @@ TrackView::TrackView(const std::string& dir, std::string out, bool resume)
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
+    if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
+    if (std::filesystem::exists(out_)) {
+        if (resume) resume_edits();
+        else set_status(out_ + " já existe e não foi lido (--fresh); o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak");
+    }
     {
-        // uma sessão anterior que caiu deixou um autosave mais novo que o arquivo gravado?
+        // uma sessão anterior que caiu deixou um autosave mais novo que o arquivo gravado? (depois do
+        // resume, para a mensagem dele não cobrir esta)
         std::error_code ec;
         const auto as = std::filesystem::last_write_time(autosave_path(), ec);
         if (!ec) {
             std::error_code ec2;
             const auto saved = std::filesystem::last_write_time(out_, ec2);
             if (ec2 || as > saved)
-                set_status("há edições de uma sessão que não gravou em " + autosave_path() + " (abra com --out nele para continuar)");
+                set_status("ATENÇÃO: uma sessão anterior não gravou edições; Arquivo > Recuperar autosave (" + autosave_path() + ")");
         }
-    }
-    if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
-    if (std::filesystem::exists(out_)) {
-        if (resume) resume_edits();
-        else set_status(out_ + " já existe e não foi lido (--fresh); o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak");
     }
 }
 
@@ -102,31 +103,81 @@ bool TrackView::can_write(const std::string& path) {
     return fs::is_directory(p, ec) && ::access(p.c_str(), W_OK) == 0;
 }
 
+void TrackView::apply_doc(const json::Value& doc, edit::ApplyReport& rep) {
+    // o doc descreve a sessão inteira: cada rota volta ao arquivo exportado e recebe as edições dele.
+    // Aplica em cópias e só troca no fim: um erro no meio não deixa metade aplicada.
+    std::map<std::size_t, Instances> next;
+    for (const std::string& name : edit::routes_in_edits(doc)) {
+        std::size_t k = 0;
+        while (k < track_.routes.size() && track_.routes[k].name != name) ++k;
+        if (k == track_.routes.size()) {
+            rep.skipped.push_back(name + ": rota não existe nesta pista");
+            continue;
+        }
+        Instances copy = read_dr2i(read_file(join_path(dir_, "inst_" + name + ".bin")), track_.types.size());
+        edit::apply_edits(doc, track_, track_.routes[k], copy, rep);
+        next[k] = std::move(copy);
+    }
+    // rota atual fora do doc volta ao arquivo; as outras abertas fora do doc também
+    if (!next.count(route_index_))
+        next[route_index_] = read_dr2i(read_file(join_path(dir_, "inst_" + route_->name + ".bin")), track_.types.size());
+    saved_.clear();
+    for (auto& [k, inst] : next) {
+        if (k == route_index_) inst_ = std::move(inst);
+        else saved_[k] = Saved{std::move(inst), edit::History{}};
+    }
+    hist_ = edit::History{};
+    sel_ = -1;
+    drag_ = EditDrag{};
+    objects_->regroup(inst_);
+    ++edit_rev_;
+}
+
+bool TrackView::recover(const std::string& edits_text, const std::string& from) {
+    // volta a um estado de edições guardado (autosave, ou a sessão de antes de abrir outra pista);
+    // fica "não gravado" em relação ao arquivo
+    try {
+        edit::ApplyReport rep;
+        apply_doc(json::parse(edits_text), rep);
+        for (const std::string& w : rep.skipped) std::fprintf(stderr, "viewer3d: %s: ficou de fora: %s\n", from.c_str(), w.c_str());
+        set_status("recuperadas " + std::to_string(rep.applied) + " edições de " + from + " (sem histórico; Ctrl+S grava em " + out_ + ")" +
+                   (rep.skipped.empty() ? "" : "; " + std::to_string(rep.skipped.size()) + " ficaram de fora"));
+        return true;
+    } catch (const std::exception& e) {
+        set_status(std::string("não recuperou ") + from + ": " + e.what());
+        return false;
+    }
+}
+
+bool TrackView::recover_autosave() {
+    try {
+        const std::vector<std::uint8_t> bytes = read_file(autosave_path());
+        return recover(std::string(bytes.begin(), bytes.end()), autosave_path());
+    } catch (const std::exception& e) {
+        set_status(std::string("não leu o autosave: ") + e.what());
+        return false;
+    }
+}
+
+bool TrackView::has_autosave() const {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(autosave_path(), ec);
+}
+
+TrackView::~TrackView() {
+    // saída normal: o autosave desta sessão não serve mais (num crash ele fica)
+    if (wrote_autosave_) {
+        std::error_code ec;
+        std::filesystem::remove(autosave_path(), ec);
+    }
+}
+
 void TrackView::resume_edits() {
     // continua a sessão anterior: as edições gravadas voltam para as rotas, sem histórico
     try {
         const json::Value doc = json::parse_file(out_);
         edit::ApplyReport rep;
-        // aplica em cópias e só troca no fim: um erro no meio não deixa metade retomada
-        std::map<std::size_t, Instances> next;
-        for (const std::string& name : edit::routes_in_edits(doc)) {
-            std::size_t k = 0;
-            while (k < track_.routes.size() && track_.routes[k].name != name) ++k;
-            if (k == track_.routes.size()) {
-                rep.skipped.push_back(name + ": rota não existe nesta pista");
-                continue;
-            }
-            Instances copy = k == route_index_ ? inst_
-                                               : read_dr2i(read_file(join_path(dir_, "inst_" + name + ".bin")), track_.types.size());
-            edit::apply_edits(doc, track_, track_.routes[k], copy, rep);
-            next[k] = std::move(copy);
-        }
-        for (auto& [k, inst] : next) {
-            if (k == route_index_) inst_ = std::move(inst);
-            else saved_[k] = Saved{std::move(inst), edit::History{}};
-        }
-        objects_->regroup(inst_);
-        ++edit_rev_;
+        apply_doc(doc, rep);
         saved_text_ = current_edits();  // o que está no arquivo não é "não gravado"
         for (const std::string& w : rep.skipped) std::fprintf(stderr, "viewer3d: edits.json: ficou de fora: %s\n", w.c_str());
         set_status("retomadas " + std::to_string(rep.applied) + " edições de " + out_ +
@@ -296,7 +347,7 @@ void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam)
     objects_->cull(inst_, cam.target, cam.dist, draw_dist_, layers_, edit_rev_);
     shader_.use();
     shader_.set_view_proj(view_proj);
-    if (show_terrain_) terrain_->draw(shader_, &textures_, view_proj, cam.eye(), terrain_dist_);
+    if (show_terrain_) terrain_->draw(shader_, &textures_, view_proj, cam.target, terrain_dist_);
     objects_->draw(shader_, textures_);
     if (sel_ >= 0 && !inst_.hidden[static_cast<std::size_t>(sel_)])
         objects_->draw_one(shader_, textures_, inst_, static_cast<std::size_t>(sel_), 1.0f);
@@ -545,6 +596,7 @@ void TrackView::autosave_tick(double period) {
     if (drag_.active || !unsaved()) return;
     try {
         edit::write_text(autosave_path(), current_edits());
+        wrote_autosave_ = true;
         std::fprintf(stderr, "viewer3d: autosave em %s\n", autosave_path().c_str());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "viewer3d: autosave falhou: %s\n", e.what());

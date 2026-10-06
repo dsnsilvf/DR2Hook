@@ -30,8 +30,8 @@ public:
     // Desenha com o programa já em uso só as malhas cuja caixa toca o frustum de `view_proj`. Com
     // `textures`, cada malha usa a textura do material (agrupado por textura, um glMultiDrawElements
     // por grupo); sem, a cor do material.
-    // `max_dist` > 0 também corta as malhas cuja caixa fica a mais que isso (no plano xz) de `eye`.
-    void draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& eye = {},
+    // `max_dist` > 0 também corta as malhas cuja caixa fica a mais que isso (no plano xz) de `center`.
+    void draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& center = {},
               float max_dist = 0.0f) const;
     std::size_t drawn() const { return drawn_; }
     // Caixa de todas as malhas; false se não há malha.

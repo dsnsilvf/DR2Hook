@@ -112,7 +112,7 @@ bool outside(const std::array<glm::vec4, 6>& planes, const glm::vec3& lo, const 
 
 }  // namespace
 
-void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& eye,
+void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& center,
                    float max_dist) const {
     vao_.bind();
     TrackShader::identity_rows();
@@ -137,7 +137,8 @@ void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm:
         const Part& p = parts_[k];
         if (outside(planes, p.lo, p.hi)) continue;
         if (max_dist > 0.0f) {
-            const float dx = std::max({p.lo.x - eye.x, 0.0f, eye.x - p.hi.x}), dz = std::max({p.lo.z - eye.z, 0.0f, eye.z - p.hi.z});
+            const float dx = std::max({p.lo.x - center.x, 0.0f, center.x - p.hi.x});
+            const float dz = std::max({p.lo.z - center.z, 0.0f, center.z - p.hi.z});
             if (dx * dx + dz * dz > max_dist * max_dist) continue;
         }
         ++drawn_;

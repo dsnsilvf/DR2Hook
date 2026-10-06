@@ -58,7 +58,8 @@ DISPLAY=:99 ./build/viewer3d/viewer3d --track ... --frames 60 --screenshot e.ppm
 - **Inspector** (direita): sem seleção, a pista (rotas, contagens, texturas, onde grava); com seleção, tipo, kind, arquivo de origem, idnum, estado, **posição X/Y/Z e giro Y editáveis** (arraste ou Ctrl+clique para digitar; um passo de histórico por edição), escala, botões de giro, Enquadrar/Restaurar/Duplicar/Apagar, a matriz atual e a do arquivo, e os materiais do tipo com a textura em miniatura (passe o mouse para ampliar).
 - **Viewport**: caixa amarela na seleção; com Mover, gizmo de setas X/Y/Z (arraste uma seta para mover só naquele eixo); com Girar, um anel em volta do objeto.
 - **Barra de status**: ferramenta, gravado/não gravado, última mensagem (some depois de 8 s; erros em vermelho, 30 s), instâncias, raio, fps.
-- **Autosave**: a cada 60 s com edições não gravadas, grava `<arquivo>.autosave.json` (o Ctrl+S apaga). Se o editor cair, ao abrir de novo a barra de status avisa; `--out <arquivo>.autosave.json` retoma dele.
+- **Autosave**: a cada 60 s com edições não gravadas, grava `<arquivo>.autosave.json` (o Ctrl+S e a saída normal apagam). Se o editor cair, ao abrir de novo a barra de status avisa em vermelho; **Arquivo > Recuperar autosave** volta às edições dele (sem histórico, como não gravadas; o Ctrl+S grava no arquivo de sempre).
+- **Abrir outra pista** pelo menu fecha a atual antes (memória); se a nova não abre, a anterior volta com as edições não gravadas (sem o histórico).
 - **Pistas grandes**: o terreno só desenha as malhas que a câmera vê (corte por frustum, um `glMultiDrawElements` por material) e, opcionalmente, até um raio (**Terreno** na barra de ferramentas, ou `--terrain-dist`). O envio do terreno à GPU é malha por malha, sem uma cópia da pista inteira na RAM.
 - **Retomar**: se o `edits.json` de saída já existe, as edições dele voltam ao abrir (as que não batem com a pista exportada ficam de fora, com aviso). `--fresh` ignora o arquivo.
 
@@ -101,7 +102,7 @@ Se uma rota não abre no **Tab** (arquivo truncado ou ausente), a rota atual fic
 | `--screenshot arq.ppm` | com `--frames`, grava o último quadro em PPM (P6) antes de sair |
 | `--vsync 0\|1` | sincronia vertical (padrão 1); `0` para medir FPS |
 | `--panels 0\|1` | começa sem os painéis (o 3D ocupa a janela, para comparar capturas com o web) |
-| `--terrain-dist M` | raio do terreno em metros a partir da câmera (padrão 0 = sem limite) |
+| `--terrain-dist M` | raio do terreno em metros a partir do alvo da câmera, no plano xz (padrão 0 = sem limite) |
 | `--autosave S` | segundos entre autosaves (padrão 60; 0 desliga) |
 | `--fresh` | não retoma o `edits.json` que já existe (o primeiro Ctrl+S guarda uma cópia dele) |
 | `--camera yaw,pitch,dist,x,y,z` | estado exato da câmera, para comparar capturas com o viewer web (valores finitos, `dist` > 0, \|pitch\| ≤ 1,5) |
@@ -130,7 +131,7 @@ Neste ambiente não há GPU nem jogo: tudo rodou no Mesa llvmpipe sob Xvfb, com 
 | 6 | 1011 instâncias; nas mesmas câmeras do web, 995, 935 e 980 visíveis, os mesmos números do web; ~20 fps no llvmpipe |
 | 7+ | duplicar, restaurar, ±15°/±90° e troca de rota (pista sintética com `route_1`): sessão com `xdotool` → 3 edições em duas rotas (giro de 105°, cópia `added`, apagar na `route_1`), aprovadas pelo `edit_roundtrip.py` |
 | R2 | painéis: com `xdotool`, seleção no 3D e na Cena (filtro "tyre"), seta X do gizmo move 72,31→80,86, X digitado no Inspector, clique no Histórico volta ao arquivo, Ctrl+Q pede confirmação, retomar o edits.json gravado (1 edição de volta) |
-| R3 | pista de estresse (`tests/make_stress.py`: 9,7 M vértices, 16,9 M triângulos, 323 mil instâncias): câmera padrão 3,3 → 18,7 fps, rente ao chão 1,8 → 2,6 fps (17,5 com `--terrain-dist 3000`), panorâmica 1,4 → 1,8 (13,9); pico de RSS 1679 → 943 MB; envio 0,67 → 0,45 s; capturas da pista sintética idênticas byte a byte às de antes; retomar 50 mil edições 4,8 → 0,05 s; menu depois de 100 teclas a ~3 fps: 31,4 → 2,8 s; autosave e retomada depois de um kill |
+| R3 | pista de estresse (`tests/make_stress.py`: 9,7 M vértices, 16,9 M triângulos, 323 mil instâncias): câmera padrão 3,3 → 18,7 fps, rente ao chão 1,8 → 2,6 fps (17,9 com `--terrain-dist 3000`), panorâmica 1,4 → 1,8 (5,7 com o raio, que corta malha a malha e deixa buracos onde só a malha de fundo de um bloco passa); pico de RSS 1679 → 943 MB; envio 0,67 → 0,45 s; capturas da pista sintética idênticas byte a byte às de antes; retomar 50 mil edições 4,8 → 0,05 s; menu depois de 100 teclas a ~3 fps: 31,4 → 2,8 s; autosave e retomada depois de um kill |
 | 7 | `edit_test OK`; sessão com `xdotool`: mover, girar, apagar, Ctrl+Z ×2, Ctrl+Y, Ctrl+S → 2 edições (x/z de uma barreira, linhas da matriz de outra); segunda sessão com apagar barreira, apagar árvore e mover árvore → 3 edições; as duas passam no `edit_roundtrip.py` |
 
 Falta, na máquina do dono, com a Montalegre:

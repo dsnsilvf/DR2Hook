@@ -401,10 +401,13 @@ void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input, cons
 // para os painéis. Quem chama já confirmou descartar as edições não gravadas.
 void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2::app::TrackView>& track,
                 std::unique_ptr<TestScene>& scene, dr2::render::OrbitCamera& cam, dr2::app::EditorUi& ui) {
-    std::string old_dir, old_out;
+    std::string old_dir, old_out, old_edits;
+    bool old_unsaved = false;
     if (track) {
         old_dir = track->track().dir;
         old_out = track->out_path();
+        old_unsaved = track->unsaved();
+        if (old_unsaved) old_edits = track->current_edits();  // se a nova falhar, a anterior volta como estava
     }
     auto open = [&](const std::string& d, const std::string& out) {
         auto next = std::make_unique<dr2::app::TrackView>(d, out, !opt.fresh);
@@ -425,6 +428,7 @@ void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2:
         if (!old_dir.empty()) {
             try {
                 open(old_dir, old_out);
+                if (old_unsaved) track->recover(old_edits, "a sessão antes de abrir " + dir);
             } catch (const std::exception& e2) {
                 std::fprintf(stderr, "viewer3d: nem a anterior reabriu: %s\n", e2.what());
             }

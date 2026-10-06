@@ -116,8 +116,10 @@ void Buffer::upload(GLenum target, const void* data, std::size_t bytes, GLenum u
     glBindBuffer(target, id_);
     glBufferData(target, static_cast<GLsizeiptr>(bytes), data, usage);
     // na carga (estático), falta de memória de vídeo vira erro de carga: a pista não abre, nada fica pela metade
-    if (usage == GL_STATIC_DRAW && glGetError() == GL_OUT_OF_MEMORY)
-        throw std::runtime_error("sem memória de vídeo para " + std::to_string(bytes / (1024 * 1024)) + " MB");
+    if (usage != GL_STATIC_DRAW) return;
+    bool oom = false;
+    for (GLenum err; (err = glGetError()) != GL_NO_ERROR;) oom = oom || err == GL_OUT_OF_MEMORY;  // erro antigo não esconde o OOM
+    if (oom) throw std::runtime_error("sem memória de vídeo para " + std::to_string(bytes / (1024 * 1024)) + " MB");
 }
 
 Vao& Vao::operator=(Vao&& o) noexcept {
