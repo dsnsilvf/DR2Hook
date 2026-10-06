@@ -165,12 +165,13 @@ void EditorUi::ask_open(TrackView* track, const std::string& dir) {
 void EditorUi::scan_tracks() {
     tracks_.clear();
     std::error_code ec;
-    for (const char* root : {"build/uiview/tracks"}) {
+    for (const char* root : {"build/uiview/tracks", "examples/tracks"}) {  // exportadas primeiro, exemplos no fim
+        const std::size_t first = tracks_.size();
         for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
             if (std::filesystem::is_regular_file(entry.path() / "track.json", ec)) tracks_.push_back(entry.path().generic_string());
         }
+        std::sort(tracks_.begin() + static_cast<std::ptrdiff_t>(first), tracks_.end());
     }
-    std::sort(tracks_.begin(), tracks_.end());
     tracks_scanned_ = true;
 }
 
@@ -229,11 +230,13 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
     if (ImGui::BeginMenu("Arquivo")) {
         if (ImGui::BeginMenu("Abrir pista")) {
             if (!tracks_scanned_) scan_tracks();
-            if (tracks_.empty()) ImGui::TextDisabled("nada em build/uiview/tracks");
+            if (tracks_.empty()) ImGui::TextDisabled("nada em build/uiview/tracks nem em examples/tracks");
             for (const std::string& dir : tracks_) {
                 std::error_code ec;
                 const bool current = track && std::filesystem::equivalent(dir, track->track().dir, ec);
-                if (ImGui::MenuItem(std::filesystem::path(dir).filename().string().c_str(), nullptr, current, !current))
+                std::string label = std::filesystem::path(dir).filename().string();
+                if (dir.rfind("examples/", 0) == 0) label += " (exemplo)";
+                if (ImGui::MenuItem((label + "###" + dir).c_str(), nullptr, current, !current))
                     ask_open(track, dir);
             }
             ImGui::Separator();

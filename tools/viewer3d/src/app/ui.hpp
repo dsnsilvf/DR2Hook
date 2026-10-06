@@ -100,7 +100,7 @@ private:
     double message_age() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - message_time_).count(); }
     std::size_t last_hist_size_ = 0;
     bool imgui_keys_[SDL_SCANCODE_COUNT] = {};  // teclas cujo apertar foi ao ImGui (a soltura também vai)
-    std::vector<std::string> tracks_;  // pastas em build/uiview/tracks
+    std::vector<std::string> tracks_;  // pastas em build/uiview/tracks e depois em examples/tracks
     bool tracks_scanned_ = false;
 };
 
