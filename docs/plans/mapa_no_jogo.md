@@ -62,7 +62,7 @@ U1 e U3 estão misturadas no crash antigo. Se a primeira tentativa de levar o Ri
 | # | O quê | Fecha | Toca no jogo? | Precisa de OK |
 | --- | --- | --- | --- | --- |
 | E0 (**feito**, ver abaixo) | Inventário offline: tamanho em blocos de cada arquivo que o Ring substituiria na hospedeira; por que `replace_files` exige o mesmo número de blocos e se dá para relaxar; espaço livre no último bloco do `objects.ens`; quantos registros de árvore e ornamento a hospedeira tem. | base de U4 | não | não |
-| E1 | Benchmark nativo + câmera livre (NZ `route_2`). Depois o override do AutoStage para outras rotas de NZ, e para uma localidade com rota normal (Montalegre) em vez de `free_roam`. Só dados originais. | U3 | sim, pasta intacta | para o jogo abrir sim; para Montalegre há risco de crash |
+| E1 (**feito**, ver abaixo; falta confirmar o movimento da câmera) | Benchmark nativo + câmera livre (NZ `route_2`). Depois o override do AutoStage para outras rotas de NZ, e para uma localidade com rota normal (Montalegre) em vez de `free_roam`. Só dados originais. | U3 | sim, pasta intacta | para o jogo abrir sim; para Montalegre há risco de crash |
 | E2 | Redirecionamento do `CreateFileW`: `locations\<x>.nefs` → arquivo em `build/`. Primeiro uma cópia **idêntica byte a byte**, para provar o redirecionamento sem arriscar dado. | U2 | sim | cópia idêntica: não muda dado, mas é um passo novo; vou avisar antes |
 | E3 | Uma cópia modificada com **um objeto movido para longe**, numa pista que o E1 provou que carrega. A diferença é visível e o resto fica igual. | U1 | sim | **sim, `.nefs` modificado** |
 | E4 | Objetos do Ring na hospedeira: cada tipo do Ring vira um tipo parecido que já existe na hospedeira (barreira, muro de pneus, cone, árvore). Em `ornaments.bin` e `trees.bin` só dá para **reposicionar** os registros que existem; o `objects.ens` só cresce até o espaço livre do último bloco. | U4 (objetos) | sim | sim |
@@ -77,7 +77,7 @@ E0 a E3 não alteram nenhum dado do jogo além de um objeto no E3. E4 a E6 já d
 - **NZ `new_zealand_rally_01`, `route_2`:** é a única que sabemos que carrega pelo benchmark. Isso resolve U3 de graça e deixa U1 e U2 limpos. Custo: pacote de 1,95 GB, e hoje só o Montalegre está exportado.
 - **Montalegre rallycross:** o menor pacote (884 MB), já exportado (324 tipos, 2897 instâncias), e já usado em todos os testes do viewer. Custo: depende de o AutoStage aguentar a troca de pista (U3).
 
-Recomendo **NZ nos experimentos E3 em diante**, e Montalegre só depois que o E1 mostrar que a troca funciona.
+O E1 mostrou que a troca de pista funciona, então a recomendação mudou: **Montalegre**, por ser o menor pacote, já estar exportado e carregar pelo AutoStage. A NZ fica de reserva.
 
 ## Resultado do E0 (2026-10-06, só leitura)
 
@@ -103,6 +103,22 @@ Consequências:
 - **Terreno:** o `tracksplit.pssg` é gigante por causa das texturas (561 MB no Montalegre, 771 MB na NZ). Trocar a geometria tem de manter o tamanho: só mexer nas posições dos vértices, sem mudar contagem.
 - **Colisão:** na NZ o `track.jpk` é o mesmo arquivo (36 098 336 B) nas 6 rotas. A colisão é da pista, não da rota.
 - **Tipos parecidos no Montalegre** (da lista do `track.json`): barreiras (`core_barr_rx_barriers_a`), muros de pneus (`core_barr_tyrewall_a`), alambrado (`core_barr_fence_standard_b`), arquibancadas (`mnt_grandstand_steps_*`, `core_lr_grandstand_*`), pórtico de largada (`mnt_startgantry_a`), placas (`core_brand_board_a`) e bétulas (`birch_02_*`). **Não há cones nem pinheiros**; esses viram outro tipo (um pneu, uma árvore diferente).
+
+## Resultado do E1 (2026-10-06, no jogo, só dados originais)
+
+O AutoStage foi ligado pelo `dr2hook_autostage.ini` (`enabled = 1`, `once = 1`, que se desliga sozinho depois do boot), com o jogo aberto pela Steam sem menus.
+
+| Teste | Resultado |
+| --- | --- |
+| NZ `new_zealand_rally_01` / `route_2` / `fr5` | Carregou até a largada em ~15 s depois do processo. Câmera livre (F9, pelo canal `dr2hook_cmd.txt`): `FreeCamera: ligada` e `pose copiada da especial`. **Falta o dono confirmar que WASD e mouse movem a câmera** (o canal remoto só manda um aperto instantâneo). |
+| NZ `route_0` (outra rota da mesma pista) | Carregou normal. `status` = `corrida` e o carro anda sozinho pela estrada. |
+| **Montalegre** `portugal` / `montalegre_rallycross` / `route_0` | **Carregou e o carro anda sozinho** (`status` = `corrida`, print do asfalto com marcas de pneu e arquibancada). O log mostra `LoadTrace: open ...\locations\portugal__montalegre_rallycross.nefs`. |
+
+**U3 fechada.** O AutoStage troca de rota e de pista sem crashar, inclusive para uma localidade de rallycross com a rota 0. Isso tira a gravação de NZ da lista de suspeitos do crash de `usa / twin_peaks / free_roam`. O que sobra: o `free_roam` (modo sem rota) ou o DirtFish em si. A causa exata ainda não foi isolada, mas não afeta o plano: as hospedeiras serão pistas normais.
+
+**Consequências para a escolha da hospedeira:** o Montalegre serve tão bem quanto a NZ. Como é o menor pacote (884 MB, contra 1,95 GB) e já está exportado para o viewer, passa a ser a hospedeira recomendada. A NZ fica como reserva.
+
+Cuidado ao rodar de novo: o jogo escreve `enabled = 0` no ini depois do boot com `once = 1`, mas as strings de pista ficam. Depois de cada teste o ini foi devolvido ao original (NZ `route_2`, `enabled = 0`, `once = 0`).
 
 ## Alternativa que não passa pelos `.nefs`
 

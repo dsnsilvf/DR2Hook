@@ -130,7 +130,9 @@ Efeito colateral confirmado: a chamada a `0x1409d0340` criou `Documents\My Games
 
 1. ✅ **Baseline nativo** (feito, ver 3.2): `enabled = 0` no ini, opção de inicialização Steam `-benchmark example_benchmark.xml`. Observar: vai direto para NZ route_2? Quem dirige? O que acontece no fim (relatório em `Documentos\My Games\DiRT Rally 2.0\benchmarks`, volta ao menu, fecha)?
 2. ✅ (feito 2026-10-01: carregou igual ao teste 1 → o hook força o modo sem problema; o crash de 5.1 vem da troca de pista) **Override com a pista nativa**: `enabled = 1`, NZ/route_2/fr5, sem `-benchmark`. Confirma que o hook roda (log: `-benchmark nativo = nao, override aplicado = sim`) e que o resultado é igual ao teste 1.
-3. ❌ **Override de pista** (`usa / twin_peaks / free_roam`): crasha (ver 5.1). O benchmark só funciona na especial gravada.
+3. ❌ **Override de pista** (`usa / twin_peaks / free_roam`): crasha (ver 5.1). A conclusão de 2026-10-01 ("o benchmark só funciona na especial gravada") **foi refutada**: veja os testes 4 e 5.
+4. ✅ (2026-10-06) **Outra rota da mesma pista**: NZ `route_0` carrega e o carro anda sozinho.
+5. ✅ (2026-10-06) **Outra pista e localidade**: `portugal / montalegre_rallycross / route_0` carrega e o carro anda sozinho. O crash do teste 3 não vem da troca de pista nem da gravação de NZ; sobram o `free_roam` (sem rota) e o DirtFish.
 
 ---
 
