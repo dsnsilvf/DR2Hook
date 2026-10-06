@@ -53,39 +53,38 @@ glm::vec3 to_local(const glm::vec3& v, const float* inv) {
 }  // namespace
 
 int pick(const Ray& ray, const Instances& inst, const InstanceRenderer& objects, const glm::vec3& target, float draw_dist,
-         const Layers& layers) {
+         const Layers& layers, float max_t) {
     int best = -1;
     float bt = std::numeric_limits<float>::infinity();
     const auto& types = objects.types();
-    for (std::size_t t = 0; t < types.size(); ++t) {
-        const auto& ty = types[t];
-        if (ty.empty || !layers.on(ty.layer)) continue;
-        for (std::uint32_t i : ty.group) {
-            if (!objects.passes(inst, i, target, draw_dist, layers)) continue;
-            const float* m = inst.matrix(i);
-            float inv[9];
-            inv_affine(m, inv);
-            const glm::vec3 o = to_local(ray.o - glm::vec3(m[9], m[10], m[11]), inv);
-            const glm::vec3 d = to_local(ray.d, inv);
-            float t0 = 0.0f, t1 = std::numeric_limits<float>::infinity();
-            bool ok = true;
-            for (int k = 0; k < 3 && ok; ++k) {
-                if (std::fabs(d[k]) < 1e-9f) {
-                    if (o[k] < ty.lo[k] || o[k] > ty.hi[k]) ok = false;
-                    continue;
-                }
-                float a = (ty.lo[k] - o[k]) / d[k], c = (ty.hi[k] - o[k]) / d[k];
-                if (a > c) std::swap(a, c);
-                t0 = std::max(t0, a);
-                t1 = std::min(t1, c);
-                if (t0 > t1) ok = false;
+    objects.for_each_near(target, draw_dist, [&](std::uint32_t i) {
+        const auto& ty = types[inst.type[i]];
+        if (!objects.passes(inst, i, target, draw_dist, layers)) return;
+        const float* m = inst.matrix(i);
+        float inv[9];
+        inv_affine(m, inv);
+        const glm::vec3 o = to_local(ray.o - glm::vec3(m[9], m[10], m[11]), inv);
+        const glm::vec3 d = to_local(ray.d, inv);
+        float t0 = 0.0f, t1 = std::numeric_limits<float>::infinity();
+        for (int k = 0; k < 3; ++k) {
+            if (std::fabs(d[k]) < 1e-9f) {
+                if (o[k] < ty.lo[k] || o[k] > ty.hi[k]) return;
+                continue;
             }
-            if (ok && t0 < bt) {
-                bt = t0;
-                best = static_cast<int>(i);
-            }
+            float a = (ty.lo[k] - o[k]) / d[k], c = (ty.hi[k] - o[k]) / d[k];
+            if (a > c) std::swap(a, c);
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, c);
+            if (t0 > t1) return;
         }
-    }
+        // atrás do terreno (max_t é a distância até ele): não dá para ver, não seleciona
+        if (t0 > max_t) return;
+        // empate no t0 (caixas coladas): fica a de menor índice, para não depender da ordem das células
+        if (t0 < bt || (t0 == bt && static_cast<int>(i) < best)) {
+            bt = t0;
+            best = static_cast<int>(i);
+        }
+    });
     return best;
 }
 

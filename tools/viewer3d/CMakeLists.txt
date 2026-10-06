@@ -31,6 +31,7 @@ add_library(dr2core STATIC
     src/core/json.cpp
     src/core/dr2m.cpp
     src/core/dr2i.cpp
+    src/core/grid.cpp
     src/core/track.cpp
 )
 target_include_directories(dr2core PUBLIC src)

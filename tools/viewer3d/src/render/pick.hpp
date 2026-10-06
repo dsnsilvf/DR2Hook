@@ -7,6 +7,8 @@
 
 #include <glm/glm.hpp>
 
+#include <limits>
+
 namespace dr2::render {
 
 struct Ray {
@@ -20,8 +22,9 @@ Ray mouse_ray(const OrbitCamera& cam, float x, float y, float w, float h);
 bool ground(const Ray& ray, float h, glm::vec3& out);
 
 // Instância mais perto do olho cuja caixa local do tipo o raio atravessa, entre as que passam no
-// corte (camada, apagada, raio de desenho); -1 se nenhuma.
+// corte (camada, apagada, raio de desenho); -1 se nenhuma. `max_t` é a distância do olho até o terreno
+// ao longo do raio (infinito se não importa): caixas que o raio só alcança depois dele ficam de fora.
 int pick(const Ray& ray, const Instances& inst, const InstanceRenderer& objects, const glm::vec3& target, float draw_dist,
-         const Layers& layers);
+         const Layers& layers, float max_t = std::numeric_limits<float>::infinity());
 
 }  // namespace dr2::render

@@ -42,6 +42,7 @@ struct Options {
     bool panels = true;
     bool fresh = false;  // não retoma o edits.json que já existe
     float terrain_dist = 0.0f;
+    float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
     double autosave = 60.0;  // segundos entre autosaves (0 = desligado)
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
@@ -88,6 +89,8 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 std::fprintf(stderr, "--terrain-dist precisa de metros >= 0 (0 = sem limite)\n");
                 return false;
             }
+        } else if (std::strcmp(argv[i], "--walk") == 0 && i + 1 < argc) {
+            opt.walk = std::strtof(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--autosave") == 0 && i + 1 < argc) {
             opt.autosave = std::strtod(argv[++i], nullptr);
             if (!std::isfinite(opt.autosave) || opt.autosave < 0) {
@@ -99,7 +102,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -485,6 +488,7 @@ int run(const Options& opt) {
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
         walk_keys(cam, dt, input, ui);
+        if (opt.walk != 0.0f) cam.target.x += opt.walk;
 
         if (track && opt.autosave > 0) track->autosave_tick(opt.autosave);
         // painéis primeiro: dizem quanto sobra para o 3D
@@ -540,7 +544,12 @@ int run(const Options& opt) {
     if (opt.frames > 0) {
         const double total = static_cast<double>(SDL_GetPerformanceCounter() - start_t) / static_cast<double>(freq);
         std::printf("OK renderer=%s gl=%s frames=%ld fps=%.1f\n", renderer.c_str(), version.c_str(), frames, frames / total);
-        if (track) std::printf("%s\n", track->title().c_str());
+        if (track) {
+            std::printf("%s\n", track->title().c_str());
+            const auto& o = track->objects();
+            std::printf("cortes=%zu (%.3f ms cada) reenvios parciais=%zu células no último=%zu\n", o.culls(),
+                        o.culls() ? o.cull_seconds() * 1000.0 / static_cast<double>(o.culls()) : 0.0, o.partial_updates(), o.last_cells());
+        }
     }
     return 0;
 }

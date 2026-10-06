@@ -437,7 +437,7 @@ void TrackView::set_matrix(std::uint32_t i, const float* m) {
     for (std::size_t k = 0; k < kInstFloats; ++k)
         if (!std::isfinite(m[k]) || std::fabs(m[k]) > 1e6f) return;  // nada de inf/1e39 no edits.json
     std::copy(m, m + kInstFloats, inst_.matrix(drag_.i));
-    ++edit_rev_;
+    objects_->touch(inst_, drag_.i);  // só ela: o resto do corte e dos buffers continua valendo
 }
 
 void TrackView::end_change(const char* label) {
@@ -510,7 +510,7 @@ void TrackView::edit_drag(float x, float y, float w, float h, const render::Orbi
         if (snap_turn > 0) th = snapped(th, snap_turn * 3.14159265f / 180.0f);
         edit::spin(m, drag_.base, th);
     }
-    ++edit_rev_;
+    objects_->touch(inst_, drag_.i);
 }
 
 void TrackView::end_edit() {

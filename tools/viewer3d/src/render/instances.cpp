@@ -2,8 +2,10 @@
 
 #include "render/texture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 #include <cstring>
 #include <limits>
 
@@ -103,7 +105,13 @@ InstanceRenderer::InstanceRenderer(const Track& track, const std::vector<Mesh>& 
 void InstanceRenderer::regroup(const Instances& inst) {
     for (Type& ty : types_) ty.group.clear();
     for (std::uint32_t i = 0; i < inst.n; ++i) types_[inst.type[i]].group.push_back(i);
-    key_.clear();
+    in_grid_.assign(types_.size(), 1);
+    for (std::size_t t = 0; t < types_.size(); ++t) in_grid_[t] = types_[t].layer != Layer::Dist;
+    grid_.build(inst, in_grid_);
+    per_type_.assign(types_.size(), {});
+    slots_.assign(types_.size(), {});
+    slot_of_.assign(inst.n, -1);
+    have_key_ = false;
 }
 
 bool InstanceRenderer::passes(const Instances& inst, std::size_t i, const glm::vec3& target, float draw_dist,
@@ -118,26 +126,64 @@ bool InstanceRenderer::passes(const Instances& inst, std::size_t i, const glm::v
 
 void InstanceRenderer::cull(const Instances& inst, const glm::vec3& target, float cam_dist, float draw_dist,
                             const Layers& layers, unsigned edit_rev) {
-    char key[160];
     (void)cam_dist;  // o corte é pelo alvo; o zoom não muda o que passa
-    std::snprintf(key, sizeof key, "%ld,%ld,%ld,%g,%d%d%d,%u", std::lround(target.x / 8), std::lround(target.y / 8),
-                  std::lround(target.z / 8), static_cast<double>(draw_dist), layers.obj, layers.tree, layers.dist, edit_rev);
-    if (key_ == key) return;
+    const CullKey key{std::lround(target.x / 8), std::lround(target.y / 8), std::lround(target.z / 8), draw_dist,
+                      layers.obj, layers.tree, layers.dist, edit_rev};
+    if (have_key_ && key == key_) return;
+    const bool rev_changed = !have_key_ || key.rev != key_.rev;
     key_ = key;
+    have_key_ = true;
+    ++culls_;
+    const auto t0 = std::chrono::steady_clock::now();
+    cut_target_ = target;
+    cut_dist_ = draw_dist;
+    cut_layers_ = layers;
+    // desfazer, refazer e abrir um edits.json mexem em instâncias sem avisar: confere as células
+    if (rev_changed) grid_.refresh(inst);
+
+    for (std::size_t t = 0; t < types_.size(); ++t) {
+        for (std::uint32_t i : slots_[t]) slot_of_[i] = -1;
+        slots_[t].clear();
+        per_type_[t].clear();
+    }
+    auto add = [&](std::uint32_t i) {
+        if (!passes(inst, i, target, draw_dist, layers)) return;
+        slots_[inst.type[i]].push_back(i);
+    };
+    last_cells_ = grid_.query(target.x, target.z, draw_dist, add);
+    for (std::uint32_t i : grid_.always()) add(i);
+
     visible_ = 0;
     for (std::size_t t = 0; t < types_.size(); ++t) {
         Type& ty = types_[t];
-        ty.visible = 0;
-        if (ty.empty || !layers.on(ty.layer)) continue;
-        scratch_.clear();
-        for (std::uint32_t i : ty.group) {
-            if (!passes(inst, i, target, draw_dist, layers)) continue;
+        // em ordem de índice, como antes da grade: a ordem de desenho decide quem ganha entre
+        // objetos coplanares e não pode depender da célula em que a instância caiu
+        std::sort(slots_[t].begin(), slots_[t].end());
+        ty.visible = static_cast<GLsizei>(slots_[t].size());
+        visible_ += slots_[t].size();
+        for (std::size_t k = 0; k < slots_[t].size(); ++k) {
+            const std::uint32_t i = slots_[t][k];
+            slot_of_[i] = static_cast<std::int32_t>(k);
             const float* m = inst.matrix(i);
-            scratch_.insert(scratch_.end(), m, m + kInstFloats);
+            per_type_[t].insert(per_type_[t].end(), m, m + kInstFloats);
         }
-        ty.visible = static_cast<GLsizei>(scratch_.size() / kInstFloats);
-        visible_ += static_cast<std::size_t>(ty.visible);
-        if (ty.visible) ibufs_[t].upload(GL_ARRAY_BUFFER, scratch_.data(), scratch_.size() * sizeof(float), GL_DYNAMIC_DRAW);
+        if (ty.visible) ibufs_[t].upload(GL_ARRAY_BUFFER, per_type_[t].data(), per_type_[t].size() * sizeof(float), GL_DYNAMIC_DRAW);
+    }
+    cull_s_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+void InstanceRenderer::touch(const Instances& inst, std::uint32_t i) {
+    if (i >= inst.n || slot_of_.size() != inst.n) return;
+    grid_.relocate(inst, i);
+    const bool vis = passes(inst, i, cut_target_, cut_dist_, cut_layers_);
+    const std::int32_t s = slot_of_[i];
+    if (s >= 0 && vis) {
+        glBindBuffer(GL_ARRAY_BUFFER, ibufs_[inst.type[i]].id());
+        glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(s) * kInstFloats * sizeof(float), kInstFloats * sizeof(float),
+                        inst.matrix(i));
+        ++partial_;
+    } else if (s >= 0 || vis) {
+        have_key_ = false;  // entrou ou saiu do corte (apagada, restaurada, arrastada para longe): refaz
     }
 }
 

@@ -9,6 +9,7 @@
 #undef NDEBUG
 #include "core/dr2i.hpp"
 #include "core/dr2m.hpp"
+#include "core/grid.hpp"
 #include "core/io.hpp"
 #include "core/json.hpp"
 #include "core/track.hpp"
@@ -18,7 +19,10 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <algorithm>
 #include <functional>
+#include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -154,6 +158,96 @@ void test_dr2i_synthetic() {
     check(throws([&] { dr2::read_dr2i(magic, 2); }, "magia"), "dr2i: magia errada lança");
 }
 
+// Instâncias espalhadas ao acaso numa área de 3 km (tipo 0 na grade, tipo 1 sempre desenhado).
+dr2::Instances scattered(std::uint32_t n, std::uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> u(-1500.0f, 1500.0f);
+    dr2::Instances inst;
+    inst.n = n;
+    for (std::uint32_t i = 0; i < n; ++i) {
+        inst.type.push_back(i % 50 == 0 ? 1 : 0);
+        inst.idnum.push_back(i);
+        const float m[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, u(rng), u(rng) * 0.1f, u(rng)};
+        inst.m.insert(inst.m.end(), m, m + 12);
+    }
+    inst.m0 = inst.m;
+    inst.hidden.assign(n, 0);
+    return inst;
+}
+
+std::set<std::uint32_t> brute(const dr2::Instances& inst, float x, float z, float r) {
+    std::set<std::uint32_t> out;
+    for (std::uint32_t i = 0; i < inst.n; ++i) {
+        if (inst.type[i] == 1) continue;
+        const float* m = inst.matrix(i);
+        if ((m[9] - x) * (m[9] - x) + (m[11] - z) * (m[11] - z) <= r * r) out.insert(i);
+    }
+    return out;
+}
+
+// O que a grade entrega, depois do filtro por círculo que o corte faz.
+std::set<std::uint32_t> from_grid(const dr2::InstanceGrid& g, const dr2::Instances& inst, float x, float z, float r) {
+    std::set<std::uint32_t> out;
+    g.query(x, z, r, [&](std::uint32_t i) {
+        const float* m = inst.matrix(i);
+        if ((m[9] - x) * (m[9] - x) + (m[11] - z) * (m[11] - z) <= r * r) out.insert(i);
+    });
+    return out;
+}
+
+void test_grid() {
+    using dr2::InstanceGrid;
+    check(InstanceGrid::cell_of(0.0f) == 0 && InstanceGrid::cell_of(63.9f) == 0 && InstanceGrid::cell_of(64.0f) == 1 &&
+              InstanceGrid::cell_of(-0.1f) == -1 && InstanceGrid::cell_of(-64.0f) == -1 && InstanceGrid::cell_of(-64.1f) == -2,
+          "grade: célula de uma coordenada (negativas incluídas)");
+    check(InstanceGrid::cell_of(std::nanf("")) == 0, "grade: NaN não derruba");
+
+    dr2::Instances inst = scattered(20000, 7);
+    InstanceGrid g;
+    g.build(inst, {1, 0});
+    check(g.size() == 20000 && g.always().size() == 400, "grade: o tipo 1 vai para a lista always");
+    for (float r : {10.0f, 100.0f, 700.0f, 4000.0f}) {
+        for (auto [x, z] : {std::pair{0.0f, 0.0f}, std::pair{-1400.0f, 1300.0f}, std::pair{-63.0f, 64.0f}}) {
+            check(from_grid(g, inst, x, z, r) == brute(inst, x, z, r), "grade: igual à varredura bruta");
+        }
+    }
+    // raio de 50 km: cai no caminho das células existentes
+    check(from_grid(g, inst, 0, 0, 50000.0f).size() == 19600, "grade: raio enorme devolve todas");
+
+    // mover instâncias entre células (arraste) e conferir de novo
+    std::mt19937 rng(3);
+    for (int k = 0; k < 3000; ++k) {
+        const auto i = static_cast<std::uint32_t>(rng() % inst.n);
+        float* m = inst.matrix(i);
+        m[9] = static_cast<float>(static_cast<int>(rng() % 3000) - 1500);
+        m[11] = static_cast<float>(static_cast<int>(rng() % 3000) - 1500);
+        g.relocate(inst, i);
+    }
+    check(from_grid(g, inst, 0, 0, 700.0f) == brute(inst, 0, 0, 700.0f), "grade: relocate mantém a grade certa");
+    check(g.relocate(inst, 5) == false, "grade: relocate sem mudança de célula devolve false");
+
+    // refresh acha as que mudaram sem aviso (desfazer, refazer)
+    for (int k = 0; k < 500; ++k) {
+        const auto i = static_cast<std::uint32_t>(rng() % inst.n);
+        inst.matrix(i)[9] += 200.0f;
+    }
+    check(g.refresh(inst) > 0, "grade: refresh move as que mudaram");
+    check(from_grid(g, inst, 0, 0, 900.0f) == brute(inst, 0, 0, 900.0f), "grade: refresh deixa igual à varredura");
+    check(g.refresh(inst) == 0, "grade: refresh sem mudança não move nada");
+
+    // instância da lista always não muda de célula, e o contador de células é coerente
+    check(g.relocate(inst, 0) == false, "grade: relocate de instância always é no-op");
+    dr2::Instances empty;
+    InstanceGrid ge;
+    ge.build(empty, {});
+    check(ge.cells() == 0 && from_grid(ge, empty, 0, 0, 100.0f).empty(), "grade: vazia");
+    // um corte com raio de 700 m numa pista de 3 km visita bem menos que todas as células
+    InstanceGrid gw;
+    gw.build(inst, {1, 0});
+    std::size_t visited = gw.query(0, 0, 700.0f, [](std::uint32_t) {});
+    check(visited > 0 && visited <= 24 * 24, "grade: o corte visita só as células do raio");
+}
+
 void test_track(const std::string& dir) {
     const dr2::Track track = dr2::read_track(dir);
     const dr2::Route& r0 = track.routes.at(0);
@@ -226,6 +320,7 @@ int main(int argc, char** argv) {
         test_json();
         test_dr2m_synthetic();
         test_dr2i_synthetic();
+        test_grid();
         if (!track_dir.empty()) test_track(track_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FALHOU com exceção: %s\n", e.what());
