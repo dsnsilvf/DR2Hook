@@ -2,6 +2,8 @@
 
 > **Speculation.** A synthetic track exists offline (`tools/synthtrack`, see [docs/tools/synthtrack.md](../tools/synthtrack.md)). Nothing has been tried in the game. Every step below that writes a `.nefs` needs the owner's go-ahead before the result is loaded by the game.
 
+> **Analysis of 2026-10-06:** the order of experiments, the open unknowns and the host-track choice are in [../plans/mapa_no_jogo.md](../plans/mapa_no_jogo.md) (Portuguese).
+
 ## The idea
 
 Drive a track that DR2Hook generated, starting with the procedural "DR2Hook Ring".
