@@ -1,14 +1,19 @@
 #include "dr2hook/load_trace.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/path_redirect.h"
 #include "dr2hook/race_events.h"
 
 #include <MinHook.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <cwctype>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -26,6 +31,17 @@ CreateFileWFn g_originalCreateFileW = nullptr;
 ReadFileFn g_originalReadFile = nullptr;
 void *g_createFileTarget = nullptr;
 void *g_readFileTarget = nullptr;
+
+// Regras de dr2hook_redirect.ini (lidas uma vez, antes de o hook ligar; depois só leitura).
+std::vector<RedirectRule> g_redirects;
+
+bool EndsWithNefs(LPCWSTR name) {
+  const size_t n = std::wcslen(name);
+  if (n < 5) return false;
+  const wchar_t *e = name + n - 5;
+  return e[0] == L'.' && std::towlower(e[1]) == L'n' && std::towlower(e[2]) == L'e' &&
+         std::towlower(e[3]) == L'f' && std::towlower(e[4]) == L's';
+}
 
 std::atomic<bool> g_active{false};
 std::atomic<unsigned long long> g_bytesRead{0};
@@ -45,7 +61,26 @@ bool IsInteresting(const std::wstring &lower) {
 HANDLE WINAPI DetourCreateFileW(LPCWSTR name, DWORD access, DWORD share,
                                 LPSECURITY_ATTRIBUTES sa, DWORD disposition,
                                 DWORD flags, HANDLE templ) {
-  HANDLE h = g_originalCreateFileW(name, access, share, sa, disposition, flags,
+  // Pacote .nefs aberto só para leitura e com regra no ini: abre o arquivo do destino. O log e
+  // o aviso de fase seguem com o nome original, que é o que o jogo pediu.
+  LPCWSTR open_name = name;
+  std::wstring redirected;
+  if (!g_redirects.empty() && name != nullptr && disposition == OPEN_EXISTING && EndsWithNefs(name) &&
+      !t_inDetour && ApplyRedirect(g_redirects, name, &redirected)) {
+    t_inDetour = true;
+    if (GetFileAttributesW(redirected.c_str()) == INVALID_FILE_ATTRIBUTES) {
+      Logger::Warn("LoadTrace: redirect ignorado, o destino nao existe");
+    } else {
+      open_name = redirected.c_str();
+      char from[512], to[512];
+      WideCharToMultiByte(CP_UTF8, 0, name, -1, from, sizeof(from), nullptr, nullptr);
+      WideCharToMultiByte(CP_UTF8, 0, open_name, -1, to, sizeof(to), nullptr, nullptr);
+      from[sizeof(from) - 1] = to[sizeof(to) - 1] = '\0';
+      Logger::Info(std::string("LoadTrace: redirect ") + from + " -> " + to);
+    }
+    t_inDetour = false;
+  }
+  HANDLE h = g_originalCreateFileW(open_name, access, share, sa, disposition, flags,
                                    templ);
   if (!g_active.load(std::memory_order_relaxed) || t_inDetour ||
       name == nullptr) {
@@ -117,6 +152,23 @@ bool HookApi(const wchar_t *module, const char *name, void *detour,
 } // namespace
 
 bool InstallLoadTrace() {
+  // dr2hook_redirect.ini ao lado do exe: "locations\\<x>.nefs = <caminho do arquivo>". Serve para
+  // abrir um pacote de pista de fora da pasta do jogo, que fica sem ser escrita.
+  {
+    char exe[MAX_PATH] = {};
+    if (GetModuleFileNameA(nullptr, exe, MAX_PATH) > 0) {
+      std::string ini(exe);
+      const size_t slash = ini.find_last_of("\\/");
+      ini = (slash == std::string::npos ? std::string() : ini.substr(0, slash + 1)) + "dr2hook_redirect.ini";
+      std::ifstream in(ini, std::ios::binary);
+      if (in.is_open()) {
+        std::stringstream ss;
+        ss << in.rdbuf();
+        g_redirects = ParseRedirectRules(ss.str());
+        Logger::Info("LoadTrace: " + std::to_string(g_redirects.size()) + " regra(s) em dr2hook_redirect.ini.");
+      }
+    }
+  }
   const bool fileOk = HookApi(L"kernel32.dll", "CreateFileW",
                               reinterpret_cast<void *>(&DetourCreateFileW),
                               reinterpret_cast<void **>(&g_originalCreateFileW),

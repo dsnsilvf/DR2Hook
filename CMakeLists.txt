@@ -69,6 +69,7 @@ add_library(dxgi SHARED
     src/core/logger.cpp
     src/core/auto_stage.cpp
     src/core/load_trace.cpp
+    src/core/path_redirect.cpp
     src/core/race_events.cpp
     src/core/pssg_patch.cpp
     src/core/vehicle_system_patch.cpp
@@ -454,6 +455,13 @@ if(WIN32 OR MSVC)
         _CRT_SECURE_NO_WARNINGS
     )
 endif()
+
+add_executable(test_path_redirect
+    tests/test_path_redirect.cpp
+    src/core/path_redirect.cpp
+)
+
+target_include_directories(test_path_redirect PRIVATE include)
 
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release
