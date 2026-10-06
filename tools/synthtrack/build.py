@@ -217,7 +217,9 @@ def build(out: str, seed: int = 7, log=print) -> dict:
                 place("e:synth_barrier~a", p.p[0] + p.n[0] * off, p.p[2] + p.n[1] * off, th)
     # largada: pórtico, arquibancada e alambrado na reta dos boxes (início do traçado)
     p = pts[20]
-    place("e:synth_start_arch", p.p[0], p.p[2], meshes.heading(*p.t), y=p.p[1])
+    # o pórtico é largo em X: gira 90° para atravessar a pista; o Z local fica na direção da corrida
+    # e a face do banner em −z fica de frente para quem chega
+    place("e:synth_start_arch", p.p[0], p.p[2], meshes.heading(*p.t) + math.pi / 2, y=p.p[1])
     for k in (30, 45):
         q = pts[k]
         off = -(h + 22.0)
