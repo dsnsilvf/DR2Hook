@@ -323,3 +323,201 @@ Próximos passos:
 2. Se o PVS explicar o recorte: gerar um `track.vis` do Ring.
 3. Depois: nós `LOW_` para distância, colisão (`track.jpk` não passou pela camada), objetos
    (`objects.ens`/`trees`/`ornaments`), rota/progress e AI.
+
+### 9.7 Análise sem o jogo (2026-10-06)
+
+**Comparação estrutural Montalegre × Ring** (scripts no scratchpad; resultado abaixo):
+
+- Iguais: TRANSFORM identidade em células e nós de render. A BOUNDINGBOX do nó de render é a
+  extensão exata dos vértices, no espaço do mundo, nos dois arquivos. A da célula e a da `surface`
+  são zeradas. Atributos de NODE/RENDERNODE/RSI e formatos dos fluxos também são iguais. **A H2
+  (caixa errada → corte por frustum) está descartada.**
+- Diferenças:
+  1. Agrupamento: na Montalegre há um SEGMENTSET por nó de render, com todos os datasources do nó
+     (1138 SEGMENTSETs = 1138 nós). O Ring cria um por datasource.
+  2. Os 1138 SEGMENTSETs e 2708 DATABLOCKs da Montalegre ficam órfãos no arquivo do Ring.
+  3. Tamanho: as `LAND_` da Montalegre formam uma grade de 20×20 com ~832 m cada, cobrindo 14 km.
+     O Ring tem 183 células de 100 e 500 m, cobrindo 2,6 km.
+  4. O Ring não tem `LOW_`, `DECAL_` nem `PHYSICS_` (a Mettet tem `PHYSICS_`/`PHYSICSBATCH_`).
+  5. O NONLOD da Montalegre (`terrain_track_vista_d4`) usa dois DATABLOCKs (Vertex float3/12 e
+     um bloco de 44 bytes com Color/ST/ST/Normal). O Ring usa o bloco de 56 bytes do detalhado.
+
+**Formato do `track.vis`** (`scripts/research/track_vis.py`; validado nos 172 arquivos de 40
+locais):
+
+| Offset | Conteúdo |
+| :--- | :--- |
+| 0x00 | u32: versão 4, nós, folhas (nós = 2·folhas − 1), u3, bytes do bitset por folha, offset dos nós (0x80), offset dos blocos, tamanho dos blocos |
+| 0x20 | caixa da árvore: f32 mín xyz, u32, f32 máx xyz, u32 |
+| 0x40 | 16 × u32: tamanhos dos grupos de itens |
+| 0x80 | nós (6 bytes cada) |
+| blocos | um bitset por folha, em PackBits |
+| depois | kd-tree de itens e caixas do PVS (ver §9.9) |
+
+- Nó folha: u16 0, u24 offset do bloco, u8 1.
+- Nó interno: u16 a, u16 b, u16 c.
+  - Filho do lado baixo: `a & 0x1fff`. Filho do lado alto: esse índice − 1.
+  - Eixo: `(a >> 13) & 3` (0 = x, 1 = y, 2 = z).
+  - Corte: `((b >> 12) << 16 | c) / 2^20`, como fração da caixa do nó.
+  - O bit 15 de `a` só aparece nas pistas grandes e o uso é desconhecido.
+- As folhas sob o chão (y de 0,5 a ~1420 na Montalegre) têm o bloco "tudo 1" de 16 bytes. São 132
+  das 247.
+- Bloco: PackBits. `c ≥ 0x80` repete o próximo byte `c − 0x80` vezes; `c < 0x80` copia `c` bytes.
+  Os bits estão em ordem little-endian.
+- **Bits por folha = u3 + soma dos grupos.** Na Montalegre: 599 + 470 + 472 + 1644 + 974 + 125 +
+  62 = 4346. O bitset tem 544 bytes, e o último byte é 0x03.
+- **O 1º grupo é o número de células do `tracksplit.pssg`.** Montalegre 470 (400 LAND + 70 ROOT),
+  Mettet 470 (400 + 70), Estering 486 (400 + 86). Os demais grupos devem ser objetos, árvores e
+  ornamentos (há grupos que mudam por rota). u3 = 599 em quase todas as pistas.
+- Ainda não se sabe em que bits ficam as células. Uma busca pela distância entre folha e célula dá
+  um sinal fraco (ROOT perto do bit ~921, LAND perto do ~2357, não contíguos). Falta o código do
+  exe que lê o arquivo: `track.vis` não tem referência direta, e `VISIBILITY_SYSTEM` é usado em
+  `0x1409cc950`.
+
+**Conclusão para o Ring:** o `track.vis` foi feito para as 470 células da Montalegre, na ordem do
+arquivo. O Ring tem 183 células, e cada uma herda a visibilidade da célula da Montalegre com o
+mesmo índice. Isso bate com o recorte em degraus que muda com a câmera (H1).
+
+Teste que decide a H1: `track_vis.py all-visible` gera o mesmo arquivo com todo bloco trocado por
+"tudo 1", sem mudar nenhum offset (`build/re/track_allvis.vis`). Servido pela overlay em
+`.../montalegre_rallycross/route_0/track.vis`:
+
+- se o Ring aparecer inteiro, a H1 está confirmada e o próximo passo é gerar um `track.vis` do Ring;
+- se não, sobram H3 (`SHADOWCASTING_` só de perto e falta `LOW_`) e H4 (oclusão pela
+  `landscape.heightfield`).
+
+**Resultado (2026-10-06, run `allvis`):** o `track_allvis.vis` foi servido pela overlay. O log mostra
+`open ...dr2hook_overlay\...\route_0\track.vis`. Com as mesmas 5 poses do ring3, as imagens ficaram
+iguais: mesmo recorte, mesmas bordas retas. Como `pvs_mode = 0` também estava ligado, o PVS saiu
+pelos dois caminhos e o recorte continuou. **A H1 caiu: o PVS não corta o Ring.** O formato
+decifrado continua valendo para gerar um `.vis` do Ring mais tarde.
+
+O recorte tem bordas retas alinhadas aos eixos, então o corte é por célula inteira. Sobram as
+hipóteses de corte por célula fora do PVS:
+
+- crossfade pista/vista (`0x140bce9c0` liga `trackxfade_high/low` e recebe o byte "é LAND");
+- distância/LOD (falta o `LOW_`);
+- oclusão (heightfield, ou o batch de profundidade do quadro anterior);
+- algum campo da célula de 0x120 bytes calculado na carga.
+
+Próxima análise: comparar no jogo o vetor de células (`r13+0x210`) entre células visíveis e
+invisíveis da mesma pose.
+
+### 9.8 Quem corta o Ring: a lista de células vem do `track.vis` da Montalegre (2026-10-06)
+
+Medido no jogo com o Ring pela overlay e a câmera livre. As ferramentas usadas foram watchpoint e
+breakpoint de hardware pelo `gdb -p` (o Wine permite ptrace), mais a leitura de `/proc/<pid>/mem`.
+
+**Escritor dos pesos.** Um watchpoint em `[célula+0xd0]` parou em `0x140bcb3ec`, dentro de
+`0x140bcb2d0`:
+
+```
+bcb2d0(célula, olho vec4, fov, saída_a, saída_b, passe, desenha, k)
+  d = |max(0, olho − máx, mín − olho)|        ; caixa ao vivo da célula, +0xa0/+0xb0, 3D
+  gerenciador->vtable[1] = 0x140a81760(d, fov, &alto, &baixo, k)
+  passe 0x400: [célula+(k+0xd)*16] = baixo, [célula+(k+0xe)*16] = alto   ; passe 0x406: +0xf0/+0x100
+  depois põe os nós da célula nas filas de desenho (0x140bcb230) conforme os pesos
+```
+
+`a81760` usa os parâmetros do gerenciador em `+0x38670`: escala 0,96, perto 300, largura 10 e longe
+800. Com `d' = d·fov/0,96`:
+
+| `d'` | Alto | Baixo |
+| :--- | :--- | :--- |
+| < 290 | 1 | 0 |
+| 290–310 | crossfade | crossfade |
+| 310–800 | 0 | 1 |
+| > 800 | 0 | 0 |
+
+Na faixa > 800 a célula não é desenhada, a menos que o byte `+0x40` esteja ligado: nesse caso ela
+ainda desenha os nós de `+0x50`/`+0x78`. O passe principal é 0x400, com o olho na câmera e o FOV
+em rad (0,96 na câmera livre). O passe 0x402 tem FOV π/2 e olho perto do chão; deve ser outra vista
+(reflexo).
+
+**Só as células da lista são avaliadas.** O chamador único, `0x140a7f700(ger, vista, lista, n, ...)`,
+percorre uma lista de pares `(u32 índice, f32 distância)` e pula índice ≥ `[ger+0x38610]`. As
+células fora da lista não são desenhadas e guardam o peso antigo, e por isso os pesos medidos
+pareciam não depender da distância. Na vista principal, a lista é `[vista+0x1198]`, com contagem
+em `+0x1190`: é a entrada 4 da tabela em `vista+0x1110+0x80`, de 0x18 bytes por entrada. Quem a
+pede é `0x14039ccb0` → `0x140c2de70(vis=[vista+0x1038], vista+0x1110, 4)` → `c2df30`, que grava
+olho, distância e destino no objeto de visibilidade (`+0xb17f0..0xb1810`) e dispara um job. O job
+é `0x140c11b00` → `c17360`/`c2d8e0`/`c0b140`.
+
+Com a câmera em (8, 2500, −290), a lista teve 82 itens: os índices 0–69 e 258–301. O float é a
+distância do olho ao **centro da caixa da célula da Montalegre** com índice
+`469 − i`, isto é, na ordem reversa do arquivo, a mesma do vetor de células. O erro foi 0 nas
+`LAND` e < 6 m nas `ROOT`. Por exemplo, 280 = `LAND_10_10` e 0–69 = as `ROOT_` perto da largada.
+
+**De onde vêm as caixas.** O registro de `LAND_10_10` está na memória em 32 bytes: `f32 mín xyz,
+u32 grupo (0)` e `f32 máx xyz, u32 índice (0x118 = 280)`. Os mesmos 32 bytes estão no `track.vis`
+da Montalegre em 0xbcd0. Essa região tem registros desse tipo entre 0xb950 e 0xc830, misturando os
+grupos 0, 1, 2, 3, 4 e 8. O grupo 0 são as células, e o 1º tamanho de grupo no cabeçalho é 470.
+O `track.vis` traz, além dos bitsets, um índice espacial dos itens com caixa (grupo, índice). Isso
+explica o resultado do `allvis`: trocar os bitsets não muda as caixas, então a lista continuou
+igual.
+
+**Conclusão.** A célula `i` do Ring só entra na lista quando a caixa da célula `i` da Montalegre,
+no `track.vis`, está perto da câmera. Os índices ≥ 183 que a lista traz são descartados. Esse é o
+recorte em blocos retos que muda com a câmera.
+
+Caminhos para corrigir: pôr o Ring no molde das 470 células da Montalegre, ou gerar um
+`track.vis` com as células do Ring. O escolhido foi o segundo (§9.9).
+
+### 9.9 Formato completo do `track.vis` e gerador (2026-10-06)
+
+O `track_vis.py` lê e remonta o arquivo. A remontagem de **172 de 172** arquivos sai idêntica byte a
+byte (`info` faz a ida e volta).
+
+| Onde | Conteúdo |
+| :--- | :--- |
+| 0x0c (u3) | nós da kd-tree de itens |
+| 0x10 | bytes do bitset por folha = `ceil(bits/8)` arredondado a 16; bits = nós da kd + soma dos grupos |
+| 0x18 | offset dos blocos das folhas (alinhado a 16 depois dos nós do PVS) |
+| 0x1c | offset da kd-tree (antes lido como "tamanho dos blocos") |
+| 0x2c | offset da seção de caixas do PVS |
+| blocos | cada folha em PackBits, alinhada a 16, com pelo menos um byte 0 depois |
+
+**kd-tree de itens**, em pré-ordem. Cada nó tem 48 bytes mais 32 por registro:
+
+- `f32 mín xyz, u32 bit do nó` (byte | bit<<16);
+- `f32 máx xyz, u16 índice do nó, u16 registros`;
+- `u32 offset do próximo nó` (0 no último), `u32 profundidade<<16 | tamanho do próximo nó`, `u32 0`,
+  `u32 2` (interno) ou `0` (folha).
+
+O registro é `f32 mín xyz, u32 grupo; f32 máx xyz, u32 índice no grupo`. Cada item fica no nó mais
+fundo que contém a caixa inteira dele (3747 de 3747 na Montalegre). A raiz cobre o mundo (±7116,
+y de 0 a 1900) e os cortes são na metade.
+
+**Bits do PVS:** a kd-tree é percorrida em largura (BFS). Cada nó recebe um bit, seguido de um bit
+por registro dele (599 de 599 nós batem; o total é 4346). É isso que faltava na §9.7 para achar a
+célula no bitset.
+
+**Seção de caixas do PVS:** um registro por nó do PVS, em ordem: `f32 mín xyz, f32 máx xyz, u32 n,
+u32 índice` e `n` pontos vec4 (w = 0x10fa10fa). Só as 115 folhas reais (as que não são "tudo 1")
+têm pontos.
+
+Na carga, o jogo copia o arquivo inteiro para a memória e reescreve só os campos de ligação, como o
+offset do próximo nó e a flag de filhos. As caixas de alguns objetos são atualizadas ao vivo.
+
+**Gerador:** `track_vis.py cells <track.vis> <tracksplit.pssg> <saída>`.
+
+- Mantém o PVS e os itens dos grupos 1 em diante.
+- Troca o grupo 0 pelas células do `tracksplit`: a caixa é a união das BOUNDINGBOX dos nós de
+  render, na ordem reversa do arquivo (= vetor do jogo).
+- Insere cada célula no nó mais fundo que a contém.
+- Recalcula bits, offsets e cabeçalho, e deixa toda folha "tudo 1".
+
+Para o Ring, as 183 caixas do arquivo batem com as caixas ao vivo das células no jogo (erro 0),
+gerando `build/re/track_ring.vis`.
+
+**Resultado no jogo (2026-10-06, run `ringvis`).** O `track_ring.vis` foi servido pela overlay em
+`route_0/track.vis`; o log mostra o `open` pela overlay e a corrida largou normal. Repeti as mesmas
+5 poses do ring3/allvis, e o recorte sumiu: o terreno do Ring aparece contínuo até o horizonte em
+todas elas. **A kd-tree de itens era a causa.**
+
+Ainda falta:
+
+- colisão: perto do carro tudo fica branco, porque o carro está sob a grama do Ring;
+- os objetos da Montalegre (grupos 1 em diante) seguem nas posições antigas, e a maioria fica
+  enterrada sob o Ring;
+- `LOW_` para longe, decalques, rota e AI.
