@@ -27,7 +27,7 @@ Regras que valem (`docs/plans/README.md`): a pasta do jogo é somente leitura; n
 | O `LoadTrace` (`dxgi.dll`) já intercepta `CreateFileW` e `ReadFile`. O jogo abre `locations/<localidade>__<pista>.nefs` por `CreateFileW` (é o que dispara `onStageLoad`). | `load_trace.cpp`, `stage_loading.md` §7, §9 |
 | `tools/egodata/nefs_write.py` (`replace_files`) grava uma **cópia** do `.nefs` com arquivos trocados. O arquivo novo tem de manter o **mesmo número de blocos de 64 KiB**. O jogo nunca abriu um pacote assim. | `track_formats.md` |
 | `tools/uiview/track/edit.py` aplica as edições do viewer (mover, girar, apagar, copiar) em `objects.ens`, `ornaments.bin` e `trees.bin`. Em `.bin` a contagem é fixa; um objeto apagado fica invisível em `y = -10000`. | `edit.py` |
-| Os `locations/*.nefs` têm um bloco RSA-1024 nos primeiros 128 bytes e o resto do cabeçalho em AES-256-ECB. | `ui_render.md` |
+| `ui_render.md` diz que `cars/*.nefs` e `locations/*.nefs` abrem com um bloco RSA-1024. **Nos pacotes de pista desta instalação isso não vale:** Montalegre e NZ começam com `NeFS` em claro (conferido no E0). | `ui_render.md`, E0 |
 
 Tamanhos dos pacotes na pasta do jogo: o menor é `portugal__montalegre_rallycross.nefs` (884 MB); `new_zealand__new_zealand_rally_01.nefs` tem 1,95 GB; os de rali vão a 4,4 GB.
 
@@ -61,7 +61,7 @@ U1 e U3 estão misturadas no crash antigo. Se a primeira tentativa de levar o Ri
 
 | # | O quê | Fecha | Toca no jogo? | Precisa de OK |
 | --- | --- | --- | --- | --- |
-| E0 | Inventário offline: tamanho em blocos de cada arquivo que o Ring substituiria na hospedeira; por que `replace_files` exige o mesmo número de blocos e se dá para relaxar; espaço livre no último bloco do `objects.ens`; quantos registros de árvore e ornamento a hospedeira tem. | base de U4 | não | não |
+| E0 (**feito**, ver abaixo) | Inventário offline: tamanho em blocos de cada arquivo que o Ring substituiria na hospedeira; por que `replace_files` exige o mesmo número de blocos e se dá para relaxar; espaço livre no último bloco do `objects.ens`; quantos registros de árvore e ornamento a hospedeira tem. | base de U4 | não | não |
 | E1 | Benchmark nativo + câmera livre (NZ `route_2`). Depois o override do AutoStage para outras rotas de NZ, e para uma localidade com rota normal (Montalegre) em vez de `free_roam`. Só dados originais. | U3 | sim, pasta intacta | para o jogo abrir sim; para Montalegre há risco de crash |
 | E2 | Redirecionamento do `CreateFileW`: `locations\<x>.nefs` → arquivo em `build/`. Primeiro uma cópia **idêntica byte a byte**, para provar o redirecionamento sem arriscar dado. | U2 | sim | cópia idêntica: não muda dado, mas é um passo novo; vou avisar antes |
 | E3 | Uma cópia modificada com **um objeto movido para longe**, numa pista que o E1 provou que carrega. A diferença é visível e o resto fica igual. | U1 | sim | **sim, `.nefs` modificado** |
@@ -78,6 +78,31 @@ E0 a E3 não alteram nenhum dado do jogo além de um objeto no E3. E4 a E6 já d
 - **Montalegre rallycross:** o menor pacote (884 MB), já exportado (324 tipos, 2897 instâncias), e já usado em todos os testes do viewer. Custo: depende de o AutoStage aguentar a troca de pista (U3).
 
 Recomendo **NZ nos experimentos E3 em diante**, e Montalegre só depois que o E1 mostrar que a troca funciona.
+
+## Resultado do E0 (2026-10-06, só leitura)
+
+Script: `python3 scripts/research/nefs_inventory.py <pacote.nefs>`.
+
+**Cabeçalho.** Os dois pacotes começam com `NeFS` em claro, sem intro RSA. Há 32 bytes em `+0x04` que parecem um hash do cabeçalho, mas não batem com SHA-256, SHA3-256 nem BLAKE2s de nenhuma janela do cabeçalho (início de 0 a 255, com o campo zerado ou não). **Não sabemos se o jogo confere esse campo.** É a parte principal de U1: só o E3 responde.
+
+**A regra dos blocos é do nosso gravador, não do formato.** O intro não é assinado nestes pacotes, então o cabeçalho poderia crescer. Hoje `replace_files` mantém o cabeçalho do mesmo tamanho; afrouxar isso fica para depois, se precisar.
+
+**Espaço dentro do bloco (folga no último bloco de 64 KiB):**
+
+| Arquivo | Montalegre | NZ `route_2` |
+| --- | --- | --- |
+| `objects.ens` | 549 993 B, folga 39 831 B | 8 945 764 B, folga 32 668 B |
+| `ornaments.bin` | 273 729 B (≈1290 registros), folga 53 951 B | 284 217 B, folga 43 463 B |
+| `trees.bin` | 93 576 B (≈970 registros), folga 37 496 B | 4 091 880 B (≈42 600 registros), folga 36 888 B |
+| `tracksplit.pssg` | 560 967 030 B, 8560 blocos, folga 21 130 B | 770 906 498 B, 11 764 blocos |
+| `track.jpk` (colisão) | 3 177 520 B | 36 098 336 B (igual nas 6 rotas) |
+
+Consequências:
+
+- **Instâncias novas em `objects.ens`:** cabem poucas dezenas (≈40 KB de folga). O Ring tem ~1000 instâncias, então **reposicionar** as que a hospedeira já tem e esconder as que sobram (`y = -10000`, como o `edit.py` faz) é o que serve. Na NZ há dezenas de milhares de árvores e um `objects.ens` de 8,9 MB: sobra material.
+- **Terreno:** o `tracksplit.pssg` é gigante por causa das texturas (561 MB no Montalegre, 771 MB na NZ). Trocar a geometria tem de manter o tamanho: só mexer nas posições dos vértices, sem mudar contagem.
+- **Colisão:** na NZ o `track.jpk` é o mesmo arquivo (36 098 336 B) nas 6 rotas. A colisão é da pista, não da rota.
+- **Tipos parecidos no Montalegre** (da lista do `track.json`): barreiras (`core_barr_rx_barriers_a`), muros de pneus (`core_barr_tyrewall_a`), alambrado (`core_barr_fence_standard_b`), arquibancadas (`mnt_grandstand_steps_*`, `core_lr_grandstand_*`), pórtico de largada (`mnt_startgantry_a`), placas (`core_brand_board_a`) e bétulas (`birch_02_*`). **Não há cones nem pinheiros**; esses viram outro tipo (um pneu, uma árvore diferente).
 
 ## Alternativa que não passa pelos `.nefs`
 
