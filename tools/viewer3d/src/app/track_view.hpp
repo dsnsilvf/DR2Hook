@@ -34,15 +34,22 @@ public:
 
     // Mouse (coordenadas da janela, w×h o tamanho dela). Botão esquerdo pressionado com Mover ou
     // Girar sobre um objeto começa a editar (true); o main então manda os movimentos para edit_drag.
-    bool begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam);
+    // Com Mover, `shift` apertado sobe e desce em vez de arrastar no chão (pode trocar no meio).
+    bool begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift);
     void edit_drag(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift);
     void end_edit();
     // Clique sem arraste: seleciona o objeto sob o mouse ou desseleciona.
     void click(float x, float y, float w, float h, const render::OrbitCamera& cam);
     bool has_selection() const { return sel_ >= 0; }
     void deselect() { sel_ = -1; }
-    // Grava o edits.json; devolve o número de edições.
-    std::size_t save();
+    // Grava o edits.json; false se falhou (a mensagem fica em status() e o programa segue).
+    bool save();
+    // Há edições diferentes das da última gravação (ou do arquivo aberto)?
+    bool unsaved() const;
+    // Última mensagem para o usuário (gravou, falhou, não abriu a rota).
+    const std::string& status() const { return status_; }
+    void set_status(std::string msg);
+    Tool tool() const { return tool_; }
     const Instances& instances() const { return inst_; }
     // Troca para a rota seguinte (+1) ou anterior (-1), guardando as edições da atual.
     void switch_route(int step);
@@ -72,6 +79,11 @@ private:
     Tool tool_ = Tool::Navigate;
     int sel_ = -1;
     edit::History hist_;
+    std::string status_;
+    std::string saved_text_;  // edits.json da última gravação (ou sem edições), para saber se há o que gravar
+    bool wrote_ = false;      // já gravou nesta sessão (a cópia .bak só no primeiro Ctrl+S)
+    std::string current_edits() const;
+    void after_history();
     struct Saved {
         Instances inst;
         edit::History hist;
@@ -86,6 +98,7 @@ private:
         bool has_start = false;
         glm::vec3 start{};
         float sy = 0, ex = 0;
+        bool shift = false;
     } drag_;
     void frame_selected(render::OrbitCamera& cam) const;
     void commit(const char* label, std::vector<edit::Snap> before);

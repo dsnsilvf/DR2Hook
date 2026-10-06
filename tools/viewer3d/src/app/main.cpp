@@ -62,6 +62,13 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 std::fprintf(stderr, "--camera precisa de yaw,pitch,dist,x,y,z\n");
                 return false;
             }
+            const float* c = opt.camera;
+            bool finite = true;
+            for (int k = 0; k < 6; ++k) finite = finite && std::isfinite(c[k]);
+            if (!finite || c[2] <= 0.0f || std::fabs(c[1]) > 1.5f) {
+                std::fprintf(stderr, "--camera: valores finitos, dist > 0 e |pitch| <= 1,5 (a câmera limita a ~1,45)\n");
+                return false;
+            }
             opt.has_camera = true;
         } else if (std::strcmp(argv[i], "--vsync") == 0 && i + 1 < argc) {
             opt.vsync = std::atoi(argv[++i]) != 0 ? 1 : 0;
@@ -261,20 +268,43 @@ struct Drag {
     float moved = 0;
 };
 
+// Estado do teclado que não é da câmera nem da pista.
+struct Input {
+    // Teclas apertadas durante um atalho com Ctrl: não andam até serem soltas (soltar o Ctrl antes do S
+    // não move a câmera).
+    bool chord[SDL_SCANCODE_COUNT] = {};
+    // Sair com edições não gravadas pede confirmação: o segundo Esc (ou fechar) até este instante sai.
+    Uint64 quit_until = 0;
+};
+
+// Sair agora? Com edições não gravadas, a primeira tentativa só avisa.
+bool confirm_quit(dr2::app::TrackView* track, Input& input) {
+    if (!track || !track->unsaved()) return true;
+    const Uint64 now = SDL_GetTicks();
+    if (now < input.quit_until) return true;
+    input.quit_until = now + 3000;
+    track->set_status("edições não gravadas: Ctrl+S grava; Esc ou fechar de novo em 3 s sai sem gravar");
+    return false;
+}
+
 // Traduz eventos SDL em chamadas da câmera e da pista. Devolve false para sair.
 bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& drag, dr2::app::TrackView* track,
-                  SDL_Window* window) {
+                  SDL_Window* window, Input& input) {
     int ww = 1, wh = 1;
     SDL_GetWindowSize(window, &ww, &wh);
     const float w = static_cast<float>(std::max(1, ww)), h = static_cast<float>(std::max(1, wh));
     const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
     switch (event.type) {
     case SDL_EVENT_QUIT:
-        return false;
+        return !confirm_quit(track, input);
+    case SDL_EVENT_KEY_UP:
+        input.chord[event.key.scancode] = false;
+        break;
     case SDL_EVENT_KEY_DOWN:
+        if (event.key.mod & SDL_KMOD_CTRL) input.chord[event.key.scancode] = true;
         if (event.key.key == SDLK_ESCAPE) {
             if (track && track->has_selection()) track->deselect();  // Esc tira a seleção; sem seleção, sai
-            else return false;
+            else return !confirm_quit(track, input);
             break;
         }
         if (track && track->key(event.key.key, event.key.mod, cam)) break;
@@ -286,8 +316,9 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
         drag.button = event.button.button;
         if (event.button.button == SDL_BUTTON_LEFT) {
             drag.active = true;
-            drag.pan = shift;
-            if (!shift && track) drag.edit = track->begin_edit(event.button.x, event.button.y, w, h, cam);
+            // com Mover/Girar sobre um objeto, Shift é subir e descer; fora de objeto, Shift é pan
+            if (track) drag.edit = track->begin_edit(event.button.x, event.button.y, w, h, cam, shift);
+            drag.pan = shift && !drag.edit;
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             drag.active = true;
             drag.pan = true;
@@ -316,11 +347,12 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
 }
 
 // WASD a cada quadro, pelo estado do teclado (segurar a tecla anda continuamente).
-void walk_keys(dr2::render::OrbitCamera& cam, float dt) {
+void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input) {
     if (SDL_GetModState() & SDL_KMOD_CTRL) return;  // Ctrl+S, Ctrl+Z…: atalhos, não andar
     const bool* keys = SDL_GetKeyboardState(nullptr);
-    const float ahead = (keys[SDL_SCANCODE_W] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_S] ? 1.0f : 0.0f);
-    const float side = (keys[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (keys[SDL_SCANCODE_A] ? 1.0f : 0.0f);
+    auto down = [&](SDL_Scancode k) { return keys[k] && !input.chord[k] ? 1.0f : 0.0f; };
+    const float ahead = down(SDL_SCANCODE_W) - down(SDL_SCANCODE_S);
+    const float side = down(SDL_SCANCODE_D) - down(SDL_SCANCODE_A);
     if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
 }
 
@@ -349,6 +381,7 @@ int run(const Options& opt) {
     dr2::gl::check("criação da cena");
 
     Drag drag;
+    Input input;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 title_t0 = SDL_GetPerformanceCounter();
     Uint64 last_t = title_t0;
@@ -360,11 +393,11 @@ int run(const Options& opt) {
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event))
-            if (!handle_event(event, cam, drag, track.get(), window)) running = false;
+            if (!handle_event(event, cam, drag, track.get(), window, input)) running = false;
         const Uint64 frame_t = SDL_GetPerformanceCounter();
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
-        walk_keys(cam, dt);
+        walk_keys(cam, dt, input);
 
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(window, &w, &h);
@@ -375,7 +408,7 @@ int run(const Options& opt) {
         const glm::mat4 view_proj = cam.proj(aspect) * cam.view();
         if (track) track->draw(view_proj, cam);
         else scene->draw(view_proj);
-        dr2::gl::check("quadro");
+        dr2::gl::warn("quadro");  // um erro de GL num quadro avisa, não fecha o editor com edições abertas
 
         ++frames;
         const bool last = opt.frames > 0 && frames >= opt.frames;

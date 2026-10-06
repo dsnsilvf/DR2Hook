@@ -60,7 +60,7 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Pan | botão direito ou do meio, ou Shift + esquerdo |
 | Zoom | roda |
 | Andar | W A S D (Shift = ×3; parado com Ctrl apertado) |
-| Ferramentas | **1** Navegar, **2** Mover (arrastar no chão; Shift sobe e desce), **3** Girar (arrastar para os lados) |
+| Ferramentas | **1** Navegar, **2** Mover (arrastar no chão; com Shift, antes ou durante o arraste, sobe e desce), **3** Girar (arrastar para os lados) |
 | Selecionar | clique sem arrastar; clique no vazio ou **Esc** tira a seleção |
 | Apagar | **Delete** |
 | Duplicar | **Ctrl+D**: cópia 2 m adiante em x, já selecionada (só objetos `e:` de `objects.ens`, como no web) |
@@ -68,24 +68,26 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Restaurar | **R** volta o selecionado à matriz do arquivo e o mostra |
 | Rota | **Tab** próxima, **Shift+Tab** anterior; cada rota guarda as próprias edições e histórico |
 | Histórico | **Ctrl+Z** desfaz; **Ctrl+Y** ou **Ctrl+Shift+Z** refaz (300 passos) |
-| Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás) |
+| Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás). Se o arquivo já existia ao abrir, o primeiro Ctrl+S guarda uma cópia em `<arquivo>.<n>.bak`. A gravação é atômica (`.tmp` e renomeia); se falhar, o editor avisa no título e continua aberto |
 | Enquadrar | **F**: o selecionado, ou a rota sem seleção (na cena de teste, volta ao início) |
 | Camadas | **F1** terreno, **F2** objetos, **F3** árvores, **F4** terreno distante, **G** portões, **I** linha da IA |
 | Distância de desenho | **[** e **]** (100 a 4000 m, padrão 700 m) |
-| Sair | **Esc** sem seleção, ou fechar a janela |
+| Sair | **Esc** sem seleção, ou fechar a janela. Com edições não gravadas, a primeira vez só avisa; repetir em 3 s sai sem gravar |
 
-O título mostra a ferramenta, a rota, as contagens do terreno, as instâncias visíveis/total, o raio, o histórico e, com seleção, o tipo, o `kind`, o `idnum` e a posição.
+O título mostra a ferramenta, a rota, as contagens do terreno, as instâncias visíveis/total, o raio, o histórico, "não gravado" quando há edições fora do arquivo, a seleção (tipo, `kind`, `idnum`, posição) e a última mensagem (gravou, não gravou, não abriu a rota).
+
+Se uma rota não abre no **Tab** (arquivo truncado ou ausente), a rota atual fica como estava, com edições e histórico, e o título diz o motivo.
 
 ## Opções
 
 | Opção | Efeito |
 | --- | --- |
 | `--track DIR` | abre a pista exportada em `DIR` (rota 0) |
-| `--out arq.json` | onde **Ctrl+S** grava (padrão `build/uiview/saves/<id>.edits.json`); caminho na pasta do jogo é recusado com código 1 |
+| `--out arq.json` | onde **Ctrl+S** grava (padrão `build/uiview/saves/<id>.edits.json`); caminho na pasta do jogo, ou uma pasta, é recusado com código 1 |
 | `--frames N` | roda `N` quadros, imprime `OK renderer=... gl=... frames=N fps=...` (e as contagens da pista) e sai com 0 |
 | `--screenshot arq.ppm` | com `--frames`, grava o último quadro em PPM (P6) antes de sair |
 | `--vsync 0\|1` | sincronia vertical (padrão 1); `0` para medir FPS |
-| `--camera yaw,pitch,dist,x,y,z` | estado exato da câmera, para comparar capturas com o viewer web |
+| `--camera yaw,pitch,dist,x,y,z` | estado exato da câmera, para comparar capturas com o viewer web (valores finitos, `dist` > 0, \|pitch\| ≤ 1,5) |
 
 Ver o PPM: `python3 -c "from PIL import Image; Image.open('arq.ppm').save('arq.png')"`. No `stderr` saem os tempos de leitura e de envio à GPU do terreno, e os das texturas.
 

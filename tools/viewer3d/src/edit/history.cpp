@@ -97,7 +97,16 @@ void turn(Instances& inst, History& hist, std::uint32_t i, float deg) {
     float base[kInstFloats];
     std::memcpy(base, inst.matrix(i), sizeof base);
     spin(inst.matrix(i), base, deg * 3.14159265358979f / 180.0f);
+    snap_to_file(inst, i);
     hist.commit("Girar", std::move(before), snapshot(inst, {i}));
+}
+
+void snap_to_file(Instances& inst, std::size_t i, float eps) {
+    float* a = inst.matrix(i);
+    const float* b = &inst.m0[i * kInstFloats];
+    for (std::size_t k = 0; k < kInstFloats; ++k)
+        if (std::fabs(a[k] - b[k]) > eps) return;
+    std::memcpy(a, b, sizeof(float) * kInstFloats);
 }
 
 bool changed(const Instances& inst, std::size_t i) {

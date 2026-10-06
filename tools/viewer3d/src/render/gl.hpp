@@ -12,6 +12,8 @@ GLuint compile_program(const char* vs, const char* fs);
 
 // Lança std::runtime_error se glGetError() não for GL_NO_ERROR.
 void check(const char* where);
+// Como check, mas só avisa no stderr (até 20 vezes) e devolve false: para o laço de quadros.
+bool warn(const char* where);
 
 // Lê o back buffer (RGB) e grava PPM P6, com a primeira linha do arquivo no topo da imagem.
 // Chame antes do SDL_GL_SwapWindow do quadro que quer gravar.

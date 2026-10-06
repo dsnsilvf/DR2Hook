@@ -68,6 +68,17 @@ void check(const char* where) {
     }
 }
 
+bool warn(const char* where) {
+    static int reported = 0;
+    bool ok = true;
+    for (GLenum err; (err = glGetError()) != GL_NO_ERROR;) {
+        ok = false;
+        if (reported < 20) std::fprintf(stderr, "viewer3d: aviso: erro de GL 0x%04x em %s\n", err, where);
+        if (++reported == 20) std::fprintf(stderr, "viewer3d: aviso: mais erros de GL; os próximos não serão mostrados\n");
+    }
+    return ok;
+}
+
 void save_ppm(const char* path, int width, int height) {
     if (width <= 0 || height <= 0) throw std::runtime_error("save_ppm: tamanho inválido");
     const std::size_t row = static_cast<std::size_t>(width) * 3;

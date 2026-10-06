@@ -27,7 +27,12 @@ inline std::string edits_json(const Track& track, const Route& route, const Inst
 // comparação ignora maiúsculas e aceita barra invertida.
 bool inside_game_folder(const std::string& path);
 
-// Grava `text` em `path`, criando as pastas. Lança std::runtime_error se `path` está na pasta do jogo.
+// Grava `text` em `path`, criando as pastas: escreve em `path`.tmp e renomeia, então uma falha não
+// estraga o arquivo que já existia. Lança std::runtime_error se `path` está na pasta do jogo ou se a
+// gravação falha.
 void write_text(const std::string& path, const std::string& text);
+
+// Se `path` existe, copia para `path`.<n>.bak (o primeiro n livre) e devolve o nome da cópia; senão "".
+std::string backup_existing(const std::string& path);
 
 }  // namespace dr2::edit

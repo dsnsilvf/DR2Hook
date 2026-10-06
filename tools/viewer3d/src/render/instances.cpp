@@ -176,7 +176,10 @@ void InstanceRenderer::draw_one(const TrackShader& shader, TextureCache& texture
     TrackShader::constant_rows(inst.matrix(i));
     shader.set_highlight(hi);
     shader.set_vertex_color(false);
+    // o realce redesenha o objeto na mesma profundidade: com GL_LESS ele perderia para o próprio objeto
+    glDepthFunc(GL_LEQUAL);
     draw_parts(shader, textures, ty, 0);
+    glDepthFunc(GL_LESS);
     shader.set_highlight(0.0f);
     TrackShader::identity_rows();
     glBindVertexArray(0);

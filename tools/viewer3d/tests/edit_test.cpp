@@ -7,7 +7,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace dr2;
 
@@ -176,6 +180,66 @@ void test_game_folder() {
     check(refused, "pasta do jogo: write_text recusa");
 }
 
+// Girar 360° em passos volta exatamente ao arquivo: sem edição fantasma no edits.json (R1 P2-1).
+void test_full_turn() {
+    const Track track = make_track();
+    for (float step : {15.0f, 90.0f, -15.0f}) {
+        Instances inst = make_instances(2);
+        inst.matrix(1)[0] = 0.8f;  // escala não unitária e não alinhada
+        inst.matrix(1)[2] = 0.3f;
+        inst.m0 = inst.m;
+        edit::History h;
+        for (int k = 0; k < static_cast<int>(360.0f / std::fabs(step)); ++k) edit::turn(inst, h, 1, step);
+        std::size_t count = 9;
+        edit::edits_json(track, track.routes[0], inst, &count);
+        check(std::memcmp(inst.matrix(1), &inst.m0[12], 48) == 0 && count == 0, "girar 360 em passos: volta exatamente ao arquivo");
+    }
+    Instances inst = make_instances(1);
+    inst.matrix(0)[9] += 0.5f;
+    edit::snap_to_file(inst, 0);
+    check(inst.matrix(0)[9] != inst.m0[9], "snap_to_file: não desfaz uma edição de verdade");
+}
+
+std::string slurp(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// Gravação: falha não estraga o arquivo antigo; cópia .bak do arquivo de outra sessão (R1 P0-1, P0-3).
+void test_write_backup() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("dr2_edit_test_" + std::to_string(::getpid()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string out = (dir / "e.json").string();
+    check(edit::backup_existing(out).empty(), "backup: sem arquivo, sem cópia");
+    edit::write_text(out, "velho");
+    check(slurp(out) == "velho" && !fs::exists(out + ".tmp"), "write_text: grava e não deixa .tmp");
+    const std::string bak = edit::backup_existing(out);
+    check(bak == out + ".1.bak" && slurp(bak) == "velho", "backup: copia para .1.bak");
+    check(edit::backup_existing(out) == out + ".2.bak", "backup: não sobrescreve a cópia anterior");
+    edit::write_text(out, "novo");
+    check(slurp(out) == "novo" && slurp(bak) == "velho", "write_text: substitui, a cópia fica");
+    bool threw = false;
+    try {
+        edit::write_text((dir / "e.json" / "dentro.json").string(), "x");  // pai é um arquivo
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    check(threw && slurp(out) == "novo", "write_text: caminho impossível lança e não toca no resto");
+    fs::create_directories(dir / "pasta.json");
+    threw = false;
+    try {
+        edit::write_text((dir / "pasta.json").string(), "x");  // destino é uma pasta
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    check(threw && fs::is_directory(dir / "pasta.json") && !fs::exists(dir / "pasta.json.tmp"), "write_text: destino pasta lança e limpa o .tmp");
+    fs::remove_all(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -184,6 +248,8 @@ int main() {
     test_edits_json();
     test_duplicate_restore_turn();
     test_game_folder();
+    test_full_turn();
+    test_write_backup();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;
 }

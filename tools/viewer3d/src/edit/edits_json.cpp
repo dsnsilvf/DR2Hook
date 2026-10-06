@@ -63,9 +63,36 @@ void write_text(const std::string& path, const std::string& text) {
     if (inside_game_folder(path)) throw std::runtime_error("recusado: " + path + " fica dentro da pasta do jogo");
     const std::filesystem::path p(path);
     if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size())))
-        throw std::runtime_error("não gravou " + path);
+    // grava ao lado e renomeia: uma falha no meio não deixa o arquivo antigo pela metade
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size())) || !out.flush()) {
+            out.close();
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+            throw std::runtime_error("não gravou " + path);
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp, ec);
+        throw std::runtime_error("não gravou " + path + ": " + ec.message());
+    }
+}
+
+std::string backup_existing(const std::string& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return {};
+    for (int k = 1; k < 1000; ++k) {
+        const std::string bak = path + "." + std::to_string(k) + ".bak";
+        if (std::filesystem::exists(bak, ec)) continue;
+        std::filesystem::copy_file(path, bak, ec);
+        if (ec) throw std::runtime_error("não copiou " + path + " para " + bak + ": " + ec.message());
+        return bak;
+    }
+    throw std::runtime_error("já há 999 cópias de " + path);
 }
 
 }  // namespace dr2::edit

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
 
 namespace dr2::app {
@@ -31,6 +32,7 @@ TrackView::TrackView(const std::string& dir, std::string out)
     : track_(read_track(dir)), dir_(dir), textures_(dir, track_.materials), out_(std::move(out)) {
     if (out_.empty()) out_ = "build/uiview/saves/" + track_.id + ".edits.json";
     if (edit::inside_game_folder(out_)) throw std::runtime_error("--out " + out_ + " fica dentro da pasta do jogo");
+    if (std::filesystem::is_directory(out_)) throw std::runtime_error("--out " + out_ + " é uma pasta; passe o caminho do arquivo .json");
 
     const auto t0 = std::chrono::steady_clock::now();
     library_ = read_dr2m(read_file(join_path(dir, "objects.bin")));
@@ -41,29 +43,36 @@ TrackView::TrackView(const std::string& dir, std::string out)
     std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha); %.3f s\n", library_.size(),
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
+    saved_text_ = current_edits();  // nada editado ainda
+    if (std::filesystem::exists(out_))
+        std::fprintf(stderr, "viewer3d: %s já existe; o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak\n", out_.c_str());
 }
 
 void TrackView::load_route(std::size_t index) {
-    route_index_ = index;
-    route_ = &track_.routes.at(index);
-    if (route_->terrain_file.empty()) throw std::runtime_error("track.json: a rota " + route_->name + " não tem terreno");
+    // lê tudo antes de mudar o estado: se um arquivo falhar, a rota aberta continua como estava
+    const Route& route = track_.routes.at(index);
+    if (route.terrain_file.empty()) throw std::runtime_error("track.json: a rota " + route.name + " não tem terreno");
+    Instances inst;
+    const bool reopen = saved_.count(index) != 0;
+    if (!reopen) inst = read_dr2i(read_file(join_path(dir_, "inst_" + route.name + ".bin")), track_.types.size());
 
     // rotas com a mesma seleção de terreno dividem o arquivo: só relê se mudou
-    if (route_->terrain_file != terrain_file_) {
+    if (route.terrain_file != terrain_file_) {
         auto t0 = std::chrono::steady_clock::now();
-        const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route_->terrain_file));
+        const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route.terrain_file));
         const std::vector<Mesh> meshes = read_dr2m(bytes);
         const double read_s = seconds_since(t0);
         const MeshTotals tot = totals(meshes);
         if (tot.verts > 5'000'000)
             std::fprintf(stderr, "viewer3d: aviso: %s tem %zu vértices; o MVP não otimiza pistas desse tamanho\n",
-                         route_->terrain_file.c_str(), tot.verts);
+                         route.terrain_file.c_str(), tot.verts);
         t0 = std::chrono::steady_clock::now();
-        terrain_.reset();
-        terrain_ = std::make_unique<render::Terrain>(meshes);
+        auto terrain = std::make_unique<render::Terrain>(meshes);
         glFinish();
         const double upload_s = seconds_since(t0);
-        terrain_file_ = route_->terrain_file;
+        terrain_ = std::move(terrain);
+        terrain_file_ = route.terrain_file;
+        route_ = &route;
 
         // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
         const std::size_t before = textures_.created();
@@ -78,6 +87,8 @@ void TrackView::load_route(std::size_t index) {
         std::fprintf(stderr, "viewer3d: texturas do terreno: %zu novas (%zu falharam no total), %.1f MB RGBA no total, %.3f s\n",
                      textures_.created() - before, textures_.failed(), static_cast<double>(textures_.bytes_rgba()) / 1e6, tex_s);
     }
+    route_index_ = index;
+    route_ = &route;
     lines_ = std::make_unique<render::RouteLines>(*route_);
 
     if (auto it = saved_.find(index); it != saved_.end()) {
@@ -85,7 +96,7 @@ void TrackView::load_route(std::size_t index) {
         hist_ = std::move(it->second.hist);
         saved_.erase(it);
     } else {
-        inst_ = read_dr2i(read_file(join_path(dir_, "inst_" + route_->name + ".bin")), track_.types.size());
+        inst_ = std::move(inst);
         hist_ = edit::History{};
         if (inst_.n != route_->instances)
             std::fprintf(stderr, "viewer3d: aviso: inst_%s.bin tem %u instâncias e o track.json diz %zu\n", route_->name.c_str(),
@@ -105,7 +116,16 @@ void TrackView::switch_route(int step) {
     const std::size_t next = (route_index_ + n + static_cast<std::size_t>(step % static_cast<int>(n) + static_cast<int>(n))) % n;
     if (next == route_index_) return;
     saved_[route_index_] = Saved{std::move(inst_), std::move(hist_)};
-    load_route(next);
+    try {
+        load_route(next);
+    } catch (const std::exception& e) {
+        // a rota atual volta intacta, com edições e histórico
+        auto it = saved_.find(route_index_);
+        inst_ = std::move(it->second.inst);
+        hist_ = std::move(it->second.hist);
+        saved_.erase(it);
+        set_status("não abriu " + track_.routes[next].name + ": " + e.what());
+    }
 }
 
 void TrackView::frame_route(render::OrbitCamera& cam) const {
@@ -122,15 +142,15 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
         switch (key) {
         case SDLK_Z:
             if (drag_.active) return true;
-            if ((mod & SDL_KMOD_SHIFT) ? hist_.redo(inst_) : hist_.undo(inst_)) ++edit_rev_;
+            if ((mod & SDL_KMOD_SHIFT) ? hist_.redo(inst_) : hist_.undo(inst_)) after_history();
             return true;
         case SDLK_Y:
-            if (!drag_.active && hist_.redo(inst_)) ++edit_rev_;
+            if (!drag_.active && hist_.redo(inst_)) after_history();
             return true;
         case SDLK_S: save(); return true;
         case SDLK_D:
             // duplicar só vale para objetos de objects.ens (ornamentos e árvores têm contagem fixa)
-            if (sel_ >= 0 && !drag_.active && track_.types[inst_.type[static_cast<std::size_t>(sel_)]].name[0] == 'e') {
+            if (sel_ >= 0 && !drag_.active && track_.types[inst_.type[static_cast<std::size_t>(sel_)]].name.starts_with("e:")) {
                 sel_ = static_cast<int>(edit::duplicate(inst_, hist_, static_cast<std::uint32_t>(sel_)));
                 objects_->regroup(inst_);
                 ++edit_rev_;
@@ -159,6 +179,7 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_E:
         if (sel_ >= 0 && !drag_.active) {
             const float deg = ((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f);
+            if (inst_.hidden[static_cast<std::size_t>(sel_)]) return true;
             edit::turn(inst_, hist_, static_cast<std::uint32_t>(sel_), deg);
             ++edit_rev_;
         }
@@ -211,7 +232,7 @@ void TrackView::delete_selected() {
     sel_ = -1;
 }
 
-bool TrackView::begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam) {
+bool TrackView::begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift) {
     if (tool_ == Tool::Navigate) return false;
     const auto ray = render::mouse_ray(cam, x, y, w, h);
     const int hit = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_);
@@ -225,12 +246,20 @@ bool TrackView::begin_edit(float x, float y, float w, float h, const render::Orb
     drag_.has_start = render::ground(ray, drag_.base[10], drag_.start);
     drag_.sy = y;
     drag_.ex = x;
+    drag_.shift = shift;
     return true;
 }
 
 void TrackView::edit_drag(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift) {
     if (!drag_.active) return;
     float* m = inst_.matrix(drag_.i);
+    if (tool_ == Tool::Move && shift != drag_.shift) {
+        // trocou entre subir/descer e arrastar no chão: recomeça do ponto atual, sem perder o que já mudou
+        std::copy(m, m + kInstFloats, drag_.base);
+        drag_.shift = shift;
+        drag_.sy = y;
+        drag_.has_start = render::ground(render::mouse_ray(cam, x, y, w, h), drag_.base[10], drag_.start);
+    }
     if (tool_ == Tool::Move) {
         if (shift) {
             m[10] = drag_.base[10] - (y - drag_.sy) * std::max(0.02f, cam.dist * 0.002f);
@@ -251,6 +280,7 @@ void TrackView::edit_drag(float x, float y, float w, float h, const render::Orbi
 void TrackView::end_edit() {
     if (!drag_.active) return;
     drag_.active = false;
+    edit::snap_to_file(inst_, drag_.i);
     commit(tool_ == Tool::Move ? "Mover" : "Girar", std::move(drag_.before));
 }
 
@@ -258,7 +288,7 @@ void TrackView::click(float x, float y, float w, float h, const render::OrbitCam
     sel_ = render::pick(render::mouse_ray(cam, x, y, w, h), inst_, *objects_, cam.target, draw_dist_, layers_);
 }
 
-std::size_t TrackView::save() {
+bool TrackView::save() {
     // todas as rotas abertas, como o web (tvEditList percorre o cache de rotas)
     std::vector<edit::RouteEdits> routes;
     for (std::size_t k = 0; k < track_.routes.size(); ++k) {
@@ -267,10 +297,44 @@ std::size_t TrackView::save() {
     }
     std::size_t count = 0;
     const std::string text = edit::edits_json(track_, routes, &count);
-    edit::write_text(out_, text);
-    std::printf("gravado %s (%zu edições)\n", out_.c_str(), count);
-    std::fflush(stdout);
-    return count;
+    try {
+        // o primeiro Ctrl+S da sessão guarda o edits.json que já existia (de outra sessão) em .<n>.bak
+        std::string bak;
+        if (!wrote_) bak = edit::backup_existing(out_);
+        edit::write_text(out_, text);
+        wrote_ = true;
+        saved_text_ = text;
+        set_status("gravado " + out_ + " (" + std::to_string(count) + " edições)" + (bak.empty() ? "" : "; anterior em " + bak));
+        std::printf("gravado %s (%zu edições)%s%s\n", out_.c_str(), count, bak.empty() ? "" : "; anterior copiado para ",
+                    bak.c_str());
+        std::fflush(stdout);
+        return true;
+    } catch (const std::exception& e) {
+        set_status(std::string("NÃO GRAVOU: ") + e.what());
+        return false;
+    }
+}
+
+std::string TrackView::current_edits() const {
+    std::vector<edit::RouteEdits> routes;
+    for (std::size_t k = 0; k < track_.routes.size(); ++k) {
+        if (k == route_index_) routes.push_back({route_, &inst_});
+        else if (auto it = saved_.find(k); it != saved_.end()) routes.push_back({&track_.routes[k], &it->second.inst});
+    }
+    return edit::edits_json(track_, routes, nullptr);
+}
+
+bool TrackView::unsaved() const { return current_edits() != saved_text_; }
+
+void TrackView::set_status(std::string msg) {
+    std::fprintf(stderr, "viewer3d: %s\n", msg.c_str());
+    status_ = std::move(msg);
+}
+
+void TrackView::after_history() {
+    ++edit_rev_;
+    // desfazer uma cópia ou refazer um Apagar esconde o selecionado: tira a seleção
+    if (sel_ >= 0 && inst_.hidden[static_cast<std::size_t>(sel_)]) sel_ = -1;
 }
 
 std::string TrackView::title() const {
@@ -283,14 +347,17 @@ std::string TrackView::title() const {
         char buf[200];
         const std::uint32_t id = inst_.idnum[i];
         const std::string who = id >= kAdded ? "cópia de " + std::to_string(id - kAdded) : std::to_string(id);
-        std::snprintf(buf, sizeof buf, " | %s | kind %c | %s | %.2f %.2f %.2f", name.substr(2).c_str(), name[0], who.c_str(),
+        const std::string shown = name.size() > 2 ? name.substr(2) : name;
+        const char kind = name.empty() ? '?' : name[0];
+        std::snprintf(buf, sizeof buf, " | %s | kind %c | %s | %.2f %.2f %.2f", shown.c_str(), kind, who.c_str(),
                       static_cast<double>(m[9]), static_cast<double>(m[10]), static_cast<double>(m[11]));
         sel = buf;
     }
     return std::string(tools[static_cast<int>(tool_)]) + " | " + route_->name + " | " + thousands(terrain_->meshes()) + " malhas | " + thousands(terrain_->vertices()) +
            " vértices | " + thousands(terrain_->triangles()) + " tri | inst " + thousands(objects_->visible()) + "/" +
            thousands(inst_.n) + " | " + std::to_string(static_cast<int>(draw_dist_)) + " m | hist " +
-           std::to_string(hist_.pos()) + "/" + std::to_string(hist_.size()) + sel;
+           std::to_string(hist_.pos()) + "/" + std::to_string(hist_.size()) + (unsaved() ? " | não gravado" : "") + sel +
+           (status_.empty() ? "" : " | " + status_);
 }
 
 }  // namespace dr2::app

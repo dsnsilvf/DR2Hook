@@ -46,6 +46,10 @@ private:
 // como tvSpin: x' = x·cos + z·sin, z' = −x·sin + z·cos.
 void spin(float* m, const float* base, float th);
 
+// Se a matriz ficou a menos de `eps` da do arquivo em todas as 12 floats (girar 360° em passos deixa
+// ~1e-7 de erro), volta exatamente à do arquivo, para não virar uma edição que não muda nada.
+void snap_to_file(Instances& inst, std::size_t i, float eps = 1e-5f);
+
 // A instância difere do arquivo (alguma das 12 floats) ou foi apagada?
 bool changed(const Instances& inst, std::size_t i);
 
