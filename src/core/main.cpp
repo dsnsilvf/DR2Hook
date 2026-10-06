@@ -2,6 +2,7 @@
 #include "dr2hook/common.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/load_trace.h"
+#include "dr2hook/load_probe.h"
 #include "dr2hook/host.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/native_screen.h"
@@ -29,6 +30,7 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
       dr2hook::HostLog("Hooks principais inicializados com sucesso.");
       dr2hook::InstallPauseMenuHooks();
       dr2hook::InstallNativeScreenHook();
+      dr2hook::InstallLoadProbe();
       dr2hook::InstallLoadTrace();
       dr2hook::InstallRaceEventsHook();
     } else {
@@ -61,6 +63,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   case DLL_PROCESS_DETACH:
     dr2hook::UninstallAutoStageHook();
     dr2hook::UninstallLoadTrace();
+    dr2hook::UninstallLoadProbe();
     dr2hook::UninstallRaceEventsHook();
     dr2hook::UnloadCore(lpReserved == nullptr);
     dr2hook::ShutdownHooks();

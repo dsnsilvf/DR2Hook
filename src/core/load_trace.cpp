@@ -1,4 +1,5 @@
 #include "dr2hook/load_trace.h"
+#include "dr2hook/load_probe.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/path_redirect.h"
@@ -82,6 +83,7 @@ HANDLE WINAPI DetourCreateFileW(LPCWSTR name, DWORD access, DWORD share,
   }
   HANDLE h = g_originalCreateFileW(open_name, access, share, sa, disposition, flags,
                                    templ);
+  if (!t_inDetour && name != nullptr) LoadProbeOnOpen(h, name, access);
   if (!g_active.load(std::memory_order_relaxed) || t_inDetour ||
       name == nullptr) {
     return h;
@@ -101,6 +103,7 @@ HANDLE WINAPI DetourCreateFileW(LPCWSTR name, DWORD access, DWORD share,
         lower.size() > 5 && lower.compare(lower.size() - 5, 5, L".nefs") == 0) {
       const char *file = std::strrchr(path, '\\');
       NotifyStageLoad(file != nullptr ? file + 1 : path);
+      LoadProbeMark((std::string("stage ") + (file != nullptr ? file + 1 : path)).c_str());
     }
   }
   t_inDetour = false;
@@ -111,6 +114,7 @@ BOOL WINAPI DetourReadFile(HANDLE file, LPVOID buffer, DWORD toRead,
                            LPDWORD read, LPOVERLAPPED overlapped) {
   g_bytesRead.fetch_add(toRead, std::memory_order_relaxed);
   g_readCalls.fetch_add(1, std::memory_order_relaxed);
+  LoadProbeOnRead(file, toRead, overlapped);
   return g_originalReadFile(file, buffer, toRead, read, overlapped);
 }
 

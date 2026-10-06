@@ -1,4 +1,5 @@
 #include "dr2hook/race_events.h"
+#include "dr2hook/load_probe.h"
 #include "dr2hook/logger.h"
 
 #include <MinHook.h>
@@ -59,6 +60,7 @@ void Push(Dr2StageEventKind kind, int value) {
 }
 
 void DetourRaceEvent(void *session, const char *name) {
+  LoadProbeMark(name);
   if (name != nullptr) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (std::strcmp(name, "startlightsstart") == 0) {

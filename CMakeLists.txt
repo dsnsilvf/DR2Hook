@@ -69,6 +69,7 @@ add_library(dxgi SHARED
     src/core/logger.cpp
     src/core/auto_stage.cpp
     src/core/load_trace.cpp
+    src/core/load_probe.cpp
     src/core/path_redirect.cpp
     src/core/race_events.cpp
     src/core/pssg_patch.cpp
