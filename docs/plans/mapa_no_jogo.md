@@ -62,8 +62,8 @@ U1 e U3 estão misturadas no crash antigo. Se a primeira tentativa de levar o Ri
 | # | O quê | Fecha | Toca no jogo? | Precisa de OK |
 | --- | --- | --- | --- | --- |
 | E0 (**feito**, ver abaixo) | Inventário offline: tamanho em blocos de cada arquivo que o Ring substituiria na hospedeira; por que `replace_files` exige o mesmo número de blocos e se dá para relaxar; espaço livre no último bloco do `objects.ens`; quantos registros de árvore e ornamento a hospedeira tem. | base de U4 | não | não |
-| E1 (**feito**, ver abaixo; falta confirmar o movimento da câmera) | Benchmark nativo + câmera livre (NZ `route_2`). Depois o override do AutoStage para outras rotas de NZ, e para uma localidade com rota normal (Montalegre) em vez de `free_roam`. Só dados originais. | U3 | sim, pasta intacta | para o jogo abrir sim; para Montalegre há risco de crash |
-| E2 | Redirecionamento do `CreateFileW`: `locations\<x>.nefs` → arquivo em `build/`. Primeiro uma cópia **idêntica byte a byte**, para provar o redirecionamento sem arriscar dado. | U2 | sim | cópia idêntica: não muda dado, mas é um passo novo; vou avisar antes |
+| E1 (**feito**, ver abaixo) | Benchmark nativo + câmera livre (NZ `route_2`). Depois o override do AutoStage para outras rotas de NZ, e para uma localidade com rota normal (Montalegre) em vez de `free_roam`. Só dados originais. | U3 | sim, pasta intacta | para o jogo abrir sim; para Montalegre há risco de crash |
+| E2 (**feito**, ver abaixo) | Redirecionamento do `CreateFileW`: `locations\<x>.nefs` → arquivo em `build/`. Primeiro uma cópia **idêntica byte a byte**, para provar o redirecionamento sem arriscar dado. | U2 | sim | cópia idêntica: não muda dado, mas é um passo novo; vou avisar antes |
 | E3 | Uma cópia modificada com **um objeto movido para longe**, numa pista que o E1 provou que carrega. A diferença é visível e o resto fica igual. | U1 | sim | **sim, `.nefs` modificado** |
 | E4 | Objetos do Ring na hospedeira: cada tipo do Ring vira um tipo parecido que já existe na hospedeira (barreira, muro de pneus, cone, árvore). Em `ornaments.bin` e `trees.bin` só dá para **reposicionar** os registros que existem; o `objects.ens` só cresce até o espaço livre do último bloco. | U4 (objetos) | sim | sim |
 | E5 | Terreno do Ring sobre a hospedeira: manter a topologia, os UVs e os blocos de shader da hospedeira e **trocar só as posições** dos vértices pela altura do Ring (mesmo número de vértices). A colisão continua a da hospedeira. | U4 (terreno) | sim | sim |
@@ -110,7 +110,7 @@ O AutoStage foi ligado pelo `dr2hook_autostage.ini` (`enabled = 1`, `once = 1`, 
 
 | Teste | Resultado |
 | --- | --- |
-| NZ `new_zealand_rally_01` / `route_2` / `fr5` | Carregou até a largada em ~15 s depois do processo. Câmera livre (F9, pelo canal `dr2hook_cmd.txt`): `FreeCamera: ligada` e `pose copiada da especial`. **Falta o dono confirmar que WASD e mouse movem a câmera** (o canal remoto só manda um aperto instantâneo). |
+| NZ `new_zealand_rally_01` / `route_2` / `fr5` | Carregou até a largada em ~15 s depois do processo. Câmera livre (F9, pelo canal `dr2hook_cmd.txt`): `FreeCamera: ligada` e `pose copiada da especial`. **O dono confirmou em 2026-10-06 que a câmera livre se move normalmente** (WASD e mouse). |
 | NZ `route_0` (outra rota da mesma pista) | Carregou normal. `status` = `corrida` e o carro anda sozinho pela estrada. |
 | **Montalegre** `portugal` / `montalegre_rallycross` / `route_0` | **Carregou e o carro anda sozinho** (`status` = `corrida`, print do asfalto com marcas de pneu e arquibancada). O log mostra `LoadTrace: open ...\locations\portugal__montalegre_rallycross.nefs`. |
 
@@ -119,6 +119,22 @@ O AutoStage foi ligado pelo `dr2hook_autostage.ini` (`enabled = 1`, `once = 1`, 
 **Consequências para a escolha da hospedeira:** o Montalegre serve tão bem quanto a NZ. Como é o menor pacote (884 MB, contra 1,95 GB) e já está exportado para o viewer, passa a ser a hospedeira recomendada. A NZ fica como reserva.
 
 Cuidado ao rodar de novo: o jogo escreve `enabled = 0` no ini depois do boot com `once = 1`, mas as strings de pista ficam. Depois de cada teste o ini foi devolvido ao original (NZ `route_2`, `enabled = 0`, `once = 0`).
+
+## Resultado do E2 (2026-10-06, no jogo, cópia idêntica)
+
+Código: `src/core/path_redirect.cpp` e o hook do `CreateFileW` em `src/core/load_trace.cpp` (na `dxgi.dll`), com o teste `tests/test_path_redirect.cpp`. Configuração: `dr2hook_redirect.ini` ao lado do exe, uma regra por linha:
+
+```
+locations\portugal__montalegre_rallycross.nefs = Z:\home\deivison\Projetos\DR2ModLoader\build\redirect\montalegre_copia.nefs
+```
+
+- Só vale para `.nefs` aberto para leitura (`OPEN_EXISTING`). Se o destino não existe, a regra é ignorada com um aviso no log.
+- O Wine mostra a pasta do jogo como `S:\...` e a raiz do Linux como `Z:\`.
+- Teste: `build/redirect/montalegre_copia.nefs` (884 MB, `cmp` igual ao original) com o AutoStage em Montalegre `route_0`. O log mostrou `LoadTrace: redirect S:\...\locations\portugal__montalegre_rallycross.nefs -> Z:\...\montalegre_copia.nefs` (duas aberturas), o `/proc/<pid>/fd` do jogo apontava para a cópia, e o jogo chegou à largada normalmente.
+- **U2 fechada:** dá para entregar ao jogo um `.nefs` de fora da pasta do jogo, sem escrever nela.
+- A `dxgi.dll` instalada foi trocada pela de `build/win-redirect/`; a anterior ficou em `dxgi.dll.bak-before-redirect-20261006`.
+
+**Preparação do E3 (offline, ainda não carregado no jogo):** `scripts/research/make_edit_test.py` monta um `edits.json` que sobe 40 m o pórtico de largada do Montalegre (`mnt_startgantry_a`, um registro em `route_0/ornaments.bin`), e `python -m tools.uiview.track.edit` grava `build/redirect/montalegre_edit.nefs`. Conferência: dos 67 arquivos com dados, **só `route_0/ornaments.bin` difere, em 1 byte**, e o tamanho e os blocos dos arquivos grandes são iguais. Falta carregar no jogo, que exige o OK do dono.
 
 ## Alternativa que não passa pelos `.nefs`
 
