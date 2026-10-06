@@ -34,6 +34,7 @@ Nome de string no executável não é variável localizada.
 - [Dano terminal](terminal_damage.md) — insta crash (F11), pausa e Reiniciar durante a destruição, o gate `host+0x2350` e o que fica preso depois
 - [Carregamento de especiais](stage_loading.md) — resolução de pistas, `BenchmarkManager`, hook do `AutoStage`, `LoadTrace`
 - [Travamentos da carga](loading_hangs.md) — usar uma carga travada como sonda do carregamento
+- [Carregamento de pista](track_loading.md) — `raceload.jpk`/`track_loader.xml`, tokens, processadores, PSSG→GPU e a LoadProbe
 - [Formatos de pista](track_formats.md) — o que já foi decifrado em `locations/*.nefs` (terreno, objetos, árvores, ornamentos, traçado, JPAK) e o que falta; usado pelo Track Explorer ([../UIVIEW.md](../tools/uiview.md))
 - [Fantasmas](ghosts.md) — saves `GHST`, slots, cópias, `GhostCarValues`, a curva de 5–50 m, o descarte com fator 1,0 (fantasma sólido), colisão, pausa dos fantasmas e o máximo de 15 fantasmas + jogador
 
