@@ -995,7 +995,55 @@ void DetourMakeGhostMaterials(void *self, void *model) {
 constexpr uintptr_t kPhysicsBodiesRva = 0x14201b930 - kImageBase;
 constexpr size_t kSessionVec = 0x3320; // vetor de registros da sessao: dados, +8 capacidade, +0x10 contagem
 int g_fillTarget = 5;                  // alvo do enchimento (imediato dos mov r13d, 5)
+// Contagem de slots decodificada acima de 24 em 0x1405f6330 (PatchSlotCountReader):
+// +0 vezes, +4 ultimo valor, +8 objeto.
+uint8_t *g_slotCountBad = nullptr;
+constexpr uint32_t kSlotTailShift = 0x31198; // cauda do dono dos slots depois da lista de 24 (PatchSlotOwnerArray)
+uint32_t g_slotCountBadLogged = 0;
+void LogSlotCountBad(const char *when) {
+  if (g_slotCountBad == nullptr) return;
+  const uint32_t times = Read<uint32_t>(g_slotCountBad, 0);
+  if (times == g_slotCountBadLogged) return;
+  g_slotCountBadLogged = times;
+  const uint8_t *owner = Read<const uint8_t *>(g_slotCountBad, 8);
+  const bool usable = UsablePointer(reinterpret_cast<uintptr_t>(owner));
+  char bad[220];
+  std::snprintf(bad, sizeof(bad),
+                "GhostLab[slots] %s: contagem de slots lida acima de 24 em %u leitura(s), ultima 0x%x, "
+                "dono %p, +0x623e0=0x%x novo=0x%x.",
+                when, times, Read<uint32_t>(g_slotCountBad, 4), static_cast<const void *>(owner),
+                usable ? Read<uint32_t>(owner, 0x623e0) : 0u, usable ? Read<uint32_t>(owner, 0x623e0 + kSlotTailShift) : 0u);
+  Logger::Warn(bad);
+}
+// Objetos de render 0..23 (array externo): '-' sem modelo; senao LOD em +0x208 e
+// 'p' se o modelo passou pelo packer no ultimo segundo.
+uint8_t *g_renderBufferForLog = nullptr;
+void LogRenderObjects(const char *when) {
+  if (g_renderBufferForLog == nullptr) return;
+  const uint64_t now = GetTickCount64();
+  std::string line = std::string("GhostLab[render] ") + when + ": objetos (indice:LOD, p = no packer):";
+  for (int i = 0; i < 24; ++i) {
+    const uint8_t *obj = g_renderBufferForLog + static_cast<size_t>(i) * 0x1730;
+    const uint8_t *model = Read<const uint8_t *>(obj, 0x1c8);
+    char one[24];
+    if (model == nullptr) {
+      std::snprintf(one, sizeof(one), " %d:-", i);
+    } else {
+      bool packed = false;
+      for (int k = 0; k < 32; ++k) {
+        if (g_packSeenObj[k].load() == reinterpret_cast<uint64_t>(model) && now - g_packSeenTick[k].load() < 1000)
+          packed = true;
+      }
+      std::snprintf(one, sizeof(one), " %d:%d%s", i, Read<int32_t>(obj, 0x208), packed ? "p" : "");
+    }
+    line += one;
+  }
+  Logger::Info(line);
+}
+
 void LogLimits(const char *when) {
+  LogSlotCountBad(when);
+  LogRenderObjects(when);
   uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
   if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
   const uint8_t *manager = ManagerPtr();
@@ -1357,6 +1405,10 @@ void DetourSpawnVehicles(void *ctx) {
       LogLimits("25 s depois");
       LogLoadState();
       DumpThreads();
+      for (int i = 0; i < 12; ++i) {
+        Sleep(5000);
+        LogSlotCountBad("depois da carga");
+      }
     }).detach();
   }
 }
@@ -1683,6 +1735,111 @@ constexpr ImmPatch kRenderLimits[] = {
 };
 constexpr uintptr_t kLodCountVa = 0x140955917; // movsxd rcx,[rcx+0x19640] (7 bytes)
 
+// Seletor de LOD (0x1409558c0, rbp = rsp+0x20): distancia [rbp+0x40] (float, FLT_MAX),
+// ordem [rbp+0x80] (int) e LOD [rbp+0xc0] (int, 4), 16 de cada, e o quadro nao tem
+// sobra (0x100..0x2c0 sao matriz, cantos e frustum). O quadro cresce 0x60 (sub rsp,
+// os 26 acessos acima de +0x368 e o ALLOC_LARGE do unwind); a ordem vai para a sobra
+// em +0x368, o LOD para +0xa0 e a distancia ocupa +0x40..+0xa0. Uma caverna no lugar
+// das 8 escritas de FLT_MAX preenche 24 distancias e os 8 primeiros LOD (os 16 ultimos
+// continuam vindo das escritas originais em +0xc0..+0xf8). So antes do primeiro uso.
+uint8_t *GameVa(uintptr_t va);
+constexpr uint32_t kLodFrameGrow = 0x60;
+bool PatchLodSelectorArrays() {
+  struct Disp {
+    uintptr_t va; // endereco do disp32
+    uint32_t from;
+    uint32_t to;
+  };
+  std::vector<Disp> disps = {
+      {0x140955ac9, 0x80, 0x368}, {0x140955fa0, 0x80, 0x368}, {0x140955fd7, 0x80, 0x368},
+      {0x140955fee, 0x80, 0x368}, {0x140955ffc, 0x84, 0x36c}, {0x140956013, 0x84, 0x36c},
+      {0x140956021, 0x88, 0x370}, {0x140956038, 0x88, 0x370}, {0x140956043, 0x8c, 0x374},
+      {0x140956060, 0x8c, 0x374}, {0x14095607d, 0x80, 0x368}, {0x14095609a, 0x80, 0x368},
+      {0x1409561a7, 0x80, 0x368}, // ordem
+      {0x140955eec, 0xc0, 0xa0},  {0x140955ef8, 0xc0, 0xa0},  {0x14095626b, 0xc0, 0xa0}, // LOD
+      {0x1409558de, 0x388, 0x388 + kLodFrameGrow}, // sub rsp
+  };
+  const uintptr_t high[][2] = { // instrucao, posicao do disp32 (rbp+0x368 e acima)
+      {0x1409559ce, 2}, {0x140955a67, 2}, {0x140955a82, 3}, {0x140955af3, 3}, {0x140955b09, 3},
+      {0x140955db5, 2}, {0x140955ddc, 2}, {0x140955f4c, 2}, {0x140955f52, 3}, {0x140955f59, 3},
+      {0x140955f6e, 2}, {0x140955f74, 3}, {0x1409560c4, 3}, {0x140956181, 2}, {0x14095618c, 3},
+      {0x1409561e7, 2}, {0x1409561f1, 3}, {0x140956206, 3}, {0x140956219, 2}, {0x140956225, 2},
+      {0x14095623a, 3}, {0x140956299, 3}, {0x140956317, 3}, {0x14095631e, 3}, {0x140956337, 3},
+      {0x1409563c8, 3}};
+  for (const auto &h : high) {
+    const uintptr_t va = h[0] + h[1];
+    uint32_t cur = 0;
+    std::memcpy(&cur, GameVa(va), 4);
+    disps.push_back({va, cur, cur + kLodFrameGrow});
+    if (cur < 0x368 || cur > 0x3e0) {
+      Logger::Warn("GhostLab[lod]: acesso alto do seletor diferente do esperado; nada trocado.");
+      return false;
+    }
+  }
+  for (const Disp &d : disps) {
+    uint32_t cur = 0;
+    std::memcpy(&cur, GameVa(d.va), 4);
+    if (cur != d.from) {
+      char msg[120];
+      std::snprintf(msg, sizeof(msg), "GhostLab[lod]: 0x%llx = 0x%x (esperado 0x%x); nada trocado.",
+                    static_cast<unsigned long long>(d.va), cur, d.from);
+      Logger::Warn(msg);
+      return false;
+    }
+  }
+  const uintptr_t idxCaps[] = {0x140955ac5, 0x1409561ad}; // cmp rsi,15 / cmp esi,15
+  for (uintptr_t va : idxCaps) {
+    if (*static_cast<uint8_t *>(GameVa(va)) != 0x0f) {
+      Logger::Warn("GhostLab[lod]: limite de indice do seletor diferente do esperado; nada trocado.");
+      return false;
+    }
+  }
+  constexpr uintptr_t kUnwindAllocVa = 0x1414f7128; // UWOP_ALLOC_LARGE: tamanho/8
+  const uint16_t allocFrom = 0x388 / 8;
+  const uint16_t allocTo = (0x388 + kLodFrameGrow) / 8;
+  uint16_t alloc = 0;
+  std::memcpy(&alloc, GameVa(kUnwindAllocVa), 2);
+  uint8_t *init = static_cast<uint8_t *>(GameVa(0x14095593e)); // 8x mov [rbp+0x40+8k],r8
+  const uint8_t initFrom[] = {0x4c, 0x89, 0x45, 0x40, 0x4c, 0x89, 0x45, 0x48, 0x4c, 0x89, 0x45,
+                              0x50, 0x4c, 0x89, 0x45, 0x58, 0x4c, 0x89, 0x45, 0x60, 0x4c, 0x89,
+                              0x45, 0x68, 0x4c, 0x89, 0x45, 0x70, 0x4c, 0x89, 0x45, 0x78};
+  if (alloc != allocFrom || std::memcmp(init, initFrom, sizeof(initFrom)) != 0) {
+    Logger::Warn("GhostLab[lod]: inicio do seletor diferente do esperado; nada trocado.");
+    return false;
+  }
+  uint8_t *cave = AllocNearImage(0x1000);
+  if (cave == nullptr) return false;
+  std::vector<uint8_t> c;
+  auto storeR8 = [&](uint32_t disp) { // mov [rbp+disp32],r8
+    c.insert(c.end(), {0x4c, 0x89, 0x85});
+    for (int i = 0; i < 4; ++i) c.push_back(static_cast<uint8_t>(disp >> (8 * i)));
+  };
+  for (uint32_t off = 0x40; off < 0xa0; off += 8) storeR8(off); // r8 = FLT_MAX x2
+  c.insert(c.end(), {0x49, 0xb8, 0x04, 0, 0, 0, 0x04, 0, 0, 0}); // mov r8,0x400000004
+  for (uint32_t off = 0xa0; off < 0xc0; off += 8) storeR8(off);
+  c.push_back(0xc3); // o movabs seguinte recarrega r8
+  std::memcpy(cave, c.data(), c.size());
+  DWORD old = 0;
+  VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
+  FlushInstructionCache(GetCurrentProcess(), cave, c.size());
+  std::vector<uint8_t> call(sizeof(initFrom), 0x90);
+  call[0] = 0xe8;
+  const int32_t rel = static_cast<int32_t>(cave - (init + 5));
+  std::memcpy(call.data() + 1, &rel, 4);
+
+  bool ok = true;
+  for (const Disp &d : disps)
+    ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(d.va)), reinterpret_cast<const uint8_t *>(&d.to), 4) && ok;
+  const uint8_t cap = 0x17;
+  for (uintptr_t va : idxCaps) ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(va)), &cap, 1) && ok;
+  ok = PatchBytes(reinterpret_cast<uintptr_t>(init), call.data(), call.size()) && ok;
+  ok = PatchBytes(reinterpret_cast<uintptr_t>(GameVa(kUnwindAllocVa)),
+                  reinterpret_cast<const uint8_t *>(&allocTo), 2) && ok;
+  Logger::Info(std::string("GhostLab[lod]: seletor de LOD com tabelas de 24 (quadro +0x60): ") +
+               (ok ? "ok." : "FALHOU parcialmente."));
+  return ok;
+}
+
 bool PatchRenderLimits() {
   for (const auto &p : kRenderLimits) {
     uint32_t cur = 0;
@@ -1701,11 +1858,13 @@ bool PatchRenderLimits() {
     Logger::Warn("GhostLab[render]: contagem do seletor de LOD diferente do esperado; nada trocado.");
     return false;
   }
-  // Caverna: movsxd rcx,[rcx+0x19640]; cmp rcx,16; jle +5; mov ecx,16; ret
+  // Caverna: movsxd rcx,[rcx+0x19640]; cmp rcx,N; jle +5; mov ecx,N; ret
+  // N = 24 com as tabelas do seletor ampliadas, senao 16.
+  const uint8_t lodCap = PatchLodSelectorArrays() ? 0x18 : 0x10;
   uint8_t *cave = AllocNearImage(0x1000);
   if (cave == nullptr) return false;
   const uint8_t caveCode[] = {0x48, 0x63, 0x89, 0x40, 0x96, 0x01, 0x00, 0x48, 0x83, 0xf9,
-                              0x10, 0x7e, 0x05, 0xb9, 0x10, 0x00, 0x00, 0x00, 0xc3};
+                              lodCap, 0x7e, 0x05, 0xb9, lodCap, 0x00, 0x00, 0x00, 0xc3};
   std::memcpy(cave, caveCode, sizeof(caveCode));
   DWORD old = 0;
   VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
@@ -1719,10 +1878,140 @@ bool PatchRenderLimits() {
     ok = PatchBytes(g_gameBase + (p.va - kImageBase), reinterpret_cast<const uint8_t *>(&p.to), p.size) && ok;
   }
   char msg[140];
-  std::snprintf(msg, sizeof(msg), "GhostLab[render]: %zu limites de render 16 -> 24 e LOD limitado a 16 (%s).",
-                sizeof(kRenderLimits) / sizeof(kRenderLimits[0]), ok ? "ok" : "FALHOU parcialmente");
+  std::snprintf(msg, sizeof(msg), "GhostLab[render]: %zu limites de render 16 -> 24 e LOD limitado a %d (%s).",
+                sizeof(kRenderLimits) / sizeof(kRenderLimits[0]), lodCap, ok ? "ok" : "FALHOU parcialmente");
   Logger::Info(msg);
   return ok;
+}
+
+// Dono dos slots de 0x6228 (um por carro). O objeto externo nasce com 0x62750 bytes
+// (0x140526ebb); o subobjeto em +0x330 constrói 16 elementos a partir de +0xd8
+// (0x14091eb7f -> 0x14091f550, vtable em [elemento]) e guarda a cauda em +0x62358.
+// No objeto externo isso é o array em +0x408 e a contagem em +0x400. 0x1409379f0,
+// chamado por carro em 0x14049cd50, usa o próximo slot e chama [vtable+0x178]
+// (0x140938829). O 17º carro acha vtable nula. Com a dxgi.dll ampliando a alocação
+// para 0x93890, estes imediatos empurram a cauda 8*0x6228 e os dois laços de 16
+// (construção e o reset em 0x14092024a) passam a 24. Sem a dxgi, não mexe.
+constexpr ImmPatch kSlotOwnerFields[] = {
+    {0x1400be4c3, 4, 0x62748, 0x93888}, {0x1400d1216, 4, 0x62748, 0x93888},
+    {0x14012e7f5, 4, 0x623e0, 0x93520}, {0x140381661, 4, 0x62748, 0x93888},
+    {0x140409abe, 4, 0x623e0, 0x93520}, {0x140409ad9, 4, 0x623e0, 0x93520},
+    {0x14050920c, 4, 0x62400, 0x93540}, {0x140527547, 4, 0x62748, 0x93888},
+    {0x1405338ad, 4, 0x623f8, 0x93538}, {0x140547711, 4, 0x623f8, 0x93538},
+    {0x1405f6333, 4, 0x623e0, 0x93520}, {0x14091eb81, 1, 0x10, 0x18},
+    {0x14091eba7, 4, 0x62358, 0x93498}, {0x14091ebb2, 4, 0x623e0, 0x93520},
+    {0x14091ebb9, 4, 0x623f0, 0x93530}, {0x14091ebbf, 4, 0x623e4, 0x93524},
+    {0x14091ebc5, 4, 0x623e8, 0x93528}, {0x14091ebee, 4, 0x623f8, 0x93538},
+    {0x14091ebf4, 4, 0x62410, 0x93550}, {0x14091ec99, 4, 0x62400, 0x93540},
+    {0x14091eca0, 4, 0x62408, 0x93548}, {0x14091ed89, 4, 0x62748, 0x93888},
+    {0x140920241, 4, 0x623f0, 0x93530}, {0x14092024b, 1, 0x10, 0x18},
+    {0x140920252, 4, 0x62358, 0x93498}, {0x140922623, 4, 0x62748, 0x93888},
+    {0x14092311f, 4, 0x623f0, 0x93530}, {0x140923191, 4, 0x62358, 0x93498},
+    {0x1409231e1, 4, 0x623f0, 0x93530}, {0x1409236b3, 4, 0x623f0, 0x93530},
+    {0x1409239e1, 4, 0x623e4, 0x93524}, {0x140924083, 4, 0x62748, 0x93888},
+    {0x140926f2a, 4, 0x623e8, 0x93528}, {0x140927205, 4, 0x623e8, 0x93528},
+    {0x14092745a, 4, 0x623e4, 0x93524}, {0x140929153, 4, 0x623f0, 0x93530},
+    {0x14092b6e3, 4, 0x62400, 0x93540}, {0x14092c6eb, 4, 0x623e4, 0x93524},
+    {0x14092c6f4, 4, 0x623e8, 0x93528}, {0x14092c6fd, 4, 0x623f8, 0x93538},
+    {0x14092c70b, 4, 0x623e0, 0x93520}, {0x14092e55f, 4, 0x623e4, 0x93524},
+    {0x14092fbb7, 4, 0x623e8, 0x93528}, {0x14092fc22, 4, 0x623e8, 0x93528},
+    {0x14092fd27, 4, 0x623e8, 0x93528}, {0x140933ba7, 4, 0x623e8, 0x93528},
+    {0x140933bbb, 4, 0x623f0, 0x93530}, {0x140933bd2, 4, 0x623f0, 0x93530},
+    {0x140933bea, 4, 0x623f0, 0x93530}, {0x140933d9e, 4, 0x623f0, 0x93530},
+    {0x140933e16, 4, 0x623e4, 0x93524}, {0x1409340c9, 4, 0x623f0, 0x93530},
+    {0x1409340e3, 4, 0x623f0, 0x93530}, {0x14093426f, 4, 0x623f0, 0x93530},
+    {0x1409342db, 4, 0x623f0, 0x93530}, {0x140935292, 4, 0x62748, 0x93888},
+    {0x1409352de, 4, 0x62748, 0x93888}, {0x140935357, 4, 0x62748, 0x93888},
+    {0x1409393f3, 4, 0x623f8, 0x93538}, {0x140939400, 4, 0x623e8, 0x93528},
+    {0x140939771, 4, 0x623e0, 0x93520}, {0x140939fa7, 4, 0x623e8, 0x93528},
+    {0x140939fb2, 4, 0x623f0, 0x93530}, {0x140939fcd, 4, 0x623e8, 0x93528},
+    {0x140939fde, 4, 0x623f0, 0x93530}, {0x140939fea, 4, 0x623f0, 0x93530},
+    {0x140939ffb, 4, 0x623f0, 0x93530}, {0x14093a009, 4, 0x623f0, 0x93530},
+    {0x14093a01a, 4, 0x623f0, 0x93530}, {0x14093a029, 4, 0x623f0, 0x93530},
+    {0x14093a0c2, 4, 0x623f0, 0x93530}, {0x14093a0ca, 4, 0x623e8, 0x93528},
+    {0x14093a0e2, 4, 0x623f0, 0x93530}, {0x14093b122, 4, 0x623e4, 0x93524},
+    {0x14093b342, 4, 0x623e8, 0x93528}, {0x14093b64b, 4, 0x62358, 0x93498},
+    {0x14093b6a6, 4, 0x623e4, 0x93524}, {0x14093b776, 4, 0x62358, 0x93498},
+    {0x14093b7bc, 4, 0x62358, 0x93498}, {0x14093bd58, 4, 0x623e4, 0x93524},
+    {0x14093be17, 4, 0x62410, 0x93550}, {0x14093be53, 4, 0x62410, 0x93550},
+    {0x14093c4f6, 4, 0x623e4, 0x93524}, {0x14093ced9, 4, 0x62358, 0x93498},
+    {0x14093cf1b, 4, 0x62358, 0x93498}, {0x14093cf3a, 4, 0x62358, 0x93498},
+    {0x14093cf54, 4, 0x62358, 0x93498}, {0x14093cfbc, 4, 0x62358, 0x93498},
+    // Ponteiros logo depois da contagem. Sem isto o 0x14093cf25 le [+0x62360]
+    // (agora dentro do slot 16) e chama vtable nula em exe+0x93cf2d.
+    {0x140923105, 4, 0x62360, 0x934a0}, {0x1409231bb, 4, 0x62360, 0x934a0},
+    {0x14093b662, 4, 0x62360, 0x934a0}, {0x14093b78f, 4, 0x62360, 0x934a0},
+    {0x14093b7b5, 4, 0x62360, 0x934a0}, {0x14093cf29, 4, 0x62360, 0x934a0},
+    {0x14093cf62, 4, 0x62360, 0x934a0}, {0x140933c15, 4, 0x623c8, 0x93508},
+    {0x14093a034, 4, 0x623c8, 0x93508}, {0x140933c03, 4, 0x623f1, 0x93531},
+    {0x14093a03a, 4, 0x623f1, 0x93531},
+    {0x140a2db37, 4, 0x623e8, 0x93528},
+};
+
+// A tabela traz o deslocamento de 8 slots (0x31140). A lista de ponteiros em
+// +0x62360 tinha 13 vagas (ate +0x623c8) e o 17º ponteiro caia na contagem
+// embaralhada em +0x623e0. Com 24 vagas ela vai ate +0x93560, entao os campos de
+// +0x623c8 a +0x62417 andam 0x31198 e o campo externo +0x62748 tambem (fim do
+// subobjeto). Alocacoes na dxgi.dll: 0x938e8 e subobjeto 0x935b0.
+uint32_t SlotOwnerTarget(const ImmPatch &p) {
+  if (p.size == 4 && ((p.from >= 0x623c8 && p.from < 0x62418) || p.from == 0x62748))
+    return p.from + kSlotTailShift;
+  return p.to;
+}
+
+void PatchSlotOwnerArray() {
+  if (WantedGhostCars() < 16) return;
+  if (GetEnvironmentVariableA("DR2HOOK_SLOTOWNER_FIELDS", nullptr, 0) != 0) {
+    Logger::Info("GhostLab[slots]: array de 0x6228 ja ampliado neste processo.");
+    return;
+  }
+  char size[16] = {};
+  GetEnvironmentVariableA("DR2HOOK_SLOTOWNER_SIZE", size, sizeof(size));
+  if (std::strcmp(size, "938e8") != 0) {
+    Logger::Warn(std::string("GhostLab[slots]: dxgi.dll sem a ampliacao do dono dos slots de 0x6228 "
+                             "com a lista de 24 (tamanho='") +
+                 size + "'); atualize a dxgi.dll e reabra o jogo.");
+    return;
+  }
+  FILETIME created, exited, kernel, user;
+  if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+    FILETIME nowFt;
+    GetSystemTimeAsFileTime(&nowFt);
+    const uint64_t a = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    const uint64_t b = (static_cast<uint64_t>(nowFt.dwHighDateTime) << 32) | nowFt.dwLowDateTime;
+    const double ageSeconds = static_cast<double>(b - a) / 1e7;
+    if (ageSeconds > 20.0) {
+      Logger::Warn("GhostLab[slots]: core carregado tarde (" + std::to_string(ageSeconds) +
+                   " s); slots de 0x6228 nao ampliados (reabra o jogo).");
+      return;
+    }
+  }
+  for (const auto &p : kSlotOwnerFields) {
+    uint32_t cur = 0;
+    std::memcpy(&cur, reinterpret_cast<void *>(g_gameBase + (p.va - kImageBase)), p.size);
+    if (cur != p.from) {
+      char msg[160];
+      std::snprintf(msg, sizeof(msg),
+                    "GhostLab[slots]: campo em 0x%llx = 0x%x (esperado 0x%x); nada trocado.",
+                    static_cast<unsigned long long>(p.va), cur, p.from);
+      Logger::Warn(msg);
+      return;
+    }
+  }
+  bool ok = true;
+  for (const auto &p : kSlotOwnerFields) {
+    const uint32_t to = SlotOwnerTarget(p);
+    ok = PatchBytes(g_gameBase + (p.va - kImageBase), reinterpret_cast<const uint8_t *>(&to),
+                    p.size) &&
+         ok;
+  }
+  if (ok) SetEnvironmentVariableA("DR2HOOK_SLOTOWNER_FIELDS", "1");
+  char msg[160];
+  std::snprintf(msg, sizeof(msg),
+                "GhostLab[slots]: %zu campos do dono dos slots de 0x6228, 16 -> 24 (%s).",
+                sizeof(kSlotOwnerFields) / sizeof(kSlotOwnerFields[0]),
+                ok ? "ok" : "FALHOU parcialmente");
+  Logger::Info(msg);
 }
 
 void PatchRenderObjectArray() {
@@ -1774,6 +2063,7 @@ void PatchRenderObjectArray() {
   }
   uint8_t *scratch = buffer + ((arrayBytes + 0xf) & ~static_cast<size_t>(0xf));
   g_renderBuffer = buffer;
+  g_renderBufferForLog = buffer;
   auto rel32 = [&](uintptr_t instr, size_t len, const void *target) {
     return static_cast<int32_t>(reinterpret_cast<intptr_t>(target) -
                                 static_cast<intptr_t>(instr + len));
@@ -1890,13 +2180,17 @@ struct BytePatch {
   uint8_t from;
   uint8_t to;
 };
-// Lacos de 16: construcao e destruicao dos rotulos (mov ecx,0x10) e os tres lacos finais
-// por indice de carro (cmp ..,0x10).
+// Lacos de 16: construcao e destruicao dos rotulos (mov ecx,0x10) e os dois cmp do
+// laco que apaga o flag ocupado dos slots alem da contagem de carros.
+// O cmp de 0x1404aa49b fica em 16 de proposito: com as flags do VEHICLE_SYSTEM
+// +0x501/+0x508 esse laco marca ocupado (+0x1b0) o array inteiro. Subir para 24
+// marcava os slots vazios; a carga de modelo (0x140969300) lia [objeto+0x1d0]
+// nulo e caia em exe+0x966a49. Esse ponteiro so nasce para carro real
+// (0x140477c8d), e o laco por carro logo acima ja cobre os indices >= 16.
 constexpr BytePatch kVehicleSystemLoops[] = {{0x1404a8a78, 0x10, kCarSlots},
                                              {0x1404aa50e, 0x10, kCarSlots},
                                              {0x1404aa457, 0x10, kCarSlots},
-                                             {0x1404aa478, 0x10, kCarSlots},
-                                             {0x1404aa49b, 0x10, kCarSlots}};
+                                             {0x1404aa478, 0x10, kCarSlots}};
 
 // Copia de uma tabela de 0x78 bytes como o construtor faz (0x1404645d0..): lista vazia
 // em +0x20 e vetor de 8 baldes em +0x48 apontando para ela.
@@ -2176,8 +2470,10 @@ void HookDriverHandlers() {
 // percorre 16; o objeto de render 16 ficava sem modelo (+0x1c8 nulo, crash exe+0xc3ab09)
 // e o nome do veiculo 16 caia sobre a tabela seguinte (+0x298). As tabelas nao da para
 // relocar (um acesso usa disp8). Em vez disso: o setter ignora veiculos >= 16 e, depois de
-// cada passada da fila, os objetos de render 16..23 ativos e sem modelo recebem o modelo pela
-// mesma chamada que a fila faz (0x1409690d0) e os mesmos avisos depois dela.
+// cada passada da fila, os objetos de render 16..23 ativos, com estado de render
+// (+0x1d0, criado em 0x14095f490 so para carro real) e sem modelo recebem o modelo
+// pela mesma chamada que a fila faz (0x1409690d0) e os mesmos avisos depois dela.
+// Sem +0x1d0 a chamada cai em exe+0x966a49 (0x1409669f0 escreve [estado+0xde8]).
 constexpr uintptr_t kModelOwnerVa = 0x14159d9e0;
 constexpr uintptr_t kSetModelNameRva = 0x140b99960 - kImageBase;
 constexpr uint8_t kSetModelNamePrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10};
@@ -2191,6 +2487,7 @@ RegFn g_originalModelQueue = nullptr;
 void *g_setModelNameTarget = nullptr;
 void *g_modelQueueTarget = nullptr;
 std::atomic<int> g_extraModelsLogged{0};
+std::atomic<int> g_extraModelsSkipped{0};
 
 uint64_t DetourSetModelName(uint64_t owner, uint64_t index, uint64_t name, uint64_t r9) {
   if (static_cast<int>(index) >= 16) return 0;
@@ -2209,6 +2506,16 @@ void LoadExtraCarModels(uint8_t *owner) {
   for (int idx = 16; idx < kCarSlots; ++idx) {
     uint8_t *ro = g_renderBuffer + static_cast<size_t>(idx) * kRenderObjectSize;
     if (ro[0x1b0] == 0 || *reinterpret_cast<void **>(ro + 0x1c8) != nullptr) continue;
+    if (*reinterpret_cast<void **>(ro + 0x1d0) == nullptr) {
+      if (g_extraModelsSkipped.fetch_add(1) < 4) {
+        char msg[120];
+        std::snprintf(msg, sizeof(msg),
+                      "GhostLab[modelos]: objeto de render %d sem estado (+0x1d0); modelo nao carregado.",
+                      idx);
+        Logger::Info(msg);
+      }
+      continue;
+    }
     load(rm, idx, 0, *reinterpret_cast<void **>(owner + 0x108), *reinterpret_cast<void **>(owner + 0x100));
     if (void *notify = *reinterpret_cast<void **>(owner + 0x2b0)) {
       reinterpret_cast<NotifyFn>((*reinterpret_cast<void ***>(notify))[1])(notify, idx);
@@ -2270,6 +2577,382 @@ void PatchDriverParams() {
        &g_driverCtorTarget, "DriverSystemCtor");
 }
 
+// Banco de audio por carro: 16 blocos de 0x3390 em +0x1730, contagem em +0x35030
+// (0x140b0488a rejeita o 17º). O passo seguinte, 0x140b0a660, chama [vtable+0x38]
+// do primeiro filho sem o byte de saída que 0x140f959a0 escreve, e o 17º carro
+// cai em exe+0xf959ce. Enquanto o banco não cresce, a varredura (0x140b0b5b0)
+// só inicializa os 16 primeiros. O ponteiro final do vetor volta ao lugar.
+constexpr uintptr_t kAudioWalkRva = 0xb0b5b0;
+constexpr uint8_t kAudioWalkPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20};
+using AudioWalkFn = uint8_t (*)(void *);
+AudioWalkFn g_originalAudioWalk = nullptr;
+void *g_audioWalkTarget = nullptr;
+
+uint8_t DetourAudioWalk(void *self) {
+  auto *obj = static_cast<uint8_t *>(self);
+  auto &begin = *reinterpret_cast<uintptr_t *>(obj + 0xf8);
+  auto &end = *reinterpret_cast<uintptr_t *>(obj + 0x100);
+  const uintptr_t saved = end;
+  const uintptr_t cap = begin + 16ull * 8;
+  const bool cut = begin != 0 && saved > cap;
+  if (cut) end = cap;
+  const uint8_t ok = g_originalAudioWalk(self);
+  if (cut) end = saved;
+  if (cut && GetEnvironmentVariableA("DR2HOOK_AUDIO_CAP", nullptr, 0) == 0) {
+    SetEnvironmentVariableA("DR2HOOK_AUDIO_CAP", "1");
+    Logger::Info("GhostLab[audio]: init de audio limitada aos 16 primeiros carros.");
+  }
+  return ok;
+}
+
+// 0x140b1dde5 e o retorno de call 0x140a0fdb0, antes do laco dos vetores.
+// Essa chamada chega em 0x140f933a0. La, se +0x48 nao e zero, 0x140f93502
+// le os 8 bytes de +0x40 e chama [esse valor] como vtable. No 17º carro
+// esses bytes sao o texto "ev6" (exe+0xf93508). O trecho so chama se o
+// valor for um ponteiro de usuario.
+constexpr uintptr_t kAudioUpdateRva = 0xb1dcf0;
+constexpr uint8_t kAudioUpdatePrologue[] = {0x48, 0x89, 0x6c, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
+using AudioUpdateFn = void (*)(void *, void *);
+AudioUpdateFn g_originalAudioUpdate = nullptr;
+void *g_audioUpdateTarget = nullptr;
+uint32_t *g_audioParamSkips = nullptr;
+
+void CapPointerVector(uint8_t *obj, size_t beginOff, size_t endOff, uintptr_t *saved, bool *cut) {
+  auto &begin = *reinterpret_cast<uintptr_t *>(obj + beginOff);
+  auto &end = *reinterpret_cast<uintptr_t *>(obj + endOff);
+  *saved = end;
+  const uintptr_t cap = begin + 16ull * 8;
+  *cut = begin != 0 && end > cap;
+  if (*cut) end = cap;
+}
+
+void DetourAudioUpdate(void *self, void *arg) {
+  auto *obj = static_cast<uint8_t *>(self);
+  uintptr_t saved[3];
+  bool cut[3];
+  CapPointerVector(obj, 0xf8, 0x100, &saved[0], &cut[0]);
+  CapPointerVector(obj, 0x120, 0x128, &saved[1], &cut[1]);
+  CapPointerVector(obj, 0x148, 0x150, &saved[2], &cut[2]);
+  g_originalAudioUpdate(self, arg);
+  if (cut[0]) *reinterpret_cast<uintptr_t *>(obj + 0x100) = saved[0];
+  if (cut[1]) *reinterpret_cast<uintptr_t *>(obj + 0x128) = saved[1];
+  if (cut[2]) *reinterpret_cast<uintptr_t *>(obj + 0x150) = saved[2];
+  if ((cut[0] || cut[1] || cut[2]) && GetEnvironmentVariableA("DR2HOOK_AUDIO_UPDATE_CAP", nullptr, 0) == 0) {
+    SetEnvironmentVariableA("DR2HOOK_AUDIO_UPDATE_CAP", "1");
+    Logger::Info("GhostLab[audio]: atualizacao de audio limitada aos 16 primeiros carros.");
+  }
+  if (g_audioParamSkips != nullptr && *g_audioParamSkips != 0 &&
+      GetEnvironmentVariableA("DR2HOOK_AUDIO_PARAM_SKIP", nullptr, 0) == 0) {
+    SetEnvironmentVariableA("DR2HOOK_AUDIO_PARAM_SKIP", "1");
+    char msg[120];
+    std::snprintf(msg, sizeof(msg),
+                  "GhostLab[audio]: %u chamada(s) de parametro sem objeto foram ignoradas.",
+                  *g_audioParamSkips);
+    Logger::Info(msg);
+  }
+}
+
+constexpr uintptr_t kAudioParamCallRva = 0xf93502;
+constexpr uint8_t kAudioParamCall[] = {0x48, 0x8b, 0x09, 0x41, 0x8b, 0xd3, 0x48, 0x8b, 0x01, 0xff, 0x50, 0x08};
+
+void PatchAudioParamCall() {
+  const uintptr_t site = g_gameBase + kAudioParamCallRva;
+  if (std::memcmp(reinterpret_cast<void *>(site), kAudioParamCall, sizeof(kAudioParamCall)) != 0) {
+    Logger::Warn("GhostLab[audio]: chamada de parametro diferente do esperado; patch abortado.");
+    return;
+  }
+  void *page = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (page == nullptr) {
+    Logger::Error("GhostLab[audio]: sem memoria para o guarda do parametro.");
+    return;
+  }
+  auto *code = static_cast<uint8_t *>(page);
+  g_audioParamSkips = reinterpret_cast<uint32_t *>(code + 0x100);
+  *g_audioParamSkips = 0;
+  const uintptr_t resume = g_gameBase + 0xf9350e;
+  const uintptr_t skips = reinterpret_cast<uintptr_t>(g_audioParamSkips);
+  std::vector<uint8_t> s;
+  auto put = [&](std::initializer_list<uint8_t> b) { s.insert(s.end(), b); };
+  auto rel8 = [&](size_t at, size_t target) { s[at] = static_cast<uint8_t>(target - (at + 1)); };
+  put({0x48, 0x8b, 0x09});             // mov rcx, [rcx]
+  put({0x41, 0x8b, 0xd3});             // mov edx, r11d
+  put({0x48, 0x85, 0xc9});             // test rcx, rcx
+  const size_t jz = s.size();
+  put({0x74, 0x00});                   // jz bad
+  put({0x48, 0x89, 0xc8});             // mov rax, rcx
+  put({0x48, 0xc1, 0xe8, 0x2f});       // shr rax, 47
+  const size_t jnz = s.size();
+  put({0x75, 0x00});                   // jnz bad
+  put({0x48, 0x8b, 0x01});             // mov rax, [rcx]
+  put({0x49, 0x89, 0xc2});             // mov r10, rax
+  put({0x49, 0xc1, 0xea, 0x2f});       // shr r10, 47
+  const size_t jnz2 = s.size();
+  put({0x75, 0x00});                   // jnz bad
+  put({0xff, 0x50, 0x08});             // call [rax+8]
+  const size_t ok = s.size();
+  put({0x49, 0xba});                   // mov r10, resume
+  for (int i = 0; i < 8; ++i) s.push_back(static_cast<uint8_t>(resume >> (8 * i)));
+  put({0x41, 0xff, 0xe2});             // jmp r10
+  const size_t bad = s.size();
+  rel8(jz + 1, bad);
+  rel8(jnz + 1, bad);
+  rel8(jnz2 + 1, bad);
+  put({0xf0, 0xff, 0x05});             // lock inc dword [rip+skips]
+  const int32_t disp = static_cast<int32_t>(skips - (reinterpret_cast<uintptr_t>(code) + s.size() + 4));
+  for (int i = 0; i < 4; ++i) s.push_back(static_cast<uint8_t>(disp >> (8 * i)));
+  const std::vector<uint8_t> back(s.begin() + static_cast<std::ptrdiff_t>(ok),
+                                  s.begin() + static_cast<std::ptrdiff_t>(ok + 13));
+  s.insert(s.end(), back.begin(), back.end()); // mov r10, resume; jmp r10
+  std::memcpy(code, s.data(), s.size());
+  FlushInstructionCache(GetCurrentProcess(), code, s.size());
+  uint8_t jmp[12] = {0x48, 0xb8};
+  const uintptr_t stub = reinterpret_cast<uintptr_t>(code);
+  for (int i = 0; i < 8; ++i) jmp[2 + i] = static_cast<uint8_t>(stub >> (8 * i));
+  jmp[10] = 0xff;
+  jmp[11] = 0xe0;
+  if (!PatchBytes(site, jmp, sizeof(jmp))) {
+    Logger::Error("GhostLab[audio]: nao gravou o guarda do parametro.");
+    return;
+  }
+  Logger::Info("GhostLab[audio]: parametro sem objeto de audio e ignorado.");
+}
+
+void PatchAudioWalk() {
+  if (WantedGhostCars() < 16) return;
+  Hook(kAudioWalkRva, kAudioWalkPrologue, sizeof(kAudioWalkPrologue),
+       reinterpret_cast<void *>(&DetourAudioWalk), reinterpret_cast<void **>(&g_originalAudioWalk),
+       &g_audioWalkTarget, "AudioWalk");
+  Hook(kAudioUpdateRva, kAudioUpdatePrologue, sizeof(kAudioUpdatePrologue),
+       reinterpret_cast<void *>(&DetourAudioUpdate), reinterpret_cast<void **>(&g_originalAudioUpdate),
+       &g_audioUpdateTarget, "AudioUpdate");
+  PatchAudioParamCall();
+}
+
+// Estado de roda por carro: 16 blocos de 0x70 a partir de +0x20, campos logo
+// depois em +0x720. 0x1409a9d02 ja limita o objeto de render a 16, mas o
+// bloco de 0x70 usa o indice cheio e o 17º cai em exe+0x9b17cd (nome car_wheel).
+// Com indice > 15, o cmova vira um salto que pula essa chamada.
+void PatchWheelIndex() {
+  if (WantedGhostCars() < 16) return;
+  const uintptr_t sites[] = {g_gameBase + 0x9a9d09, g_gameBase + 0x9a9de2};
+  const uint8_t from[] = {0x0f, 0x47, 0xc6};
+  const uint8_t to[] = {0x77, 0x34, 0x90};
+  for (uintptr_t site : sites) {
+    if (std::memcmp(reinterpret_cast<void *>(site), from, sizeof(from)) != 0) {
+      Logger::Warn("GhostLab[rodas]: limite diferente do esperado; nada trocado.");
+      return;
+    }
+  }
+  for (uintptr_t site : sites) PatchBytes(site, to, sizeof(to));
+  Logger::Info("GhostLab[rodas]: carro 16+ sem o bloco de roda de 16 vagas.");
+}
+
+// Passo de render por carro (0x1409ed100): 4 recursos por carro em [rdi+0x18],
+// 64 ponteiros que acabam em +0x218. O ponteiro nao volta entre carros, entao o
+// 17º le [rdi+0x218] (o objeto da propria funcao) como recurso e o
+// EnterCriticalSection em [recurso+0x68] (0x1408d2000) gira para sempre com
+// handle invalido. Os dois lacos de carro (0x1409ed49f e 0x1409ed70a) passam a
+// comparar com min(contagem, 16) numa caverna; o ret nao mexe nas flags do jl.
+void PatchCarPassCount() {
+  if (WantedGhostCars() < 16) return;
+  struct Site {
+    uintptr_t rva;
+    std::vector<uint8_t> cmp; // instrucao original
+    std::vector<uint8_t> cap; // cmp <reg>, 16
+  };
+  const Site sites[] = {
+      {0x9ed49f, {0x3b, 0x98, 0x40, 0x96, 0x01, 0x00}, {0x83, 0xfb, 0x10}},             // ebx
+      {0x9ed70a, {0x44, 0x3b, 0xa8, 0x40, 0x96, 0x01, 0x00}, {0x41, 0x83, 0xfd, 0x10}}, // r13d
+  };
+  for (const Site &s : sites) {
+    if (std::memcmp(reinterpret_cast<void *>(g_gameBase + s.rva), s.cmp.data(), s.cmp.size()) != 0) {
+      Logger::Warn("GhostLab[passo]: laco de carros diferente do esperado; nada trocado.");
+      return;
+    }
+  }
+  uint8_t *cave = AllocNearImage(0x1000);
+  if (cave == nullptr) {
+    Logger::Error("GhostLab[passo]: sem memoria perto da imagem.");
+    return;
+  }
+  uint8_t *at = cave;
+  uint8_t *entries[2] = {};
+  for (int i = 0; i < 2; ++i) {
+    const Site &s = sites[i];
+    entries[i] = at;
+    std::vector<uint8_t> c = {0x81, 0xb8, 0x40, 0x96, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00}; // cmp dword [rax+0x19640], 16
+    c.push_back(0x7f);                                                                     // jg cap
+    c.push_back(static_cast<uint8_t>(s.cmp.size() + 1));
+    c.insert(c.end(), s.cmp.begin(), s.cmp.end()); // cmp <reg>, [rax+0x19640]
+    c.push_back(0xc3);
+    c.insert(c.end(), s.cap.begin(), s.cap.end()); // cap: cmp <reg>, 16
+    c.push_back(0xc3);
+    std::memcpy(at, c.data(), c.size());
+    at += (c.size() + 15) & ~size_t{15};
+  }
+  DWORD old = 0;
+  VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
+  FlushInstructionCache(GetCurrentProcess(), cave, static_cast<SIZE_T>(at - cave));
+  bool ok = true;
+  for (int i = 0; i < 2; ++i) {
+    const uintptr_t site = g_gameBase + sites[i].rva;
+    std::vector<uint8_t> call(sites[i].cmp.size(), 0x90); // call cave; nops
+    call[0] = 0xe8;
+    const int32_t rel = static_cast<int32_t>(reinterpret_cast<intptr_t>(entries[i]) -
+                                             static_cast<intptr_t>(site + 5));
+    std::memcpy(call.data() + 1, &rel, 4);
+    ok = PatchBytes(site, call.data(), call.size()) && ok;
+  }
+  if (ok) Logger::Info("GhostLab[passo]: passo de render por carro limitado aos 16 primeiros.");
+  else Logger::Error("GhostLab[passo]: nao gravou o limite do passo de render.");
+}
+
+// Tarefas por carro (0x14097aa40, chamada de 0x1409a99a7, 0x1409a99f9 e
+// 0x140996296): blocos de 0x48 em [gerenciador+0x194e8], um por carro. O
+// cmova em 0x14097aac7 so limita o indice usado para ver se o carro existe; o
+// bloco continua andando e o 17º chama [vtable+0x30] de lixo (rip=0xba).
+// cmp rsi,15; mov rax,rsi; cmova rax,rcx -> cmp rsi,15; ja proximo; mov rax,rsi.
+void PatchCarTaskIndex() {
+  if (WantedGhostCars() < 16) return;
+  const uintptr_t site = g_gameBase + 0x97aac0;
+  const uint8_t from[] = {0x48, 0x83, 0xfe, 0x0f, 0x48, 0x8b, 0xc6, 0x48, 0x0f, 0x47, 0xc1};
+  const uint8_t to[] = {0x48, 0x83, 0xfe, 0x0f, 0x77, 0x69, 0x48, 0x8b, 0xc6, 0x90, 0x90};
+  if (std::memcmp(reinterpret_cast<void *>(site), from, sizeof(from)) != 0) {
+    Logger::Warn("GhostLab[tarefas]: laco de tarefas diferente do esperado; nada trocado.");
+    return;
+  }
+  if (PatchBytes(site, to, sizeof(to)))
+    Logger::Info("GhostLab[tarefas]: carro 16+ sem o bloco de tarefa de 16 vagas.");
+}
+
+// Gerenciador de rodas: 16 blocos de 0x70 em +0x20 e, logo depois, contagem
+// (+0x720), indice ciclico (+0x724), carro atual (+0x728) e ponteiro +0x748.
+// 0x140978b00 copia a contagem de carros para +0x720 sem limite e monta um bloco
+// por carro; o 17º bloco e o proprio +0x720.. e estraga esses campos (lag no laco
+// ciclico de 0x1409a9d59, depois EnterCriticalSection em [+0x748]+0x2c8 lixo).
+// mov edx,[rax+0x19640] passa por uma caverna que limita a 16.
+void PatchWheelManagerCount() {
+  if (WantedGhostCars() < 16) return;
+  uint8_t *site = reinterpret_cast<uint8_t *>(g_gameBase + 0x978b1a);
+  const uint8_t from[] = {0x8b, 0x90, 0x40, 0x96, 0x01, 0x00, 0x89, 0x91, 0x20, 0x07, 0x00, 0x00};
+  if (std::memcmp(site, from, sizeof(from)) != 0) {
+    Logger::Warn("GhostLab[rodas]: contagem do gerenciador diferente do esperado; nada trocado.");
+    return;
+  }
+  uint8_t *cave = AllocNearImage(0x1000);
+  if (cave == nullptr) {
+    Logger::Error("GhostLab[rodas]: sem memoria perto da imagem.");
+    return;
+  }
+  // mov edx,[rax+0x19640]; cmp edx,16; jle +5; mov edx,16; ret
+  const uint8_t code[] = {0x8b, 0x90, 0x40, 0x96, 0x01, 0x00, 0x83, 0xfa, 0x10,
+                          0x7e, 0x05, 0xba, 0x10, 0x00, 0x00, 0x00, 0xc3};
+  std::memcpy(cave, code, sizeof(code));
+  DWORD old = 0;
+  VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READ, &old);
+  FlushInstructionCache(GetCurrentProcess(), cave, sizeof(code));
+  uint8_t call[6] = {0xe8, 0, 0, 0, 0, 0x90};
+  const int32_t rel = static_cast<int32_t>(reinterpret_cast<intptr_t>(cave) -
+                                           reinterpret_cast<intptr_t>(site + 5));
+  std::memcpy(call + 1, &rel, 4);
+  if (PatchBytes(reinterpret_cast<uintptr_t>(site), call, sizeof(call)))
+    Logger::Info("GhostLab[rodas]: gerenciador de rodas limitado a 16 blocos.");
+}
+
+// 0x1405f6330 decodifica a contagem de slots (chave de 0x1400a0c00 XOR
+// [dono+0x93520]) e percorre os slots (0x14092e410: dono + i*0x6228 + 0x660).
+// Na largada veio 0xbd53d83 (o campo parecia zerado) e o slot 24 leu texto.
+// A caverna limita a 24 e guarda o valor ruim e o dono para o log de limites.
+void PatchSlotCountReader() {
+  if (WantedGhostCars() < 16) return;
+  uint8_t *site = reinterpret_cast<uint8_t *>(g_gameBase + 0x5f6330);
+  const uint8_t prefix[] = {0x45, 0x33, 0xb7}; // xor r14d,[r15+disp32]
+  if (std::memcmp(site, prefix, sizeof(prefix)) != 0) {
+    Logger::Warn("GhostLab[slots]: leitura da contagem diferente do esperado; nada trocado.");
+    return;
+  }
+  uint8_t *cave = AllocNearImage(0x1000);
+  if (cave == nullptr) return;
+  DWORD old = 0;
+  VirtualProtect(cave, 0x1000, PAGE_EXECUTE_READWRITE, &old);
+  g_slotCountBad = cave + 0x100;
+  std::vector<uint8_t> s(site, site + 7); // instrucao original (disp ja movido ou nao)
+  auto put = [&](std::initializer_list<uint8_t> b) { s.insert(s.end(), b); };
+  auto ripTo = [&](uint8_t *target) { // disp32 relativo ao fim da instrucao (4 bytes)
+    const int32_t d = static_cast<int32_t>(target - (cave + s.size() + 4));
+    for (int i = 0; i < 4; ++i) s.push_back(static_cast<uint8_t>(d >> (8 * i)));
+  };
+  put({0x41, 0x83, 0xfe, 0x18}); // cmp r14d, 24
+  put({0x76, 0x1b});             // jbe done
+  put({0xf0, 0xff, 0x05});       // lock inc dword [rip+cnt]
+  ripTo(g_slotCountBad);
+  put({0x44, 0x89, 0x35});       // mov [rip+ultimo], r14d
+  ripTo(g_slotCountBad + 4);
+  put({0x4c, 0x89, 0x3d});       // mov [rip+dono], r15
+  ripTo(g_slotCountBad + 8);
+  put({0x41, 0xbe, 0x18, 0x00, 0x00, 0x00}); // mov r14d, 24
+  put({0xc3});                               // done: ret
+  std::memcpy(cave, s.data(), s.size());
+  FlushInstructionCache(GetCurrentProcess(), cave, s.size());
+  uint8_t call[7] = {0xe8, 0, 0, 0, 0, 0x66, 0x90};
+  const int32_t rel = static_cast<int32_t>(cave - (site + 5));
+  std::memcpy(call + 1, &rel, 4);
+  if (PatchBytes(reinterpret_cast<uintptr_t>(site), call, sizeof(call)))
+    Logger::Info("GhostLab[slots]: contagem de slots lida em 0x1405f6330 limitada a 24.");
+}
+
+// Array por carro de 0xac0 (4 rodas de 0x260) em [obj+0x90], contagem em
+// [obj+0x80]. O construtor (0x140445350) aloca 16 fixos (mov edx,0x10 e
+// [obj+0x80]=0x10); 0x14044c130 com o 17º carro le depois do fim e cai em
+// exe+0x44cf20. Os lacos usam [obj+0x80], entao 16 -> 24 nos dois imediatos.
+void PatchWheelBlockArray() {
+  if (WantedGhostCars() < 16) return;
+  uint8_t *countArg = reinterpret_cast<uint8_t *>(g_gameBase + 0x445454);
+  uint8_t *countField = reinterpret_cast<uint8_t *>(g_gameBase + 0x44545c);
+  const uint8_t argFrom[] = {0xba, 0x10, 0x00, 0x00, 0x00};
+  const uint8_t fieldFrom[] = {0x48, 0xc7, 0x87, 0x80, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00};
+  if (std::memcmp(countArg, argFrom, sizeof(argFrom)) != 0 ||
+      std::memcmp(countField, fieldFrom, sizeof(fieldFrom)) != 0) {
+    Logger::Warn("GhostLab[rodas]: array de 0xac0 diferente do esperado; nada trocado.");
+    return;
+  }
+  const uint8_t to = 0x18;
+  if (PatchBytes(reinterpret_cast<uintptr_t>(countArg + 1), &to, 1) &&
+      PatchBytes(reinterpret_cast<uintptr_t>(countField + 7), &to, 1))
+    Logger::Info("GhostLab[rodas]: array de 0xac0 por carro 16 -> 24.");
+}
+
+// Atualizacao dos objetos da lista [obj+0x10] (contagem +0x210), 0x1409a83e0.
+// Com sistema de tarefas ([obj+0x220] != 0) vai para 0x1409889d0, que monta na
+// pilha 2*contagem dwords em rsp+0x30 e 2*contagem ponteiros em rsp+0xb0: 32
+// vagas de cada. Com 17, os dwords 32 e 33 sobrescrevem o primeiro ponteiro e a
+// tarefa (0x140964de0) chama 0x1409a84c0 com objeto nulo. O caminho sem tarefas
+// ja limita a contagem a 16 (cmovg em 0x1409a845c); o je vira jmp para usa-lo.
+// Os objetos sao os de LOD de cada carro (0x1409a84c0 carrega as malhas do LOD
+// pedido em [modelo+0x1a8]); fora dos 16 o carro nunca ganha malha e nao aparece.
+// A lista em [obj+0x10] tem 64 vagas, entao o limite do caminho serial vai a 24:
+// mov ecx,16; cmp eax,ecx; cmovg eax,ecx; ...; add rdi,rcx (rcx = 0x10 e o inicio
+// da lista) -> cmp eax,24; jle; mov eax,24; ...; add rdi,0x10.
+void PatchObjectUpdateSerial() {
+  if (WantedGhostCars() < 16) return;
+  const uintptr_t site = g_gameBase + 0x9a8416;
+  const uint8_t from[] = {0x74, 0x12};
+  const uint8_t to[] = {0xeb, 0x12};
+  const uintptr_t capSite = g_gameBase + 0x9a8455;
+  const uint8_t capFrom[] = {0xb9, 0x10, 0x00, 0x00, 0x00, 0x3b, 0xc1, 0x0f, 0x4f, 0xc1, 0x33, 0xf6, 0x48, 0x63,
+                             0xe8, 0x85, 0xc0, 0x7e, 0x2d, 0x48, 0x03, 0xf9, 0x0f, 0x1f, 0x44, 0x00, 0x00};
+  const uint8_t capTo[] = {0x83, 0xf8, 0x18, 0x7e, 0x05, 0xb8, 0x18, 0x00, 0x00, 0x00, 0x33, 0xf6, 0x48, 0x63,
+                           0xe8, 0x85, 0xc0, 0x7e, 0x2d, 0x48, 0x83, 0xc7, 0x10, 0x0f, 0x1f, 0x40, 0x00};
+  static_assert(sizeof(capFrom) == sizeof(capTo), "limite serial");
+  if (std::memcmp(reinterpret_cast<void *>(site), from, sizeof(from)) != 0 ||
+      std::memcmp(reinterpret_cast<void *>(capSite), capFrom, sizeof(capFrom)) != 0) {
+    Logger::Warn("GhostLab[serial]: desvio para as tarefas diferente do esperado; nada trocado.");
+    return;
+  }
+  if (PatchBytes(capSite, capTo, sizeof(capTo)) && PatchBytes(site, to, sizeof(to)))
+    Logger::Info("GhostLab[serial]: atualizacao dos objetos de LOD sem tarefas, limite 16 -> 24.");
+}
+
 #endif
 
 } // namespace
@@ -2284,6 +2967,15 @@ bool GhostLab::Install(uintptr_t gameBase) {
     return false;
   }
   PatchRenderObjectArray(); // so com dr2hook_ghost_cars.txt >= 16
+  PatchWheelIndex();         // idem; o bloco de roda ainda tem 16 vagas
+  PatchWheelManagerCount();  // idem; 17º bloco caia em cima de +0x720.. do gerenciador
+  PatchWheelBlockArray();    // idem; array de 0xac0 por carro nascia com 16
+  PatchCarPassCount();       // idem; 4 recursos por carro em 16 vagas (0x1409ed100)
+  PatchCarTaskIndex();       // idem; blocos de tarefa de 0x48 em 16 vagas (0x14097aa40)
+  PatchObjectUpdateSerial(); // idem; arrays de 32 na pilha de 0x1409889d0
+  PatchSlotOwnerArray();    // idem; precisa da dxgi.dll que amplia o dono dos slots
+  PatchSlotCountReader();   // idem; depois do anterior (copia o disp ja movido)
+  PatchAudioWalk();          // idem; o banco de audio ainda tem 16 vagas
   PatchVehicleSystemSlots(); // idem; precisa da dxgi.dll que amplia o VEHICLE_SYSTEM
   PatchDriverParams();       // idem, objeto de pilotos
   const bool evaluate =

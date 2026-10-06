@@ -31,6 +31,13 @@ constexpr SizePatch kPatches[] = {
     // Gerenciador de render (0x1409451a0): lista de 16 flags por carro (+0x194a8) vai
     // para +0x1ab30 com 24.
     {0x140b947aa, 0x1ab30, 0x1ab90, "render", "DR2HOOK_RENDERMGR_SIZE"},
+    // Dono dos slots de 0x6228 (construtor 0x14091ecc0, array em +0x408). 16 cabem
+    // até +0x62688; 24 pedem +8*0x6228. O core move a cauda e constrói 24. A lista de
+    // ponteiros da cauda (+0x62360, 13 vagas antes de +0x623c8) também passa a 24, então
+    // o que vem depois dela anda 0x31198 em vez de 0x31140.
+    {0x140526ebb, 0x62750, 0x938e8, "slots 0x6228", "DR2HOOK_SLOTOWNER_SIZE"},
+    {0x1409218dd, 0x62750, 0x938e8, "slots 0x6228 (delete)", nullptr},
+    {0x140921879, 0x62418, 0x935b0, "slots 0x6228 (subobjeto)", nullptr},
 };
 constexpr size_t kPatchCount = sizeof(kPatches) / sizeof(kPatches[0]);
 int g_result[kPatchCount] = {}; // 0 = não tentado, 1 = ok, -1 = bytes diferentes
@@ -57,7 +64,11 @@ bool InstallVehicleSystemSizePatch() {
   for (size_t i = 0; i < kPatchCount; ++i) {
     const bool ok = PatchImm(base, kPatches[i]);
     g_result[i] = ok ? 1 : -1;
-    if (ok && kPatches[i].env != nullptr) SetEnvironmentVariableA(kPatches[i].env, "1");
+    if (ok && kPatches[i].env != nullptr) {
+      char size[16];
+      std::snprintf(size, sizeof(size), "%x", kPatches[i].to); // o core confere o tamanho
+      SetEnvironmentVariableA(kPatches[i].env, size);
+    }
     any = any || ok;
   }
   return any;
