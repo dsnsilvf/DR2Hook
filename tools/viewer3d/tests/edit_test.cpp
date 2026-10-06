@@ -237,6 +237,14 @@ void test_write_backup() {
         threw = true;
     }
     check(threw && fs::is_directory(dir / "pasta.json") && !fs::exists(dir / "pasta.json.tmp"), "write_text: destino pasta lança e limpa o .tmp");
+    // link simbólico continua link e o alvo recebe o texto; permissões do arquivo antigo ficam (R1-teste R-7)
+    const fs::path real = dir / "real.json", link = dir / "link.json";
+    edit::write_text(real.string(), "a");
+    fs::permissions(real, fs::perms::owner_read | fs::perms::owner_write);
+    fs::create_symlink(real, link);
+    edit::write_text(link.string(), "b");
+    check(fs::is_symlink(link) && slurp(real) == "b", "write_text: link simbólico grava no alvo");
+    check(fs::status(real).permissions() == (fs::perms::owner_read | fs::perms::owner_write), "write_text: mantém as permissões");
     fs::remove_all(dir);
 }
 

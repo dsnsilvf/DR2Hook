@@ -132,8 +132,9 @@ private:
     std::string status_;
     std::chrono::steady_clock::time_point status_time_{};
     void resume_edits();
+    static bool can_write(const std::string& path);
     std::string saved_text_;  // edits.json da última gravação (ou sem edições), para saber se há o que gravar
-    bool wrote_ = false;      // já gravou nesta sessão (a cópia .bak só no primeiro Ctrl+S)
+    bool backed_up_ = false;  // a cópia .bak do arquivo anterior já foi feita nesta sessão
     unsigned saves_ = 0;
     mutable bool unsaved_ = false;
     mutable unsigned unsaved_rev_ = ~0u, unsaved_saves_ = ~0u;

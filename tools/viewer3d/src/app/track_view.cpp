@@ -13,6 +13,14 @@
 #include <filesystem>
 #include <stdexcept>
 
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#define W_OK 2
+#else
+#include <unistd.h>
+#endif
+
 namespace dr2::app {
 
 namespace {
@@ -56,10 +64,23 @@ TrackView::TrackView(const std::string& dir, std::string out, bool resume)
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
+    if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
     if (std::filesystem::exists(out_)) {
         if (resume) resume_edits();
         else set_status(out_ + " já existe e não foi lido (--fresh); o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak");
     }
+}
+
+bool TrackView::can_write(const std::string& path) {
+    // o primeiro ancestral que existe precisa ser uma pasta com escrita (o resto o Ctrl+S cria)
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = fs::absolute(path, ec).parent_path();
+    while (!p.empty() && !fs::exists(p, ec)) {
+        if (p == p.parent_path()) return false;
+        p = p.parent_path();
+    }
+    return fs::is_directory(p, ec) && ::access(p.c_str(), W_OK) == 0;
 }
 
 void TrackView::resume_edits() {
@@ -102,6 +123,12 @@ void TrackView::load_route(std::size_t index) {
     if (!reopen) inst = read_dr2i(read_file(join_path(dir_, "inst_" + route.name + ".bin")), track_.types.size());
 
     // rotas com a mesma seleção de terreno dividem o arquivo: só relê se mudou
+    std::unique_ptr<render::Terrain> next_terrain;
+    struct Loaded {
+        double read_s = 0, upload_s = 0;
+        std::size_t bytes = 0;
+        MeshTotals tot{};
+    } loaded;
     if (route.terrain_file != terrain_file_) {
         auto t0 = std::chrono::steady_clock::now();
         const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route.terrain_file));
@@ -115,26 +142,31 @@ void TrackView::load_route(std::size_t index) {
         auto terrain = std::make_unique<render::Terrain>(meshes);
         glFinish();
         const double upload_s = seconds_since(t0);
-        terrain_ = std::move(terrain);
+        next_terrain = std::move(terrain);
+        loaded = Loaded{read_s, upload_s, bytes.size(), tot};
+    }
+    // tudo que pode falhar já foi feito: daqui para baixo só troca o estado
+    auto lines = std::make_unique<render::RouteLines>(route);
+    if (next_terrain) {
+        terrain_ = std::move(next_terrain);
         terrain_file_ = route.terrain_file;
-        route_ = &route;
-
+        const MeshTotals& tot = loaded.tot;
         // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
         const std::size_t before = textures_.created();
-        t0 = std::chrono::steady_clock::now();
+        const auto t0 = std::chrono::steady_clock::now();
         for (const auto& part : terrain_->parts()) textures_.for_material(part.material);
         glFinish();
         const double tex_s = seconds_since(t0);
         std::fprintf(stderr,
                      "viewer3d: %s %s: %zu malhas, %zu vértices, %zu triângulos; leitura %.3f s (%.1f MB), envio à GPU %.3f s\n",
-                     track_.id.c_str(), route_->terrain_file.c_str(), tot.meshes, tot.verts, tot.tris, read_s,
-                     static_cast<double>(bytes.size()) / 1e6, upload_s);
+                     track_.id.c_str(), route.terrain_file.c_str(), tot.meshes, tot.verts, tot.tris, loaded.read_s,
+                     static_cast<double>(loaded.bytes) / 1e6, loaded.upload_s);
         std::fprintf(stderr, "viewer3d: texturas do terreno: %zu novas (%zu falharam no total), %.1f MB RGBA no total, %.3f s\n",
                      textures_.created() - before, textures_.failed(), static_cast<double>(textures_.bytes_rgba()) / 1e6, tex_s);
     }
     route_index_ = index;
     route_ = &route;
-    lines_ = std::make_unique<render::RouteLines>(*route_);
+    lines_ = std::move(lines);
 
     if (auto it = saved_.find(index); it != saved_.end()) {
         inst_ = std::move(it->second.inst);
@@ -168,10 +200,11 @@ void TrackView::open_route(std::size_t next) {
         load_route(next);
     } catch (const std::exception& e) {
         // a rota atual volta intacta, com edições e histórico
-        auto it = saved_.find(route_index_);
-        inst_ = std::move(it->second.inst);
-        hist_ = std::move(it->second.hist);
-        saved_.erase(it);
+        if (auto it = saved_.find(route_index_); it != saved_.end()) {
+            inst_ = std::move(it->second.inst);
+            hist_ = std::move(it->second.hist);
+            saved_.erase(it);
+        }
         set_status("não abriu " + track_.routes[next].name + ": " + e.what());
     }
 }
@@ -407,9 +440,10 @@ bool TrackView::save() {
     try {
         // o primeiro Ctrl+S da sessão guarda o edits.json que já existia (de outra sessão) em .<n>.bak
         std::string bak;
-        if (!wrote_) bak = edit::backup_existing(out_);
+        // um .bak por sessão, mesmo que a gravação depois falhe e o usuário tente de novo
+        if (!backed_up_) bak = edit::backup_existing(out_);
+        backed_up_ = true;
         edit::write_text(out_, text);
-        wrote_ = true;
         saved_text_ = text;
         ++saves_;
         set_status("gravado " + out_ + " (" + std::to_string(count) + " edições)" + (bak.empty() ? "" : "; anterior em " + bak));
@@ -475,8 +509,7 @@ std::string TrackView::title() const {
     return std::string(tools[static_cast<int>(tool_)]) + " | " + route_->name + " | " + thousands(terrain_->meshes()) + " malhas | " + thousands(terrain_->vertices()) +
            " vértices | " + thousands(terrain_->triangles()) + " tri | inst " + thousands(objects_->visible()) + "/" +
            thousands(inst_.n) + " | " + std::to_string(static_cast<int>(draw_dist_)) + " m | hist " +
-           std::to_string(hist_.pos()) + "/" + std::to_string(hist_.size()) + (unsaved() ? " | não gravado" : "") + sel +
-           (status_.empty() ? "" : " | " + status_);
+           std::to_string(hist_.pos()) + "/" + std::to_string(hist_.size()) + (unsaved() ? " | não gravado" : "") + sel;
 }
 
 }  // namespace dr2::app

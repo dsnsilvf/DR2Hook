@@ -68,8 +68,13 @@ void check(const char* where) {
     }
 }
 
+namespace {
+int reported = 0;
+}
+
+int warned_errors() { return reported; }
+
 bool warn(const char* where) {
-    static int reported = 0;
     bool ok = true;
     for (GLenum err; (err = glGetError()) != GL_NO_ERROR;) {
         ok = false;

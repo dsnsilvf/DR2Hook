@@ -644,6 +644,10 @@ void EditorUi::status_bar(TrackView* track, float fps, const Rect& area) {
         } else {
             ImGui::TextUnformatted(message_.empty() ? "Cena de teste: abra uma pista em Arquivo > Abrir pista" : message_.c_str());
         }
+        if (const int glerr = gl::warned_errors()) {
+            ImGui::SameLine(0, 16);
+            ImGui::TextColored(kRed, "%d erro(s) de GL (veja o terminal)", glerr);
+        }
         char right[160];
         if (track)
             std::snprintf(right, sizeof right, "inst %zu/%u  ·  %.0f m  ·  %.0f fps", track->objects().visible(), track->instances().n,

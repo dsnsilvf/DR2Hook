@@ -154,8 +154,16 @@ void write_text(const std::string& path, const std::string& text) {
     if (inside_game_folder(path)) throw std::runtime_error("recusado: " + path + " fica dentro da pasta do jogo");
     const std::filesystem::path p(path);
     if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
+    // um link simbólico continua link: grava no alvo dele
+    std::error_code lec;
+    std::string target = path;
+    if (std::filesystem::is_symlink(path, lec)) {
+        const std::filesystem::path real = std::filesystem::canonical(path, lec);
+        if (!lec) target = real.string();
+        if (inside_game_folder(target)) throw std::runtime_error("recusado: " + path + " aponta para a pasta do jogo");
+    }
     // grava ao lado e renomeia: uma falha no meio não deixa o arquivo antigo pela metade
-    const std::string tmp = path + ".tmp";
+    const std::string tmp = target + ".tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size())) || !out.flush()) {
@@ -166,7 +174,10 @@ void write_text(const std::string& path, const std::string& text) {
         }
     }
     std::error_code ec;
-    std::filesystem::rename(tmp, path, ec);
+    // mantém as permissões do arquivo que já existia (o .tmp nasce com as padrão)
+    const auto perms = std::filesystem::status(target, ec).permissions();
+    if (!ec && std::filesystem::exists(target, ec)) std::filesystem::permissions(tmp, perms, ec);
+    std::filesystem::rename(tmp, target, ec);
     if (ec) {
         std::filesystem::remove(tmp, ec);
         throw std::runtime_error("não gravou " + path + ": " + ec.message());

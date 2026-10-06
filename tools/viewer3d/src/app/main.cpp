@@ -68,8 +68,12 @@ bool parse_args(int argc, char** argv, Options& opt) {
             const float* c = opt.camera;
             bool finite = true;
             for (int k = 0; k < 6; ++k) finite = finite && std::isfinite(c[k]);
-            if (!finite || c[2] <= 0.0f || std::fabs(c[1]) > 1.5f) {
-                std::fprintf(stderr, "--camera: valores finitos, dist > 0 e |pitch| <= 1,5 (a câmera limita a ~1,45)\n");
+            using Cam = dr2::render::OrbitCamera;
+            if (!finite || c[2] < Cam::kDistMin || c[2] > Cam::kDistMax || c[1] < Cam::kPitchMin || c[1] > Cam::kPitchMax ||
+                std::fabs(c[3]) > 1e6f || std::fabs(c[4]) > 1e6f || std::fabs(c[5]) > 1e6f) {
+                std::fprintf(stderr, "--camera: dist de %g a %g, pitch de %g a %g, alvo com |x|,|y|,|z| <= 1e6\n",
+                             static_cast<double>(Cam::kDistMin), static_cast<double>(Cam::kDistMax),
+                             static_cast<double>(Cam::kPitchMin), static_cast<double>(Cam::kPitchMax));
                 return false;
             }
             opt.has_camera = true;
@@ -299,7 +303,8 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
         input.chord[event.key.scancode] = false;
         break;
     case SDL_EVENT_KEY_DOWN:
-        if (event.key.mod & SDL_KMOD_CTRL) input.chord[event.key.scancode] = true;
+        // o autorrepetir de um W já apertado não é atalho: só a tecla apertada junto com o Ctrl
+        if ((event.key.mod & SDL_KMOD_CTRL) && !event.key.repeat) input.chord[event.key.scancode] = true;
         if (ui_took) break;
         if (event.key.key == SDLK_F10) {
             ui.panels = !ui.panels;
@@ -479,11 +484,10 @@ int run(const Options& opt) {
         const double elapsed = static_cast<double>(now - title_t0) / static_cast<double>(freq);
         if (elapsed >= 0.5) {
             fps = static_cast<float>(title_frames / elapsed);
-            char title[512];
-            const std::string what = track ? " | " + track->title() : std::string();
-            std::snprintf(title, sizeof title, "DR2 Viewer3D | %s | GL %s%s | %.0f fps", renderer.c_str(), version.c_str(),
-                          what.c_str(), static_cast<double>(fps));
-            SDL_SetWindowTitle(window, title);
+            char tail[32];
+            std::snprintf(tail, sizeof tail, " | %.0f fps", static_cast<double>(fps));
+            const std::string title = "DR2 Viewer3D | " + renderer + " | GL " + version + (track ? " | " + track->title() : "") + tail;
+            SDL_SetWindowTitle(window, title.c_str());
             title_t0 = now;
             title_frames = 0;
         }

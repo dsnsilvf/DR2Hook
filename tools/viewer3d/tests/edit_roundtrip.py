@@ -56,7 +56,8 @@ def main(edits_path: str, track_dir: str) -> int:
             for e in edits:
                 if e["deleted"] or e.get("added"):
                     continue
-                pos = e["index"] - sum(1 for r in removed if r < e["index"])
+                # edit_ens põe cada cópia logo depois da origem: as cópias de origens anteriores empurram o índice
+                pos = e["index"] - sum(1 for r in removed if r < e["index"]) + sum(1 for c in copies if c["src"] < e["index"])
                 m = after[pos]["m"]
                 got = [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14]]
                 assert all(abs(a - b) < 1e-3 for a, b in zip(got, e["m"])), (e["index"], got, e["m"])
