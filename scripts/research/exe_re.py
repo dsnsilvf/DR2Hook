@@ -29,16 +29,33 @@ EXE = os.environ.get("DR2_EXE", "/mnt/Jogos/SteamLibrary/steamapps/common/DiRT R
 BASE = 0x140000000
 
 
+CACHE = os.environ.get("DR2_RE_CACHE", os.path.expanduser("~/.cache/dr2hook/exe_re"))
+
+
+def cache_path(path: str, what: str) -> str:
+    """Arquivo de cache ligado ao tamanho e à data do exe (um exe novo gera outro nome)."""
+    st = os.stat(path)
+    return os.path.join(CACHE, f"{st.st_size:x}_{int(st.st_mtime):x}_{what}")
+
+
 class Image:
     def __init__(self, path: str):
         self.pe = pefile.PE(path, fast_load=True)
-        self.pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXCEPTION"]])
-        self.data = self.pe.get_memory_mapped_image()
+        mapped = cache_path(path, "image.bin")
+        if os.path.exists(mapped):
+            with open(mapped, "rb") as fh:
+                self.data = fh.read()
+        else:
+            self.data = self.pe.get_memory_mapped_image()
+            os.makedirs(CACHE, exist_ok=True)
+            with open(mapped + ".tmp", "wb") as fh:
+                fh.write(self.data)
+            os.replace(mapped + ".tmp", mapped)
         self.sections = {s.Name.rstrip(b"\0").decode(): s for s in self.pe.sections}
-        entries = sorted(
-            (e.struct.BeginAddress, e.struct.EndAddress, e.struct.UnwindData)
-            for e in getattr(self.pe, "DIRECTORY_ENTRY_EXCEPTION", [])
-        )
+        # .pdata direto da imagem: (início, fim, unwind) por função, sem objetos do pefile.
+        exc = self.pe.OPTIONAL_HEADER.DATA_DIRECTORY[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXCEPTION"]]
+        pdata = np.frombuffer(self.data, dtype="<u4", count=exc.Size // 4, offset=exc.VirtualAddress).reshape(-1, 3)
+        entries = sorted(map(tuple, pdata[pdata[:, 0] != 0].tolist()))
         # Blocos com UNW_FLAG_CHAININFO pertencem à função do registro encadeado; juntamos os
         # blocos contíguos da mesma função para disassemblar o corpo inteiro.
         primary: dict[int, int] = {}
@@ -190,6 +207,10 @@ def rel_index():
     (posição = opcode + 1) quanto para [rip+disp32] (destino = fim do disp + tail).
     """
     img = image()
+    cached = cache_path(EXE, "relindex.npz")
+    if os.path.exists(cached):
+        with np.load(cached) as z:
+            return z["dest"], z["pos"]
     lo, hi = text_range(img)
     raw = np.frombuffer(bytes(img.data[lo:hi + 3]), dtype=np.uint8)
     n = hi - lo
@@ -199,7 +220,12 @@ def rel_index():
     pos = np.arange(lo, hi, dtype=np.int64)
     dest = pos + 4 + disp
     order = np.argsort(dest, kind="stable")
-    return dest[order], pos[order]
+    # int32 basta (RVAs < 2 GiB) e corta o arquivo pela metade.
+    dest, pos = dest[order].astype(np.int32), pos[order].astype(np.int32)
+    os.makedirs(CACHE, exist_ok=True)
+    np.savez(cached + ".tmp.npz", dest=dest, pos=pos)
+    os.replace(cached + ".tmp.npz", cached)
+    return dest, pos
 
 
 def disp_sites(target: int, tails=(0,)):
