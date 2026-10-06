@@ -37,6 +37,8 @@ Se a janela não abrir em Wayland, tente `SDL_VIDEO_DRIVER=x11`.
 ./build/viewer3d/edit_test                           # histórico, giro, edits.json, recusa da pasta do jogo (sem GL)
 ./build/viewer3d/core_tests [--track DIR]            # JSON, DR2M, DR2I; com --track, a pista contra track.json,
                                                      # o expected.json da pista sintética ou os números da Montalegre
+python3 tools/viewer3d/tests/probe_check.py <pista>   # sonda de raio contra Möller–Trumbore em numpy (0 divergências)
+python3 tools/viewer3d/tests/ground_check.py <pista>  # Pôr no chão e oclusão do picking contra a força bruta
 python3 tools/viewer3d/tests/edit_roundtrip.py <edits.json> build/uiview/tracks/synthetic__dr2hook_ring
                                                      # aplica um edits.json do viewer com as funções de track/edit.py
 ```
@@ -83,6 +85,7 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Histórico | **Ctrl+Z** desfaz; **Ctrl+Y** ou **Ctrl+Shift+Z** refaz (300 passos) |
 | Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás). Se o arquivo já existia ao abrir, o primeiro Ctrl+S guarda uma cópia em `<arquivo>.<n>.bak`. A gravação é atômica (`.tmp` e renomeia); se falhar, o editor avisa na barra de status e continua aberto |
 | Enquadrar | **F**: o selecionado, ou a rota sem seleção (na cena de teste, volta ao início) |
+| Pôr no chão | **T** (ou o botão do Inspector, ou Editar): a altura do selecionado vira a do terreno sob ele, um passo de histórico. A barra tem **Grudar no chão**: ao arrastar, a altura segue o terreno |
 | Camadas | **F1** terreno, **F2** objetos, **F3** árvores, **F4** terreno distante, **G** portões, **I** linha da IA |
 | Distância de desenho | **[** e **]** (100 a 4000 m, padrão 700 m) |
 | Sair | **Ctrl+Q** ou fechar a janela; com edições não gravadas, pergunta (Gravar e sair / Sair sem gravar / Cancelar). **Esc** não sai |
@@ -105,6 +108,16 @@ Se uma rota não abre no **Tab** (arquivo truncado ou ausente), a rota atual fic
 | `--terrain-dist M` | raio do terreno em metros a partir do alvo da câmera, no plano xz (padrão 0 = sem limite) |
 | `--autosave S` | segundos entre autosaves (padrão 60; 0 desliga) |
 | `--fresh` | não retoma o `edits.json` que já existe (o primeiro Ctrl+S guarda uma cópia dele) |
+| `--walk M` | anda com a câmera `M` metros por quadro (para medir o corte das instâncias) |
+| `--tex-mb M` | limite de VRAM estimada das texturas, em MB (padrão 1536; as menos usadas saem) |
+| `--tex-max-side PX` | maior lado de textura na GPU (padrão 2048; 0 = sem limite) |
+| `--tex-threads N` | threads de decodificação de WebP (padrão 2) |
+| `--wait-textures` | só conta quadro com a fila de texturas vazia (capturas repetíveis) |
+| `--hide terrain,obj,tree,dist` | começa com essas camadas escondidas |
+| `--probe-rays arq` | testes: cada linha `ox oy oz dx dy dz`, imprime a distância até o terreno (ou `none`) e sai; `tests/probe_check.py` confere contra a força bruta |
+| `--ground-check arq` | testes: cada linha é um índice de instância; assenta, testa o picking de cima e de baixo e sai; `tests/ground_check.py` confere |
+| `--settle-list arq [--settle-redo]` | testes: assenta as instâncias da lista e segue (com `--settle-redo`, desfaz e refaz tudo, para comparar capturas) |
+| `--touch-test IDX,dx,dy,dz[,commit]` | testes: desloca a instância em 8 quadros só pelo reenvio parcial (com `commit`, fecha o passo e força o corte completo) |
 | `--camera yaw,pitch,dist,x,y,z` | estado exato da câmera, para comparar capturas com o viewer web (valores finitos, `dist` > 0, \|pitch\| ≤ 1,5) |
 
 Ver o PPM: `python3 -c "from PIL import Image; Image.open('arq.ppm').save('arq.png')"`. No `stderr` saem os tempos de leitura e de envio à GPU do terreno, e os das texturas.
@@ -143,7 +156,7 @@ Falta, na máquina do dono, com a Montalegre:
 
 - As linhas de portões e da IA mostram só a rota atual (o web desenha as de todas as rotas).
 - PSSG em C++, Polônia, Windows.
-- Seleção múltipla, assentar no terreno, picking que respeita o terreno (hoje um objeto atrás de um morro pode ser selecionado), zoom em direção ao cursor.
+- Seleção múltipla, zoom em direção ao cursor.
 - Docking de painéis (a 1.91.9b sem o ramo docking): o layout é fixo, as larguras das laterais se ajustam arrastando a borda.
 
 ## Ideias
