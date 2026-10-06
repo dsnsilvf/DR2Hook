@@ -41,6 +41,8 @@ struct Options {
     int vsync = 1;
     bool panels = true;
     bool fresh = false;  // não retoma o edits.json que já existe
+    float terrain_dist = 0.0f;
+    double autosave = 60.0;  // segundos entre autosaves (0 = desligado)
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
 };
@@ -80,12 +82,24 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.has_camera = true;
         } else if (std::strcmp(argv[i], "--vsync") == 0 && i + 1 < argc) {
             opt.vsync = std::atoi(argv[++i]) != 0 ? 1 : 0;
+        } else if (std::strcmp(argv[i], "--terrain-dist") == 0 && i + 1 < argc) {
+            opt.terrain_dist = std::strtof(argv[++i], nullptr);
+            if (!std::isfinite(opt.terrain_dist) || opt.terrain_dist < 0.0f) {
+                std::fprintf(stderr, "--terrain-dist precisa de metros >= 0 (0 = sem limite)\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--autosave") == 0 && i + 1 < argc) {
+            opt.autosave = std::strtod(argv[++i], nullptr);
+            if (!std::isfinite(opt.autosave) || opt.autosave < 0) {
+                std::fprintf(stderr, "--autosave precisa de segundos >= 0 (0 = desligado)\n");
+                return false;
+            }
         } else if (std::strcmp(argv[i], "--fresh") == 0) {
             opt.fresh = true;
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -382,21 +396,41 @@ void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input, cons
     if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
 }
 
-// Abre a pista em `dir` no lugar da atual; se falhar, a atual continua e a mensagem vai para os painéis.
+// Abre a pista em `dir` no lugar da atual. A atual sai antes (duas pistas grandes juntas dobrariam a
+// memória); se a nova falhar, a anterior é aberta de novo (com o edits.json dela) e a mensagem vai
+// para os painéis. Quem chama já confirmou descartar as edições não gravadas.
 void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2::app::TrackView>& track,
                 std::unique_ptr<TestScene>& scene, dr2::render::OrbitCamera& cam, dr2::app::EditorUi& ui) {
-    try {
-        // --out só vale para a pista da linha de comando; as outras gravam no caminho padrão
-        std::error_code ec;
-        const bool same = opt.track && std::filesystem::equivalent(dir, opt.track, ec);
-        auto next = std::make_unique<dr2::app::TrackView>(dir, same && opt.out ? opt.out : "", !opt.fresh);
+    std::string old_dir, old_out;
+    if (track) {
+        old_dir = track->track().dir;
+        old_out = track->out_path();
+    }
+    auto open = [&](const std::string& d, const std::string& out) {
+        auto next = std::make_unique<dr2::app::TrackView>(d, out, !opt.fresh);
+        next->terrain_dist() = opt.terrain_dist;
         track = std::move(next);
         scene.reset();
         track->frame_route(cam);
+    };
+    try {
+        std::error_code ec;
+        const bool same = opt.track && std::filesystem::equivalent(dir, opt.track, ec);
+        track.reset();
+        open(dir, same && opt.out ? opt.out : "");
         ui.show_message("");
     } catch (const std::exception& e) {
-        ui.show_message("não abriu " + dir + ": " + e.what());
-        std::fprintf(stderr, "viewer3d: não abriu %s: %s\n", dir.c_str(), e.what());
+        const std::string why = "não abriu " + dir + ": " + e.what();
+        std::fprintf(stderr, "viewer3d: %s\n", why.c_str());
+        if (!old_dir.empty()) {
+            try {
+                open(old_dir, old_out);
+            } catch (const std::exception& e2) {
+                std::fprintf(stderr, "viewer3d: nem a anterior reabriu: %s\n", e2.what());
+            }
+        }
+        if (!track && !scene) scene = std::make_unique<TestScene>(cam.target);
+        ui.show_message(why);
     }
 }
 
@@ -411,6 +445,7 @@ int run(const Options& opt) {
     std::unique_ptr<dr2::app::TrackView> track;
     if (opt.track) {
         track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh);
+        track->terrain_dist() = opt.terrain_dist;
         track->frame_route(cam);
     } else {
         scene = std::make_unique<TestScene>(cam.target);
@@ -447,6 +482,7 @@ int run(const Options& opt) {
         last_t = frame_t;
         walk_keys(cam, dt, input, ui);
 
+        if (track && opt.autosave > 0) track->autosave_tick(opt.autosave);
         // painéis primeiro: dizem quanto sobra para o 3D
         vp = ui.frame(track.get(), cam, fps);
         if (ui.quit_request) running = false;

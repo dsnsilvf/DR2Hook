@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <unordered_map>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -97,6 +98,10 @@ void apply_edits(const json::Value& doc, const Track& track, const Route& route,
     const json::Value* list = doc.find("edits");
     if (!list || !list->is_array()) throw std::runtime_error("edits.json sem a lista \"edits\"");
     const json::Value& edits = *list;
+    // (idnum, tipo) -> instância original, montado uma vez: retomar 50 mil edições não é quadrático
+    std::unordered_map<std::uint64_t, std::size_t> by_id;
+    for (std::size_t i = 0; i < inst.n; ++i)
+        if (inst.idnum[i] < kAdded) by_id.emplace((std::uint64_t{inst.idnum[i]} << 16) | inst.type[i], i);
     for (std::size_t n = 0; n < edits.size(); ++n) {
         const json::Value& e = edits[n];
         const json::Value* r = e.find("route");
@@ -121,8 +126,10 @@ void apply_edits(const json::Value& doc, const Track& track, const Route& route,
         }
         const auto id = static_cast<std::uint32_t>(key);
         std::size_t found = inst.n;
-        for (std::size_t i = 0; i < inst.n && found == inst.n; ++i)
-            if (inst.idnum[i] == id && track.types.at(inst.type[i]).name == name) found = i;
+        for (std::size_t t = 0; t < track.types.size() && found == inst.n; ++t) {
+            if (track.types[t].name != name) continue;
+            if (auto it = by_id.find((std::uint64_t{id} << 16) | t); it != by_id.end()) found = it->second;
+        }
         if (found == inst.n) {
             report.skipped.push_back(where + ": " + name + " #" + std::to_string(id) + " não existe nesta exportação");
             continue;

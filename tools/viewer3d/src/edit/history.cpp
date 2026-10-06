@@ -40,7 +40,10 @@ bool History::commit(std::string label, std::vector<Snap> before, std::vector<Sn
     if (same(before, after)) return false;
     entries_.resize(pos_);
     entries_.push_back({std::move(label), std::move(before), std::move(after)});
-    if (entries_.size() > kMax) entries_.erase(entries_.begin());
+    if (entries_.size() > kMax) {
+        entries_.erase(entries_.begin());
+        ++dropped_;
+    }
     pos_ = entries_.size();
     return true;
 }

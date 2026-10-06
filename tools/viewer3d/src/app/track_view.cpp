@@ -13,6 +13,9 @@
 #include <filesystem>
 #include <stdexcept>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #ifdef _WIN32
 #include <io.h>
 #define access _access
@@ -55,15 +58,31 @@ TrackView::TrackView(const std::string& dir, std::string out, bool resume)
     if (std::filesystem::is_directory(out_)) throw std::runtime_error("--out " + out_ + " é uma pasta; passe o caminho do arquivo .json");
 
     const auto t0 = std::chrono::steady_clock::now();
-    library_ = read_dr2m(read_file(join_path(dir, "objects.bin")));
-    objects_ = std::make_unique<render::InstanceRenderer>(track_, library_, Instances{});
+    std::size_t library_meshes = 0;
+    {
+        // as malhas dos objetos só servem para o envio à GPU (a caixa de cada tipo fica no InstanceRenderer)
+        const std::vector<Mesh> library = read_dr2m(read_file(join_path(dir, "objects.bin")));
+        library_meshes = library.size();
+        objects_ = std::make_unique<render::InstanceRenderer>(track_, library, Instances{});
+    }
     glFinish();
     std::size_t with_mesh = 0;
     for (const auto& ty : objects_->types()) with_mesh += !ty.empty;
-    std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha); %.3f s\n", library_.size(),
+    std::fprintf(stderr, "viewer3d: objects.bin %zu malhas, %zu tipos (%zu com malha); %.3f s\n", library_meshes,
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
+    {
+        // uma sessão anterior que caiu deixou um autosave mais novo que o arquivo gravado?
+        std::error_code ec;
+        const auto as = std::filesystem::last_write_time(autosave_path(), ec);
+        if (!ec) {
+            std::error_code ec2;
+            const auto saved = std::filesystem::last_write_time(out_, ec2);
+            if (ec2 || as > saved)
+                set_status("há edições de uma sessão que não gravou em " + autosave_path() + " (abra com --out nele para continuar)");
+        }
+    }
     if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
     if (std::filesystem::exists(out_)) {
         if (resume) resume_edits();
@@ -134,8 +153,13 @@ void TrackView::load_route(std::size_t index) {
     } loaded;
     if (route.terrain_file != terrain_file_) {
         auto t0 = std::chrono::steady_clock::now();
-        const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route.terrain_file));
-        const std::vector<Mesh> meshes = read_dr2m(bytes);
+        std::size_t file_bytes = 0;
+        // o arquivo lido sai da memória assim que vira malhas (não fica junto no pico da carga)
+        const std::vector<Mesh> meshes = [&] {
+            const std::vector<std::uint8_t> bytes = read_file(join_path(dir_, route.terrain_file));
+            file_bytes = bytes.size();
+            return read_dr2m(bytes);
+        }();
         const double read_s = seconds_since(t0);
         const MeshTotals tot = totals(meshes);
         if (tot.verts > 5'000'000)
@@ -146,12 +170,15 @@ void TrackView::load_route(std::size_t index) {
         glFinish();
         const double upload_s = seconds_since(t0);
         next_terrain = std::move(terrain);
-        loaded = Loaded{read_s, upload_s, bytes.size(), tot};
+        loaded = Loaded{read_s, upload_s, file_bytes, tot};
     }
     // tudo que pode falhar já foi feito: daqui para baixo só troca o estado
     auto lines = std::make_unique<render::RouteLines>(route);
     if (next_terrain) {
         terrain_ = std::move(next_terrain);
+#ifdef __GLIBC__
+        malloc_trim(0);  // os vetores da leitura (centenas de MB numa pista grande) voltam ao sistema
+#endif
         terrain_file_ = route.terrain_file;
         const MeshTotals& tot = loaded.tot;
         // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
@@ -214,7 +241,13 @@ void TrackView::open_route(std::size_t next) {
 
 void TrackView::frame_route(render::OrbitCamera& cam) const {
     Vec3 lo, hi;
-    if (!route_bounds(track_, lo, hi)) return;
+    if (!route_bounds(track_, lo, hi)) {
+        // rota sem portões nem linha da IA: enquadra o terreno
+        glm::vec3 tl, th;
+        if (!terrain_ || !terrain_->bounds(tl, th)) return;
+        lo = {tl.x, tl.y, tl.z};
+        hi = {th.x, th.y, th.z};
+    }
     cam.target = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
     cam.dist = std::max(60.0f, std::hypot(hi[0] - lo[0], hi[2] - lo[2]) * 0.9f);
     cam.yaw = 0.8f;
@@ -263,7 +296,7 @@ void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam)
     objects_->cull(inst_, cam.target, cam.dist, draw_dist_, layers_, edit_rev_);
     shader_.use();
     shader_.set_view_proj(view_proj);
-    if (show_terrain_) terrain_->draw(shader_, &textures_);
+    if (show_terrain_) terrain_->draw(shader_, &textures_, view_proj, cam.eye(), terrain_dist_);
     objects_->draw(shader_, textures_);
     if (sel_ >= 0 && !inst_.hidden[static_cast<std::size_t>(sel_)])
         objects_->draw_one(shader_, textures_, inst_, static_cast<std::size_t>(sel_), 1.0f);
@@ -460,6 +493,8 @@ bool TrackView::save() {
         edit::write_text(out_, text);
         saved_text_ = text;
         ++saves_;
+        std::error_code ec;
+        std::filesystem::remove(autosave_path(), ec);  // o arquivo de verdade está em dia
         set_status("gravado " + out_ + " (" + std::to_string(count) + " edições)" + (bak.empty() ? "" : "; anterior em " + bak));
         std::printf("gravado %s (%zu edições)%s%s\n", out_.c_str(), count, bak.empty() ? "" : "; anterior copiado para ",
                     bak.c_str());
@@ -481,6 +516,8 @@ std::string TrackView::current_edits() const {
 }
 
 bool TrackView::unsaved() const {
+    // durante um arraste já há mudança; refazer o edits.json a cada movimento custa caro com milhares de edições
+    if (drag_.active) return true;
     // os painéis perguntam a cada quadro: só recalcula quando algo mudou
     if (unsaved_rev_ != edit_rev_ || unsaved_saves_ != saves_) {
         try {
@@ -501,6 +538,18 @@ void TrackView::set_status(std::string msg) {
 }
 
 double TrackView::status_age() const { return seconds_since(status_time_); }
+
+void TrackView::autosave_tick(double period) {
+    if (seconds_since(autosave_t_) < period) return;
+    autosave_t_ = std::chrono::steady_clock::now();
+    if (drag_.active || !unsaved()) return;
+    try {
+        edit::write_text(autosave_path(), current_edits());
+        std::fprintf(stderr, "viewer3d: autosave em %s\n", autosave_path().c_str());
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "viewer3d: autosave falhou: %s\n", e.what());
+    }
+}
 
 void TrackView::after_history() {
     ++edit_rev_;

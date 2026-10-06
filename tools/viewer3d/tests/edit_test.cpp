@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <cstring>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <fstream>
@@ -307,6 +308,28 @@ void test_apply_edits() {
     check(threw, "edits.json: recusa matriz com inf");
 }
 
+// Histórico cheio conta o que saiu; retomar 50 mil edições é linear (R3 P2-3, P2-8).
+void test_big() {
+    Instances inst = make_instances(1);
+    edit::History h;
+    for (int k = 0; k < 310; ++k) edit::turn(inst, h, 0, 1.0f);
+    check(h.size() == edit::History::kMax && h.dropped() == 10, "histórico cheio: conta os passos descartados");
+
+    Track track = make_track();
+    track.types[0].name = "e:barreira";
+    const std::uint32_t n = 50000;
+    Instances big = make_instances(n);
+    for (std::uint32_t i = 0; i < n; ++i) big.matrix(i)[9] += 1.0f;
+    const json::Value doc = json::parse(edit::edits_json(track, track.routes[0], big));
+    Instances fresh = make_instances(n);
+    edit::ApplyReport rep;
+    const auto t0 = std::chrono::steady_clock::now();
+    edit::apply_edits(doc, track, track.routes[0], fresh, rep);
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("edit_test: retomar %u edições em %.3f s\n", n, s);
+    check(rep.applied == n && s < 2.0, "retomar 50 mil edições em menos de 2 s");
+}
+
 }  // namespace
 
 int main() {
@@ -318,6 +341,7 @@ int main() {
     test_full_turn();
     test_write_backup();
     test_apply_edits();
+    test_big();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;
 }

@@ -35,11 +35,14 @@ public:
 
     std::size_t size() const { return entries_.size(); }
     std::size_t pos() const { return pos_; }
+    // Passos que saíram pelo começo (histórico cheio): desfazer tudo não volta mais ao arquivo.
+    std::size_t dropped() const { return dropped_; }
     const std::vector<Entry>& entries() const { return entries_; }
 
 private:
     std::vector<Entry> entries_;
     std::size_t pos_ = 0;
+    std::size_t dropped_ = 0;
 };
 
 // Gira as três linhas de `base` em torno de Y por `th` radianos e grava em `m` (a posição não muda),

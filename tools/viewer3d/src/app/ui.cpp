@@ -110,15 +110,33 @@ EditorUi::~EditorUi() {
 }
 
 bool EditorUi::event(const SDL_Event& e) {
-    ImGui_ImplSDL3_ProcessEvent(&e);
     const ImGuiIO& io = ImGui::GetIO();
+    // teclas de atalho (sem campo ativo, sem menu ou janela aberta) não vão ao ImGui: a fila dele
+    // trata uma tecla por quadro, e com poucos fps centenas de teclas atrasam o menu por dezenas de
+    // segundos. Modificadores vão sempre (Ctrl+clique para digitar), e a soltura de uma tecla que o
+    // ImGui recebeu também.
+    const bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool ui_keys = io.WantCaptureKeyboard || io.WantTextInput || popup;
+    if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
+        const SDL_Scancode sc = e.key.scancode;
+        const bool modifier = (e.key.key == SDLK_LCTRL || e.key.key == SDLK_RCTRL || e.key.key == SDLK_LSHIFT ||
+                               e.key.key == SDLK_RSHIFT || e.key.key == SDLK_LALT || e.key.key == SDLK_RALT);
+        bool forward = modifier;
+        if (e.type == SDL_EVENT_KEY_DOWN) forward = forward || ui_keys;
+        else forward = forward || imgui_keys_[sc];
+        if (sc < SDL_SCANCODE_COUNT) imgui_keys_[sc] = e.type == SDL_EVENT_KEY_DOWN && forward;
+        if (forward) ImGui_ImplSDL3_ProcessEvent(&e);
+        return e.type == SDL_EVENT_KEY_DOWN && ui_keys;
+    }
+    if (e.type == SDL_EVENT_TEXT_INPUT) {
+        if (io.WantTextInput) ImGui_ImplSDL3_ProcessEvent(&e);
+        return io.WantCaptureKeyboard;
+    }
+    ImGui_ImplSDL3_ProcessEvent(&e);
     switch (e.type) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_WHEEL:
         return io.WantCaptureMouse;
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_TEXT_INPUT:
-        return io.WantCaptureKeyboard;
     default:
         return false;
     }
@@ -331,6 +349,12 @@ void EditorUi::toolbar(TrackView& track) {
     ImGui::SetNextItemWidth(160);
     ImGui::SliderFloat("Distância", &track.draw_dist(), 100.0f, 4000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic);
     tooltip("Raio de desenho dos objetos e árvores ([ e ])");
+    ImGui::SameLine(0, 18);
+    ImGui::SetNextItemWidth(150);
+    float km = track.terrain_dist() / 1000.0f;
+    if (ImGui::SliderFloat("Terreno", &km, 0.0f, 20.0f, km <= 0.0f ? "sem limite" : "%.1f km"))
+        track.terrain_dist() = km < 0.25f ? 0.0f : km * 1000.0f;
+    tooltip("Raio do terreno a partir da câmera. Em pistas grandes, um raio menor desenha menos (o horizonte some)");
 }
 
 void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect&) {
@@ -376,10 +400,11 @@ void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect
                 if (ty.layer != row.layer || ty.group.empty() || !contains_ci(ty.name, filter_)) continue;
                 const bool sel_type = sel >= 0 && inst.type[static_cast<std::size_t>(sel)] == t;
                 if (sel_type && scroll_to_sel_) ImGui::SetNextItemOpen(true);
-                std::snprintf(label, sizeof label, "%s  (%zu)%s###t%zu", short_name(ty.name).c_str(), ty.group.size(),
-                              ty.empty ? "  sem malha" : "", t);
+                // std::string: um nome longo não pode cortar o "###t<n>" (ids iguais abririam juntos)
+                const std::string type_label = short_name(ty.name) + "  (" + std::to_string(ty.group.size()) + ")" +
+                                               (ty.empty ? "  sem malha" : "") + "###t" + std::to_string(t);
                 if (sel_type) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
-                const bool open = ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_SpanAvailWidth);
+                const bool open = ImGui::TreeNodeEx(type_label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
                 if (sel_type) ImGui::PopStyleColor();
                 if (!open) continue;
                 std::size_t sel_pos = ty.group.size();
@@ -427,7 +452,11 @@ void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect
         const edit::History& h = track.history();
         ImGui::SeparatorText(("Histórico " + std::to_string(h.pos()) + "/" + std::to_string(h.size())).c_str());
         ImGui::BeginChild("##historico");
-        if (ImGui::Selectable("(arquivo aberto)", h.pos() == 0)) track.history_go(0);
+        // com o histórico cheio, os passos mais antigos saíram: o início da lista não é mais o arquivo
+        const std::string first = h.dropped() ? "(início: " + std::to_string(h.dropped()) + " passos mais antigos descartados)"
+                                              : "(arquivo aberto)";
+        if (ImGui::Selectable(first.c_str(), h.pos() == 0)) track.history_go(0);
+        if (h.dropped()) tooltip("Desfazer tudo não volta mais ao arquivo; R restaura um objeto à matriz do arquivo");
         for (std::size_t k = 0; k < h.entries().size(); ++k) {
             const auto& e = h.entries()[k];
             const bool future = k >= h.pos();

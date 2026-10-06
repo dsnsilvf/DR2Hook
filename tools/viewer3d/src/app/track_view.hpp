@@ -58,6 +58,10 @@ public:
     // Última mensagem para o usuário (gravou, falhou, não abriu a rota).
     const std::string& status() const { return status_; }
     double status_age() const;  // segundos desde a última mensagem
+    // A cada quadro: grava <out>.autosave.json se há edições não gravadas há mais de `period` segundos
+    // (um crash ou um kill não perde a sessão). O Ctrl+S apaga o autosave.
+    void autosave_tick(double period = 60.0);
+    std::string autosave_path() const { return out_ + ".autosave.json"; }
     void set_status(std::string msg);
     Tool tool() const { return tool_; }
     const Instances& instances() const { return inst_; }
@@ -100,6 +104,8 @@ public:
     bool& show_gates() { return show_gates_; }
     bool& show_ai() { return show_ai_; }
     float& draw_dist() { return draw_dist_; }
+    // Raio do terreno em metros a partir do olho (0 = sem limite, o padrão).
+    float& terrain_dist() { return terrain_dist_; }
     const render::InstanceRenderer& objects() const { return *objects_; }
     const render::Terrain& terrain() const { return *terrain_; }
     render::TextureCache& textures() { return textures_; }
@@ -118,7 +124,6 @@ private:
     const Route* route_ = nullptr;
     std::size_t route_index_ = 0;
     std::string terrain_file_;
-    std::vector<Mesh> library_;
     render::TrackShader shader_;
     std::unique_ptr<render::Terrain> terrain_;
     std::unique_ptr<render::RouteLines> lines_;
@@ -127,6 +132,7 @@ private:
     std::unique_ptr<render::InstanceRenderer> objects_;
     render::Layers layers_;
     float draw_dist_ = 700.0f;
+    float terrain_dist_ = 0.0f;
     unsigned edit_rev_ = 0;
     std::string out_;
     Tool tool_ = Tool::Navigate;
@@ -137,7 +143,8 @@ private:
     void resume_edits();
     static bool can_write(const std::string& path);
     std::string saved_text_;  // edits.json da última gravação (ou sem edições), para saber se há o que gravar
-    bool backed_up_ = false;  // a cópia .bak do arquivo anterior já foi feita nesta sessão
+    bool backed_up_ = false;
+    std::chrono::steady_clock::time_point autosave_t_ = std::chrono::steady_clock::now();  // a cópia .bak do arquivo anterior já foi feita nesta sessão
     unsigned saves_ = 0;
     mutable bool unsaved_ = false;
     mutable unsigned unsaved_rev_ = ~0u, unsaved_saves_ = ~0u;

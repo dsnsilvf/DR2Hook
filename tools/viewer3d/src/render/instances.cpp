@@ -119,9 +119,9 @@ bool InstanceRenderer::passes(const Instances& inst, std::size_t i, const glm::v
 void InstanceRenderer::cull(const Instances& inst, const glm::vec3& target, float cam_dist, float draw_dist,
                             const Layers& layers, unsigned edit_rev) {
     char key[160];
-    std::snprintf(key, sizeof key, "%ld,%ld,%ld,%ld,%g,%d%d%d,%u", std::lround(target.x / 8), std::lround(target.y / 8),
-                  std::lround(target.z / 8), std::lround(cam_dist / 8), static_cast<double>(draw_dist), layers.obj, layers.tree,
-                  layers.dist, edit_rev);
+    (void)cam_dist;  // o corte é pelo alvo; o zoom não muda o que passa
+    std::snprintf(key, sizeof key, "%ld,%ld,%ld,%g,%d%d%d,%u", std::lround(target.x / 8), std::lround(target.y / 8),
+                  std::lround(target.z / 8), static_cast<double>(draw_dist), layers.obj, layers.tree, layers.dist, edit_rev);
     if (key_ == key) return;
     key_ = key;
     visible_ = 0;
