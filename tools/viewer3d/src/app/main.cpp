@@ -44,6 +44,7 @@ struct Options {
     float terrain_dist = 0.0f;
     float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
     dr2::render::TextureCache::Options tex;
+    const char* hide = nullptr;         // camadas escondidas, separadas por vírgula: terrain, obj, tree, dist
     const char* touch_test = nullptr;   // "IDX,dx,dy,dz[,commit]": desloca a instância em 8 quadros só pelo reenvio parcial (ou, com commit, fecha o passo e força o corte completo)
     const char* settle_list = nullptr;  // arquivo com índices de instância: assenta todas antes de seguir (teste do reenvio parcial)
     bool settle_redo = false;           // depois de assentar, desfaz e refaz tudo (reenvio completo): a imagem tem de ser a mesma
@@ -109,6 +110,8 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.tex.threads = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--probe-rays") == 0 && i + 1 < argc) {
             opt.probe_rays = argv[++i];
+        } else if (std::strcmp(argv[i], "--hide") == 0 && i + 1 < argc) {
+            opt.hide = argv[++i];
         } else if (std::strcmp(argv[i], "--touch-test") == 0 && i + 1 < argc) {
             opt.touch_test = argv[++i];
         } else if (std::strcmp(argv[i], "--settle-list") == 0 && i + 1 < argc) {
@@ -132,7 +135,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--probe-rays arq] [--ground-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist] [--probe-rays arq] [--ground-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -483,6 +486,13 @@ int run(const Options& opt) {
     if (opt.track) {
         track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh, opt.tex);
         track->terrain_dist() = opt.terrain_dist;
+        if (opt.hide) {
+            const std::string h = std::string(",") + opt.hide + ",";
+            if (h.find(",terrain,") != std::string::npos) track->show_terrain() = false;
+            if (h.find(",obj,") != std::string::npos) track->layers().obj = false;
+            if (h.find(",tree,") != std::string::npos) track->layers().tree = false;
+            if (h.find(",dist,") != std::string::npos) track->layers().dist = false;
+        }
         track->frame_route(cam);
     } else {
         scene = std::make_unique<TestScene>(cam.target);

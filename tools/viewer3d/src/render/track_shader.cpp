@@ -40,18 +40,22 @@ uniform sampler2D uTex;
 uniform int uHasTex;
 uniform int uCut;
 uniform int uVCol;
+uniform int uBlend;
 out vec4 oColor;
 void main() {
     if (uLine == 1) { oColor = vec4(uColor, 1.0); return; }
     vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
     float light = abs(dot(n, normalize(vec3(0.35, 0.85, 0.4)))) * 0.7 + 0.3;
     vec3 base = uVCol == 1 ? vCol.rgb : uColor;
+    float alpha = 1.0;
     if (uHasTex == 1) {
         vec4 tx = texture(uTex, vUv);
         if (uCut == 1 && tx.a < 0.4) discard;
         base = tx.rgb;
+        if (uBlend == 1) alpha = tx.a;
+        if (uBlend == 2) { oColor = vec4(tx.rgb, 1.0); return; }
     }
-    oColor = vec4(mix(base * light, vec3(1.0, 0.6, 0.15), uHi * 0.55), 1.0);
+    oColor = vec4(mix(base * light, vec3(1.0, 0.6, 0.15), uHi * 0.55), alpha);
 }
 )glsl";
 
@@ -66,7 +70,8 @@ TrackShader::TrackShader()
       tex_(program_.uniform("uTex")),
       has_tex_(program_.uniform("uHasTex")),
       cut_(program_.uniform("uCut")),
-      vcol_(program_.uniform("uVCol")) {
+      vcol_(program_.uniform("uVCol")),
+      blend_(program_.uniform("uBlend")) {
     program_.use();
     glUniform1i(tex_, 0);
     glUniform1f(hi_, 0.0f);
@@ -74,6 +79,7 @@ TrackShader::TrackShader()
     glUniform1i(has_tex_, 0);
     glUniform1i(cut_, 0);
     glUniform1i(vcol_, 0);
+    glUniform1i(blend_, 0);
 }
 
 void TrackShader::set_view_proj(const glm::mat4& vp) const { glUniformMatrix4fv(vp_, 1, GL_FALSE, glm::value_ptr(vp)); }
@@ -85,6 +91,7 @@ void TrackShader::set_texture(bool has, bool cut) const {
     glUniform1i(cut_, cut ? 1 : 0);
 }
 void TrackShader::set_vertex_color(bool on) const { glUniform1i(vcol_, on ? 1 : 0); }
+void TrackShader::set_blend(int mode) const { glUniform1i(blend_, mode); }
 
 void TrackShader::constant_rows(const float* m) {
     glVertexAttrib3f(kRowX, m[0], m[1], m[2]);

@@ -30,6 +30,7 @@ TextureCache::Image& TextureCache::Image::operator=(Image&& o) noexcept {
         w = o.w;
         h = o.h;
         scaled = o.scaled;
+        translucent = o.translucent;
         rgba = o.rgba;
         o.rgba = nullptr;
     }
@@ -134,6 +135,14 @@ void TextureCache::worker() {
             }
             if (!rgba) throw std::runtime_error("WebP inválido");
             done.image.rgba = rgba;
+            if (cfg.input.has_alpha) {
+                // Transparência de verdade = pelo menos 2 % dos pixels quase invisíveis (alfa < 16). O alfa das
+                // outras texturas do terreno (asfalto, bordas, grama) é mapa de brilho: média ~200, mínimo ~100.
+                const std::size_t px = static_cast<std::size_t>(tw) * static_cast<std::size_t>(th);
+                std::size_t clear = 0;
+                for (std::size_t k = 0; k < px; ++k) clear += rgba[4 * k + 3] < 16;
+                done.image.translucent = clear * 50 > px;
+            }
             done.image.w = tw;
             done.image.h = th;
             done.ok = true;
@@ -167,6 +176,7 @@ void TextureCache::upload(std::size_t index, Image& image) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     if (aniso_ > 1.0f) glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso_);
     e.id = id;
+    e.translucent = image.translucent;
     e.state = State::Loaded;
     e.gpu_bytes = with_mips(image.w, image.h);
     gpu_bytes_ += e.gpu_bytes;
@@ -176,8 +186,8 @@ void TextureCache::upload(std::size_t index, Image& image) {
     ++created_;
     if (log) {
         glFinish();
-        std::fprintf(stderr, "viewer3d: [tex] quadro %llu: %s %dx%d%s envio %.1f ms\n", static_cast<unsigned long long>(frame_), e.file.c_str(),
-                     image.w, image.h, image.scaled ? " (reduzida)" : "", seconds_since(t0) * 1000.0);
+        std::fprintf(stderr, "viewer3d: [tex] quadro %llu: %s %dx%d%s%s envio %.1f ms\n", static_cast<unsigned long long>(frame_), e.file.c_str(),
+                     image.w, image.h, image.scaled ? " (reduzida)" : "", image.translucent ? " (translúcida)" : "", seconds_since(t0) * 1000.0);
     }
 }
 

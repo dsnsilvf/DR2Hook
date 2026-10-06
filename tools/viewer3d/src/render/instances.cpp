@@ -58,7 +58,8 @@ InstanceRenderer::InstanceRenderer(const Track& track, const std::vector<Mesh>& 
         for (std::size_t k = info.first; k < info.first + info.count && k < objects.size(); ++k) {
             const Mesh& m = objects[k];
             if (m.idx.empty()) continue;
-            ty.parts.push_back({first[k], static_cast<GLsizei>(m.idx.size()), m.material, material_color(m.material, base)});
+            ty.parts.push_back({first[k], static_cast<GLsizei>(m.idx.size()), m.material, material_color(m.material, base), -2,
+                                m.material.find("ground_ao") != std::string::npos});
             for (std::uint32_t i = 0; i < m.verts; ++i) {
                 const glm::vec3 p(m.pos[3 * i], m.pos[3 * i + 1], m.pos[3 * i + 2]);
                 ty.lo = glm::min(ty.lo, p);
@@ -187,8 +188,9 @@ void InstanceRenderer::touch(const Instances& inst, std::uint32_t i) {
     }
 }
 
-void InstanceRenderer::draw_parts(const TrackShader& shader, TextureCache& textures, const Type& ty, GLsizei count) const {
+void InstanceRenderer::draw_parts(const TrackShader& shader, TextureCache& textures, const Type& ty, GLsizei count, bool ao) const {
     for (const Part& p : ty.parts) {
+        if (p.ao != ao) continue;
         if (p.tex_handle == -2) p.tex_handle = textures.handle(p.material);
         const GLuint tex = textures.use(p.tex_handle);
         const bool cut = p.material.empty() || p.material[0] != 'g';
@@ -210,7 +212,34 @@ void InstanceRenderer::draw(const TrackShader& shader, TextureCache& textures) c
     for (std::size_t t = 0; t < types_.size(); ++t) {
         if (!types_[t].visible) continue;
         vaos_[t].bind();
-        draw_parts(shader, textures, types_[t], types_[t].visible);
+        draw_parts(shader, textures, types_[t], types_[t].visible, false);
+    }
+    // Oclusão ambiente do chão por último: o jogo a multiplica sobre o terreno (branco = sem sombra). Desenhada
+    // opaca ela vira um quadrado branco embaixo de cada carro e prédio. Sem escrever profundidade e com
+    // deslocamento de polígono, porque fica no mesmo plano do terreno.
+    bool any_ao = false;
+    for (std::size_t t = 0; t < types_.size(); ++t) {
+        if (!types_[t].visible) continue;
+        bool has = false;
+        for (const Part& p : types_[t].parts) has |= p.ao;
+        if (!has) continue;
+        if (!any_ao) {
+            any_ao = true;
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_DST_COLOR, GL_ZERO);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.0f, -2.0f);
+            shader.set_blend(2);
+        }
+        vaos_[t].bind();
+        draw_parts(shader, textures, types_[t], types_[t].visible, true);
+    }
+    if (any_ao) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        shader.set_blend(0);
     }
     glBindVertexArray(0);
 }
@@ -225,7 +254,8 @@ void InstanceRenderer::draw_one(const TrackShader& shader, TextureCache& texture
     shader.set_vertex_color(false);
     // o realce redesenha o objeto na mesma profundidade: com GL_LESS ele perderia para o próprio objeto
     glDepthFunc(GL_LEQUAL);
-    draw_parts(shader, textures, ty, 0);
+    draw_parts(shader, textures, ty, 0, false);
+    draw_parts(shader, textures, ty, 0, true);
     glDepthFunc(GL_LESS);
     shader.set_highlight(0.0f);
     TrackShader::identity_rows();

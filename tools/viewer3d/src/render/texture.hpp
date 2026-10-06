@@ -41,6 +41,9 @@ public:
 
     // Índice estável do arquivo do material; -1 se o material não tem arquivo. Barato depois da 1ª vez.
     int handle(const std::string& material);
+    // A textura tem transparência de verdade (2 % dos pixels com alfa < 16: decalques)? Só se sabe depois da
+    // primeira decodificação e vale daí em diante (mesmo se ela sair da GPU); false até lá.
+    bool translucent(int h) const { return h >= 0 && entries_[static_cast<std::size_t>(h)].translucent; }
     // Textura GL pronta; 0 se ainda não chegou, se o arquivo falhou ou se `h` é -1. Marca como usada neste
     // quadro e, se ninguém pediu ainda, pede a carga às threads.
     GLuint use(int h);
@@ -69,6 +72,7 @@ private:
     struct Entry {
         std::string file;
         State state = State::Idle;
+        bool translucent = false;
         GLuint id = 0;
         std::size_t gpu_bytes = 0;
         std::uint64_t last_used = 0;
@@ -77,6 +81,7 @@ private:
     struct Image {
         int w = 0, h = 0;
         bool scaled = false;
+        bool translucent = false;
         std::uint8_t* rgba = nullptr;
         Image() = default;
         Image(const Image&) = delete;

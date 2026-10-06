@@ -37,6 +37,7 @@ public:
         std::string material;
         glm::vec3 color{};
         mutable int tex_handle = -2;  // TextureCache::handle, resolvido no primeiro desenho (-2 = ainda não)
+        bool ao = false;              // o|ground_ao*: oclusão ambiente do chão, multiplicada sobre o que já está no quadro
     };
     struct Type {
         std::string name;
@@ -87,7 +88,8 @@ public:
     std::size_t visible() const { return visible_; }
 
 private:
-    void draw_parts(const TrackShader& shader, TextureCache& textures, const Type& ty, GLsizei count) const;
+    // ao: só as partes de oclusão ambiente (true) ou só as outras (false)
+    void draw_parts(const TrackShader& shader, TextureCache& textures, const Type& ty, GLsizei count, bool ao) const;
 
     struct CullKey {
         long x = 0, y = 0, z = 0;

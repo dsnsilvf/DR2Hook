@@ -139,7 +139,7 @@ void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm:
     }
     const auto planes = frustum_planes(view_proj);
     drawn_ = 0;
-    GLuint bound = 0;
+    bool blending = false;
     // partes visíveis em ordem de material; as do mesmo estado (textura, ou cor e cor por vértice)
     // vão num glMultiDrawElements só
     auto flush = [&]() {
@@ -148,45 +148,67 @@ void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm:
         counts_.clear();
         offsets_.clear();
     };
-    std::size_t prev = parts_.size();
-    for (std::size_t k : order_) {
-        const Part& p = parts_[k];
-        if (outside(planes, p.lo, p.hi)) continue;
-        if (max_dist > 0.0f) {
-            const float dx = std::max({p.lo.x - center.x, 0.0f, center.x - p.hi.x});
-            const float dz = std::max({p.lo.z - center.z, 0.0f, center.z - p.hi.z});
-            if (dx * dx + dz * dz > max_dist * max_dist) continue;
-        }
-        ++drawn_;
-        if (textures) {
-            if (handle_[k] == -2) handle_[k] = textures->handle(p.material);
-            tex_[k] = textures->use(handle_[k]);  // 0 enquanto a textura não chegou: cor fixa
-        }
-        const GLuint tex = textures ? tex_[k] : 0;
-        const bool same = prev < parts_.size() && (tex ? tex == bound && tex_[prev] == tex
-                                                       : tex_[prev] == 0 && parts_[prev].material == p.material &&
-                                                             parts_[prev].vertex_color == p.vertex_color);
-        if (!same) {
-            flush();
-            if (tex) {
-                if (tex != bound) {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, tex);
-                    bound = tex;
-                }
-                shader.set_texture(true, false);  // terreno (g|) é opaco: sem descarte por alfa
-                shader.set_vertex_color(false);
-            } else {
-                shader.set_texture(false, false);
-                shader.set_color(p.color);
-                shader.set_vertex_color(p.vertex_color);
+    // Duas passadas. Opaca: o que não tem transparência de verdade. Mistura: as texturas com alfa (decalques,
+    // bordas de transição, rumbles, areia), que o jogo sobrepõe ao asfalto no mesmo plano; mistura por alfa,
+    // sem escrever profundidade e com um pequeno deslocamento para vencer a camada de baixo (sem isso o
+    // teste de profundidade as alterna com ela, o z-fighting, e o fundo transparente aparece como mancha).
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool blend = pass == 1;
+        std::size_t prev = parts_.size();
+        GLuint bound = 0;
+        for (std::size_t k : order_) {
+            const Part& p = parts_[k];
+            if (textures && handle_[k] == -2) handle_[k] = textures->handle(p.material);
+            if ((textures && textures->translucent(handle_[k])) != blend) continue;
+            if (outside(planes, p.lo, p.hi)) continue;
+            if (max_dist > 0.0f) {
+                const float dx = std::max({p.lo.x - center.x, 0.0f, center.x - p.hi.x});
+                const float dz = std::max({p.lo.z - center.z, 0.0f, center.z - p.hi.z});
+                if (dx * dx + dz * dz > max_dist * max_dist) continue;
             }
+            if (blend && !blending) {
+                blending = true;
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDepthMask(GL_FALSE);
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-1.0f, -2.0f);
+                shader.set_blend(1);
+            }
+            ++drawn_;
+            if (textures) tex_[k] = textures->use(handle_[k]);  // 0 enquanto a textura não chegou: cor fixa
+            const GLuint tex = textures ? tex_[k] : 0;
+            const bool same = prev < parts_.size() && (tex ? tex == bound && tex_[prev] == tex
+                                                           : tex_[prev] == 0 && parts_[prev].material == p.material &&
+                                                                 parts_[prev].vertex_color == p.vertex_color);
+            if (!same) {
+                flush();
+                if (tex) {
+                    if (tex != bound) {
+                        glActiveTexture(GL_TEXTURE0);
+                        glBindTexture(GL_TEXTURE_2D, tex);
+                        bound = tex;
+                    }
+                    shader.set_texture(true, false);
+                    shader.set_vertex_color(false);
+                } else {
+                    shader.set_texture(false, false);
+                    shader.set_color(p.color);
+                    shader.set_vertex_color(p.vertex_color);
+                }
+            }
+            counts_.push_back(p.count);
+            offsets_.push_back(reinterpret_cast<const void*>(p.first_index * sizeof(std::uint32_t)));
+            prev = k;
         }
-        counts_.push_back(p.count);
-        offsets_.push_back(reinterpret_cast<const void*>(p.first_index * sizeof(std::uint32_t)));
-        prev = k;
+        flush();
     }
-    flush();
+    if (blending) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        shader.set_blend(0);
+    }
     glBindVertexArray(0);
 }
 
