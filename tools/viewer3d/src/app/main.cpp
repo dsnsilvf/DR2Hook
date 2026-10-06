@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -386,7 +387,9 @@ void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2:
                 std::unique_ptr<TestScene>& scene, dr2::render::OrbitCamera& cam, dr2::app::EditorUi& ui) {
     try {
         // --out só vale para a pista da linha de comando; as outras gravam no caminho padrão
-        auto next = std::make_unique<dr2::app::TrackView>(dir, opt.track && dir == opt.track && opt.out ? opt.out : "");
+        std::error_code ec;
+        const bool same = opt.track && std::filesystem::equivalent(dir, opt.track, ec);
+        auto next = std::make_unique<dr2::app::TrackView>(dir, same && opt.out ? opt.out : "", !opt.fresh);
         track = std::move(next);
         scene.reset();
         track->frame_route(cam);

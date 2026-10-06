@@ -84,7 +84,10 @@ public:
     // Mudança contínua (campos numéricos, gizmo): begin guarda o antes, set_matrix aplica sem
     // histórico, end empilha um passo só. A posição fica na matriz (m[9..11]).
     bool begin_change(std::uint32_t i);
-    void set_matrix(const float* m);
+    // Aplica em `i`, que tem de ser a do begin_change; valores não finitos ou acima de 1e6 são ignorados.
+    void set_matrix(std::uint32_t i, const float* m);
+    // Fecha uma mudança numérica aberta (passo no histórico); seleção nova, clique e arraste chamam.
+    void close_change();
     void end_change(const char* label);
     bool changing() const { return drag_.active; }
 

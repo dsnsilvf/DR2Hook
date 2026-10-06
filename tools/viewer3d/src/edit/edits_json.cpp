@@ -19,6 +19,7 @@ std::string floats(const float* v) {
     std::string out = "[";
     char buf[32];
     for (std::size_t k = 0; k < kInstFloats; ++k) {
+        if (!std::isfinite(v[k])) throw std::runtime_error("matriz com valor não finito: o edits.json ficaria inválido");
         std::snprintf(buf, sizeof buf, "%.9g", static_cast<double>(v[k]));
         if (k) out += ',';
         out += buf;
@@ -66,7 +67,7 @@ void check_doc(const json::Value& doc, const Track& track) {
 bool read_floats(const json::Value& v, float* out) {
     if (!v.is_array() || v.size() != kInstFloats) return false;
     for (std::size_t k = 0; k < kInstFloats; ++k) {
-        if (!v[k].is_number()) return false;
+        if (!v[k].is_number() || !std::isfinite(v[k].as_number()) || std::fabs(v[k].as_number()) > 1e6) return false;
         out[k] = static_cast<float>(v[k].as_number());
     }
     return true;
@@ -93,7 +94,9 @@ std::vector<std::string> routes_in_edits(const json::Value& doc) {
 
 void apply_edits(const json::Value& doc, const Track& track, const Route& route, Instances& inst, ApplyReport& report) {
     check_doc(doc, track);
-    const json::Value& edits = doc["edits"];
+    const json::Value* list = doc.find("edits");
+    if (!list || !list->is_array()) throw std::runtime_error("edits.json sem a lista \"edits\"");
+    const json::Value& edits = *list;
     for (std::size_t n = 0; n < edits.size(); ++n) {
         const json::Value& e = edits[n];
         const json::Value* r = e.find("route");
@@ -102,7 +105,9 @@ void apply_edits(const json::Value& doc, const Track& track, const Route& route,
         const json::Value* kind = e.find("kind");
         const json::Value* type = e.find("type");
         float m[kInstFloats], m0[kInstFloats];
-        if (!kind || !kind->is_string() || !type || !type->is_string() || !read_floats(e["m"], m) || !read_floats(e["m0"], m0)) {
+        const json::Value* jm = e.find("m");
+        const json::Value* jm0 = e.find("m0");
+        if (!kind || !kind->is_string() || !type || !type->is_string() || !jm || !jm0 || !read_floats(*jm, m) || !read_floats(*jm0, m0)) {
             report.skipped.push_back(where + ": entrada incompleta");
             continue;
         }
@@ -110,7 +115,7 @@ void apply_edits(const json::Value& doc, const Track& track, const Route& route,
         const json::Value* added = e.find("added");
         const bool is_added = added && added->is_bool() && added->as_bool();
         const double key = is_added ? e.number_or("src", -1) : e.number_or("index", -1);
-        if (key < 0 || key >= static_cast<double>(kAdded)) {
+        if (key < 0 || key >= static_cast<double>(kAdded) || key != std::floor(key)) {
             report.skipped.push_back(where + ": índice inválido");
             continue;
         }

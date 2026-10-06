@@ -88,6 +88,8 @@ void TrackView::resume_edits() {
     try {
         const json::Value doc = json::parse_file(out_);
         edit::ApplyReport rep;
+        // aplica em cópias e só troca no fim: um erro no meio não deixa metade retomada
+        std::map<std::size_t, Instances> next;
         for (const std::string& name : edit::routes_in_edits(doc)) {
             std::size_t k = 0;
             while (k < track_.routes.size() && track_.routes[k].name != name) ++k;
@@ -95,13 +97,14 @@ void TrackView::resume_edits() {
                 rep.skipped.push_back(name + ": rota não existe nesta pista");
                 continue;
             }
-            if (k == route_index_) {
-                edit::apply_edits(doc, track_, track_.routes[k], inst_, rep);
-            } else {
-                Instances other = read_dr2i(read_file(join_path(dir_, "inst_" + name + ".bin")), track_.types.size());
-                edit::apply_edits(doc, track_, track_.routes[k], other, rep);
-                saved_[k] = Saved{std::move(other), edit::History{}};
-            }
+            Instances copy = k == route_index_ ? inst_
+                                               : read_dr2i(read_file(join_path(dir_, "inst_" + name + ".bin")), track_.types.size());
+            edit::apply_edits(doc, track_, track_.routes[k], copy, rep);
+            next[k] = std::move(copy);
+        }
+        for (auto& [k, inst] : next) {
+            if (k == route_index_) inst_ = std::move(inst);
+            else saved_[k] = Saved{std::move(inst), edit::History{}};
         }
         objects_->regroup(inst_);
         ++edit_rev_;
@@ -236,9 +239,9 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
         if (sel_ >= 0) frame_selected(cam);
         else frame_route(cam);
         return true;
-    case SDLK_1: tool_ = Tool::Navigate; return true;
-    case SDLK_2: tool_ = Tool::Move; return true;
-    case SDLK_3: tool_ = Tool::Rotate; return true;
+    case SDLK_1: set_tool(Tool::Navigate); return true;
+    case SDLK_2: set_tool(Tool::Move); return true;
+    case SDLK_3: set_tool(Tool::Rotate); return true;
     case SDLK_DELETE: delete_selected(); return true;
     case SDLK_TAB: switch_route((mod & SDL_KMOD_SHIFT) ? -1 : 1); return true;
     case SDLK_R: restore_selected(); return true;
@@ -300,7 +303,13 @@ void TrackView::history_go(std::size_t pos) {
     while (hist_.pos() < pos && redo()) {}
 }
 
+void TrackView::close_change() {
+    // um campo do Inspector ainda aberto fecha o passo dele antes de a seleção mudar
+    if (drag_.active && drag_.numeric) end_change("Editar (campo)");
+}
+
 void TrackView::select(int i) {
+    close_change();
     if (drag_.active) return;
     sel_ = i >= 0 && static_cast<std::uint32_t>(i) < inst_.n ? i : -1;
 }
@@ -339,8 +348,10 @@ bool TrackView::begin_change(std::uint32_t i) {
     return true;
 }
 
-void TrackView::set_matrix(const float* m) {
-    if (!drag_.active) return;
+void TrackView::set_matrix(std::uint32_t i, const float* m) {
+    if (!drag_.active || !drag_.numeric || i != drag_.i) return;  // só na instância do begin_change
+    for (std::size_t k = 0; k < kInstFloats; ++k)
+        if (!std::isfinite(m[k]) || std::fabs(m[k]) > 1e6f) return;  // nada de inf/1e39 no edits.json
     std::copy(m, m + kInstFloats, inst_.matrix(drag_.i));
     ++edit_rev_;
 }
@@ -371,7 +382,8 @@ void TrackView::delete_selected() {
 }
 
 bool TrackView::begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift) {
-    if (tool_ == Tool::Navigate) return false;
+    close_change();
+    if (tool_ == Tool::Navigate || drag_.active) return false;
     const auto ray = render::mouse_ray(cam, x, y, w, h);
     const int hit = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_);
     if (hit < 0) return false;
@@ -425,6 +437,8 @@ void TrackView::end_edit() {
 }
 
 void TrackView::click(float x, float y, float w, float h, const render::OrbitCamera& cam) {
+    close_change();
+    if (drag_.active) return;
     sel_ = render::pick(render::mouse_ray(cam, x, y, w, h), inst_, *objects_, cam.target, draw_dist_, layers_);
 }
 
@@ -469,7 +483,11 @@ std::string TrackView::current_edits() const {
 bool TrackView::unsaved() const {
     // os painéis perguntam a cada quadro: só recalcula quando algo mudou
     if (unsaved_rev_ != edit_rev_ || unsaved_saves_ != saves_) {
-        unsaved_ = current_edits() != saved_text_;
+        try {
+            unsaved_ = current_edits() != saved_text_;
+        } catch (const std::exception&) {
+            unsaved_ = true;  // matriz inválida: o Ctrl+S vai dizer por quê
+        }
         unsaved_rev_ = edit_rev_;
         unsaved_saves_ = saves_;
     }

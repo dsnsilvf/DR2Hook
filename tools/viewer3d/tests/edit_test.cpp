@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <sstream>
 
@@ -284,6 +285,26 @@ void test_apply_edits() {
         threw = true;
     }
     check(threw, "retomar: recusa edits.json de outra pista");
+
+    // entrada sem "m", valor enorme, índice fracionário: ficam de fora sem lançar (R2-teste P2-1, P2-2)
+    const json::Value bad = json::parse(R"({"format":"dr2-track-edits","version":1,"track":"pista_teste","edits":[
+        {"route":"route_0","kind":"e","type":"barreira","index":100,"deleted":true,"m0":[1,0,0,0,1,0,0,0,1,0,1430.25,-430.125]},
+        {"route":"route_0","kind":"e","type":"barreira","index":100,"deleted":false,"m":[1e39,0,0,0,1,0,0,0,1,0,0,0],"m0":[1,0,0,0,1,0,0,0,1,0,1430.25,-430.125]},
+        {"route":"route_0","kind":"e","type":"barreira","index":100.5,"deleted":true,"m":[1,0,0,0,1,0,0,0,1,0,1430.25,-430.125],"m0":[1,0,0,0,1,0,0,0,1,0,1430.25,-430.125]}]})");
+    Instances b = make_instances(6);
+    edit::ApplyReport rep3;
+    edit::apply_edits(bad, track, track.routes[0], b, rep3);
+    check(rep3.applied == 0 && rep3.skipped.size() == 3 && b.hidden[0] == 0, "retomar: entradas ruins ficam de fora");
+
+    Instances inf = make_instances(1);
+    inf.matrix(0)[9] = std::numeric_limits<float>::infinity();
+    threw = false;
+    try {
+        edit::edits_json(track, track.routes[0], inf);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    check(threw, "edits.json: recusa matriz com inf");
 }
 
 }  // namespace

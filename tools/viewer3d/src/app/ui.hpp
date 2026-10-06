@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -52,7 +53,10 @@ public:
     bool ask_quit(TrackView* track);
     // Pede para abrir outra pista (com confirmação se houver edições não gravadas).
     void ask_open(TrackView* track, const std::string& dir);
-    void show_message(std::string msg) { message_ = std::move(msg); }
+    void show_message(std::string msg) {
+        message_ = std::move(msg);
+        message_time_ = std::chrono::steady_clock::now();
+    }
     bool panels = true;  // barra de ferramentas, Cena e Inspector (F10; o menu e o status ficam)
     void toggle_help() { show_help_ = !show_help_; }
 
@@ -90,6 +94,9 @@ private:
     bool scroll_to_sel_ = false;
     int last_sel_ = -1;
     std::string message_;
+    std::chrono::steady_clock::time_point message_time_{};
+    double message_age() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - message_time_).count(); }
+    std::size_t last_hist_size_ = 0;
     std::vector<std::string> tracks_;  // pastas em build/uiview/tracks
     bool tracks_scanned_ = false;
 };

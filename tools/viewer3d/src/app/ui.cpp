@@ -179,8 +179,8 @@ Rect EditorUi::frame(TrackView* track, render::OrbitCamera& cam, float fps) {
     if (track && panels) {
         const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
-        left_w_ = std::clamp(left_w_, 160.0f, W * 0.45f);
-        right_w_ = std::clamp(right_w_, 200.0f, W * 0.45f);
+        left_w_ = std::clamp(left_w_, std::min(160.0f, W * 0.45f), std::max(160.0f, W * 0.45f));
+        right_w_ = std::clamp(right_w_, std::min(200.0f, W * 0.45f), std::max(200.0f, W * 0.45f));
         ImGui::SetNextWindowPos(ImVec2(0, top));
         ImGui::SetNextWindowSize(ImVec2(left_w_, side_h));
         if (ImGui::Begin("Cena", nullptr, flags)) scene_tree(*track, cam, left);
@@ -210,7 +210,8 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
             if (!tracks_scanned_) scan_tracks();
             if (tracks_.empty()) ImGui::TextDisabled("nada em build/uiview/tracks");
             for (const std::string& dir : tracks_) {
-                const bool current = track && std::filesystem::path(dir) == std::filesystem::path(track->track().dir);
+                std::error_code ec;
+                const bool current = track && std::filesystem::equivalent(dir, track->track().dir, ec);
                 if (ImGui::MenuItem(std::filesystem::path(dir).filename().string().c_str(), nullptr, current, !current))
                     ask_open(track, dir);
             }
@@ -436,7 +437,11 @@ void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect
             if (ImGui::Selectable(label, k + 1 == h.pos())) track.history_go(k + 1);
             if (future) ImGui::PopStyleColor();
         }
-        if (h.size() > 0 && h.pos() == h.size()) ImGui::SetScrollHereY(1.0f);
+        // rola para o fim só quando entra um passo novo (senão não dá para rolar a lista)
+        if (h.size() != last_hist_size_) {
+            if (h.pos() == h.size()) ImGui::SetScrollHereY(1.0f);
+            last_hist_size_ = h.size();
+        }
         ImGui::EndChild();
     }
 }
@@ -498,6 +503,7 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
     // Transformação: posição e giro em Y editáveis, escala só leitura
     ImGui::SeparatorText("Transformação");
     ImGui::BeginDisabled(hidden);
+    ImGui::PushID(static_cast<int>(i));  // campos de outra seleção são outros campos (o texto aberto não passa adiante)
     static float base[kInstFloats];
     static float yaw0 = 0.0f;
     const float* m = inst.matrix(i);
@@ -512,7 +518,7 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
         next[9] = pos[0];
         next[10] = pos[1];
         next[11] = pos[2];
-        track.set_matrix(next);
+        track.set_matrix(i, next);
     }
     if (ImGui::IsItemDeactivated()) track.end_change("Mover (campo)");
     tooltip("Posição X Y Z em metros. Arraste ou Ctrl+clique para digitar");
@@ -529,13 +535,16 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
             yaw0 = yaw_of(m);
         }
         float next[kInstFloats];
-        edit::spin(next, base, deg * kPi / 180.0f - yaw0);
-        track.set_matrix(next);
+        if (std::isfinite(deg)) {
+            edit::spin(next, base, deg * kPi / 180.0f - yaw0);
+            track.set_matrix(i, next);
+        }
     }
     if (ImGui::IsItemDeactivated()) track.end_change("Girar (campo)");
     tooltip("Ângulo em Y em graus. Arraste ou Ctrl+clique para digitar");
     const float sx = std::hypot(m[0], m[1], m[2]), sy = std::hypot(m[3], m[4], m[5]), sz = std::hypot(m[6], m[7], m[8]);
     ImGui::TextDisabled("escala %.3f  %.3f  %.3f", static_cast<double>(sx), static_cast<double>(sy), static_cast<double>(sz));
+    ImGui::PopID();
     ImGui::EndDisabled();
 
     if (!hidden) {
@@ -633,10 +642,13 @@ void EditorUi::status_bar(TrackView* track, float fps, const Rect& area) {
             if (track->unsaved()) ImGui::TextColored(kYellow, "não gravado");
             else ImGui::TextDisabled("gravado");
             ImGui::SameLine(0, 16);
-            const std::string& msg = message_.empty() ? track->status() : message_;
+            // a mensagem mais recente: a dos painéis (abrir pista) ou a da pista (gravar, rota)
+            const bool mine = !message_.empty() && message_age() < track->status_age();
+            const std::string& msg = mine ? message_ : track->status();
             const bool bad = msg.starts_with("NÃO") || msg.starts_with("não ");
             // a mensagem some depois de um tempo (erros ficam mais) para não contradizer o estado atual
-            const bool fresh = !message_.empty() || track->status_age() < (bad ? 30.0 : 8.0);
+            const double age = mine ? message_age() : track->status_age();
+            const bool fresh = !msg.empty() && age < (bad ? 30.0 : 8.0);
             if (!fresh) ImGui::TextDisabled("%s", sel_hint(*track).c_str());
             else if (bad) ImGui::TextColored(kRed, "%s", msg.c_str());
             else ImGui::TextUnformatted(msg.c_str());
@@ -754,7 +766,8 @@ int EditorUi::gizmo_hit(float x, float y) const {
     }
     for (int a = 0; a < 3; ++a) {
         if (glm::length(gizmo_.tip[a] - gizmo_.origin) <= 6.0f) continue;  // eixo de ponta para a câmera
-        const float d = seg_dist(p, gizmo_.origin, gizmo_.tip[a]);
+        // o primeiro quarto do eixo fica para o arraste livre no chão (clicar no centro do objeto)
+        const float d = seg_dist(p, gizmo_.origin + 0.25f * (gizmo_.tip[a] - gizmo_.origin), gizmo_.tip[a]);
         if (d < best) best = d, hit = a;
     }
     return hit;
@@ -795,7 +808,7 @@ void EditorUi::gizmo_drag(TrackView& track, const render::OrbitCamera& cam, floa
         if (track.snap_turn > 0) th = snapped(th, track.snap_turn * kPi / 180.0f);
         edit::spin(next, gizmo_.base, th);
     }
-    track.set_matrix(next);
+    track.set_matrix(static_cast<std::uint32_t>(track.selected()), next);
 }
 
 void EditorUi::gizmo_release(TrackView& track) {
