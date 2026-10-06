@@ -198,5 +198,128 @@ sol e a névoa em magenta, e o cenário inteiro ficou magenta.
 - Formato do `base.ctpk`.
 - Decodificador do BXML (`\x01BXML`/`\0BXML`; o `bxml.py` do repo é outro formato).
 - Quem liga o bit 8 do pedido de montagem e o que é o "Patching from disc".
-- Quais arquivos da pista passam pela camada (os PSSG do tracksplit, os `.ens`) e se o cache de dataset os guarda entre corridas.
+- Se o cache de dataset guarda os arquivos da camada entre corridas. Passam pela camada (medido): `tracksplit.pssg`, `route_0/objects.ens`, `trees.bin`, `ornaments.bin`, `track.vis`, `progress_track.xml`, `ai_track.xml`, `*.cqtc`, `landscape.heightfield`, `grass.grs`, `drivable_entities.jpk`. O `track.jpk` (colisão) não apareceu.
+- Formato do `track.vis` e quem o lê (ver §9.6).
 - Uso do UAV nos VB do terreno.
+
+## 9. Geometria nova no `tracksplit.pssg` (DR2Hook Ring pela overlay, 2026-10-06)
+
+Scripts: `scripts/research/terrain_probe.py` (move malhas existentes) e
+`scripts/research/ring_tracksplit.py` (gera um `tracksplit.pssg` com o Ring no lugar das células da
+Montalegre). A saída vai para `captures/overlay/tracks/locations/portugal/montalegre_rallycross/`
+e o jogo a lê no lugar da do `.nefs`. O PSSG pode crescer: 576 MB foram carregados sem erro.
+
+### 9.1 Hierarquia
+
+`ROOTNODE > surface > (TRANSFORM, BOUNDINGBOX, células)`. Na Montalegre:
+
+| Célula | Qtde | Nós de render (RENDERNODE) | Shader |
+| :--- | ---: | :--- | :--- |
+| `LAND_i_j` (grade 20×20, ~830 m) | 400 | `NONLOD_`, `NONLODBATCH_` | vista (`terrain_track_vista_d4`), `batchmaterial!0` |
+| `ROOT_i_j` (~60–90 m) | 70 | `LOW_`/`LOWBATCH_` | `terrain_lod`, `batchmaterial` |
+| | | `SHADOWCASTING_`/`SHADOWCASTINGBATCH_` | detalhado (`terrain_road`, `terrain_wsm_*`), `batchmaterial` |
+| | 29 | `DECAL_`/`DECALBATCH_` | `decal_ao*` |
+
+Cada RENDERNODE tem TRANSFORM, BOUNDINGBOX (6 floats BE: mín xyz, máx xyz) e RENDERSTREAMINSTANCE
+(indices=#datasource, shader=#material, filho RENDERINSTANCESOURCE source=#datasource). A
+BOUNDINGBOX das células é zerada. As LIBRARYs usadas são SHADERINSTANCE, SHADERGROUP, SEGMENTSET
+(RENDERDATASOURCE > RENDERINDEXSOURCE+INDEXSOURCEDATA e RENDERSTREAMs dataBlock/subStream),
+RENDERINTERFACEBOUND (DATABLOCKs com DATABLOCKSTREAMs e DATABLOCKDATA) e NODE. Todos os
+triângulos são listas `triangles`, com índices `ushort` (≤65535 vértices por datasource).
+Na Montalegre, a normal geométrica aponta para +Y.
+
+Exe: `0x140a90150` percorre os filhos de `surface`. O prefixo `LAND_` (comparação de 5 bytes)
+marca paisagem, e os nós de render são achados por prefixo (`HIGH_`, `LOW_`, `NONLOD_`,
+`SHADOWCASTING_`, `HIGHBATCH_`, `LOWBATCH_`, `NONLODBATCH_`, `SHADOWCASTINGBATCH_`, `DECALBATCH`,
+`DECAL`). Em seguida chama `0x140bce9c0`, que liga `trackxfade_high`/`trackxfade_low` e recebe o
+byte "é LAND", e depois `bcc450` e `bcff80`. A célula tem 0x120 bytes em `r13+0x210`, o contador
+fica em `+0x38610` e o limite é de ~800 células. O resto do nome da célula não é interpretado:
+`RINGF_3_4` e `LAND_RINGB_0_1` funcionam.
+
+### 9.2 Regra da profundidade (batch)
+
+As malhas `batchmaterial` (`batched_track.fx`, 0 parâmetros, stride 24: Vertex float3, Color,
+ST half4 = (0,0,0,1)) desenham a profundidade. O material visível só aparece onde a profundidade
+bate exatamente. Os vértices do batch são os mesmos do visível (soldados e redivididos; 100% batem
+pela posição exata).
+
+- X1 (só `terrain_road.fx` +2 m): a pista some, fica transparente.
+- X2 (`terrain_road.fx` +2 m e os vértices do batch na mesma posição): aparece certa, 2 m acima.
+  No primeiro print parecia branco, mas era a câmera de perseguição embaixo da pista erguida.
+
+Conclusão: geometria nova precisa de visível + batch com os mesmos triângulos. O transplante antigo
+(T2, só no batch) ficava branco por isso.
+
+### 9.3 Formato do vértice visível (stride 56, BE)
+
+Vertex float3 @0, Color ARGB @12, ST0 half4 @16, ST1 half4 @24, Normal half4 @32, Tangent @40,
+Binormal @48 (w=1). Binormal = Tangent × Normal. ST1 = (u, v, u, 1−v) é um atlas de ~250–500 m.
+Medianas da Montalegre (ST por metro):
+
+| Material | ST/m | Cor ARGB |
+| :--- | :--- | :--- |
+| `S1_main` | ST0 (0.087, 0.099, 0.077, 0.025); ST1 ≈ 0.004 | (0,118,50,255) |
+| `rumbles_01` | ST0 (0.127, 0.029, 0.117, 0) | — |
+| `S3_main` | ST0 (0.089, 0.095, 0.062, 0.025) | (0,92,77,199) |
+| `main>dense` | ST0.xy constante, ST0.zw ≈ 0.7/m; ST1 ≈ 0.002 | (0,15,0,199) |
+
+O `ring_tracksplit.py` projeta o ST0 no mundo e subtrai um inteiro por célula, para os `half`
+ficarem pequenos. A tangente é `normal × (0,0,1)`.
+
+### 9.4 `ring_tracksplit.py`
+
+Lê `examples/tracks/synthetic__dr2hook_ring/terrain_0.bin` e aplica o deslocamento
+`(8, 1334, -290)`. Materiais: asfalto → `S1_main`, zebra → `rumbles_01`, cascalho/terra →
+`S3_main`, grama → `main>dense`. O primeiro plano é dividido em células de 100 m e o fundo em
+células de 500 m. O fundo perde os triângulos sob o primeiro plano. As células da Montalegre são
+trocadas pelas do Ring, com um datasource visível por material e um batch por célula.
+
+Resultado: 470 → 183 células; 151 821 vértices; 263 862 triângulos; 576 MB.
+
+- `--layout root` (padrão): células `RINGF_/RINGB_` com `SHADOWCASTING_`/`SHADOWCASTINGBATCH_`.
+- `--layout land`: células `LAND_RING*` com `NONLOD_`/`NONLODBATCH_`.
+
+### 9.5 Resultado no jogo (ring1–ring3)
+
+O Ring aparece texturizado, mas só em parte, e o pedaço visível muda com a posição da câmera (o
+dono viu partes da Montalegre aparecendo).
+
+- Em volta do carro fica branco. O carro roda na colisão da Montalegre (y ≈ 1434), e a grama do
+  Ring perto de (8, −290) está em y 1435–1440. A câmera de perseguição fica embaixo da superfície,
+  e o descarte de faces traseiras some com o terreno. Falta colisão própria, ou baixar o Ring
+  alguns metros.
+- Câmera livre perto do chão: o terreno perto aparece.
+- De longe (a 750 m e acima), o recorte é estável no tempo (15 s na mesma pose não mudam nada),
+  então não é streaming. Em `root`, quase nada aparece. Em `land`, aparecem algumas células de
+  fundo de 500 m, com bordas em degrau, e as de 100 m (o traçado) continuam sumidas.
+- A ordem dos triângulos está certa (a normal geométrica aponta para +Y, como na Montalegre), então não é
+  descarte por face.
+
+### 9.6 PVS (hipótese principal, em aberto)
+
+O `track_loader.xml` liga `track.vis` → TrackManagerPlugin, pool VISIBILITY_SYSTEM. O
+`tracksplit.bin` (StreamingPlugin) não existe no `.nefs`.
+
+`track.vis` da Montalegre route_0: 228 432 bytes, little-endian. O cabeçalho tem u32 4, 0x1ed,
+0xf7, 0x257, 0x220, 0x80, 0xc10 e 0xb920, seguidos de floats de caixa (x mín −140,45 = caixa da
+pista). Ele continua sendo o da Montalegre e deve indexar as células pela ordem de criação, o que
+explicaria o recorte em degraus que muda com a câmera.
+
+- `0x140393ab0` constrói a cena ("vis:main scene"): grava `[cena+0x1734] = 2`, com 0 = "No PVS",
+  1 = "Per Node PVS" e 2 = "Per Item PVS"; as strings ficam em `[cena+0x1740..0x1750]`.
+- `0x1403c7aa0` roda por quadro com rcx = cena e copia `[cena+0x1734]` para `[cena+0x14e0+0xf4]`
+  (em `3c7be8`). Prólogo: `48 89 5c 24 08 57 48 81 ec 30 01 00 00 48 8b f9`.
+- A cena "main game" é criada em `0x1404755d0` e fica em `[renderer+0x2050]`. Há 14 usos de
+  `+0x1734` (o de `6c4310` é outro objeto).
+- A LoadProbe ganhou `pvs_mode` (ini; −1 não mexe). O hook em `3c7aa0` grava o modo antes da
+  original. Com `pvs_mode = 0`, o log mostra uma cena indo de 2 para 0, mas as imagens ficaram
+  iguais às do ring1 sem o hook. O campo, ou essa cena, não é o caminho que corta o Ring.
+
+Próximos passos:
+
+1. Achar quem lê o `track.vis` (pool VISIBILITY_SYSTEM, TrackManagerPlugin) e como o resultado
+   corta as células. Para testar, servir um `track.vis` "tudo visível" pela overlay, ou pular a
+   consulta com um hook.
+2. Se o PVS explicar o recorte: gerar um `track.vis` do Ring.
+3. Depois: nós `LOW_` para distância, colisão (`track.jpk` não passou pela camada), objetos
+   (`objects.ens`/`trees`/`ornaments`), rota/progress e AI.

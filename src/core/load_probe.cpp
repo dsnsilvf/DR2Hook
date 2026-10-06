@@ -41,6 +41,9 @@ struct Config {
   std::wstring overlayDir;
   std::string overlayMount = "/data"; // ponto de montagem virtual
   int overlayFlag = 1;                // flag da entrada de montagem (a pista montada como pasta usa 1)
+  // Modo de PVS forçado em toda cena (campo cena+0x1734: 0 = "No PVS", 1 = "Per Node PVS",
+  // 2 = "Per Item PVS", o padrão do construtor 0x140393ab0). -1 não mexe.
+  int pvsMode = -1;
 };
 
 Config g_cfg;
@@ -179,6 +182,7 @@ bool ReadConfig() {
       g_cfg.overlayDir = w;
     } else if (key == "overlay_mount") g_cfg.overlayMount = val;
     else if (key == "overlay_flag") g_cfg.overlayFlag = std::atoi(val.c_str());
+    else if (key == "pvs_mode") g_cfg.pvsMode = std::atoi(val.c_str());
   }
   if (!g_cfg.overlayDir.empty() && g_cfg.overlayDir.back() != L'\\' && g_cfg.overlayDir.back() != L'/')
     g_cfg.overlayDir += L'\\';
@@ -477,13 +481,32 @@ using CreateObjFn = uint64_t (*)(void *, void *, void **);
 using SubmitFn = uint64_t (*)(void *, const void *, int, const char *, int, void *, void *);
 SubmitFn g_origSubmit = nullptr;
 using SubmitFileFn = uint64_t (*)(void *, const char *, int, void *, void *, uint8_t);
+using SceneFrameFn = uint64_t (*)(void *, void *, void *, void *);
 SubmitFileFn g_origSubmitFile = nullptr;
 std::atomic<int> g_manifests{0};
 TrackEventFn g_origTrackEvent = nullptr;
 ProvideFn g_origProvide = nullptr;
 PssgLoadFn g_origPssgLoad = nullptr;
 CreateObjFn g_origCreateObj = nullptr;
-void *g_exeTargets[6] = {};
+SceneFrameFn g_origSceneFrame = nullptr;
+std::atomic<int> g_pvsLogged{0};
+void *g_exeTargets[7] = {};
+
+// Preparo da cena por quadro (0x1403c7aa0, rcx = cena): copia o modo de PVS de cena+0x1734 para
+// a vista. Gravar o campo antes força o modo em todas as cenas.
+uint64_t DetourSceneFrame(void *scene, void *a2, void *a3, void *a4) {
+  if (g_cfg.pvsMode >= 0 && scene != nullptr) {
+    auto *mode = reinterpret_cast<int32_t *>(static_cast<char *>(scene) + 0x1734);
+    const int32_t before = *mode;
+    *mode = g_cfg.pvsMode;
+    if (before != g_cfg.pvsMode && g_pvsLogged.fetch_add(1) < 8) {
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "LoadProbe: PVS da cena %p: %d -> %d", scene, before, g_cfg.pvsMode);
+      Logger::Info(buf);
+    }
+  }
+  return g_origSceneFrame(scene, a2, a3, a4);
+}
 
 // TrackLoader::OnEvent(this, evento): o nome do evento está em evento+0x10 -> +0x10.
 uint64_t DetourTrackEvent(void *self, void *ev) {
@@ -709,6 +732,9 @@ int InstallExeHooks() {
                 reinterpret_cast<void **>(&g_origSubmit), &g_exeTargets[4]);
   ok += HookExe(0xc5ff80, "48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57", reinterpret_cast<void *>(&DetourSubmitFile),
                 reinterpret_cast<void **>(&g_origSubmitFile), &g_exeTargets[5]);
+  if (g_cfg.pvsMode >= 0)
+    ok += HookExe(0x3c7aa0, "48 89 5c 24 08 57 48 81 ec 30 01 00 00 48 8b f9", reinterpret_cast<void *>(&DetourSceneFrame),
+                  reinterpret_cast<void **>(&g_origSceneFrame), &g_exeTargets[6]);
   return ok;
 }
 
