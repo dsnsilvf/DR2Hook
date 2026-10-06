@@ -9,7 +9,9 @@
 #include "edit/history.hpp"
 #include "render/instances.hpp"
 #include "render/lines.hpp"
+#include "render/pick.hpp"
 #include "render/terrain.hpp"
+#include "render/terrain_probe.hpp"
 #include "render/texture.hpp"
 #include "render/track_shader.hpp"
 
@@ -123,6 +125,16 @@ public:
     const std::string& out_path() const { return out_; }
     // Arquivo de origem do tipo pelo kind: objects.ens (e), ornaments.bin (o), trees.bin (t).
     static const char* source_file(const std::string& type_name);
+    // Instância sob o raio (a mesma do clique, com o terreno na frente tapando o que fica atrás); -1 se nenhuma.
+    int pick_ray(const render::Ray& ray, const glm::vec3& target);
+    // Distância do olho até o terreno ao longo do raio (a mesma que o picking usa); false sem terreno.
+    bool terrain_hit(const render::Ray& ray, float& t);
+    // Altura do terreno em (x, z), contando só o que fica abaixo de `y_from` (e, se não achar, de cima).
+    bool terrain_height(float x, float z, float y_from, float& y);
+    // Põe a instância selecionada no chão (y = altura do terreno em x, z), num passo de histórico.
+    void settle_selected();
+    // Mover grudado no terreno: a altura acompanha o chão durante o arraste (guarda a folga que o objeto tinha).
+    bool follow_ground = false;
     // Corta pela câmera atual e desenha.
     void draw(const glm::mat4& view_proj, const render::OrbitCamera& cam);
     std::string title() const;
@@ -139,6 +151,7 @@ private:
     std::unique_ptr<render::Terrain> terrain_;
     std::unique_ptr<render::RouteLines> lines_;
     render::TextureCache textures_;
+    std::unique_ptr<render::TerrainProbe> probe_;
     Instances inst_;
     std::unique_ptr<render::InstanceRenderer> objects_;
     render::Layers layers_;
@@ -178,7 +191,11 @@ private:
         float sy = 0, ex = 0;
         bool shift = false;
         bool numeric = false;  // begin_change (painel ou gizmo), não arraste do mouse no chão
+        float ground_off = 0;  // y do objeto menos a altura do terreno no ponto de partida
+        bool has_ground = false;
     } drag_;
+    static constexpr float kTerrainSlack = 0.25f;  // folga (m) entre a caixa do objeto e o terreno no teste de oclusão
+    float visible_terrain_t(const render::Ray& ray);
     void commit(const char* label, std::vector<edit::Snap> before);
     float snapped(float v, float step) const { return step > 0 ? std::round(v / step) * step : v; }
     bool show_terrain_ = true, show_gates_ = true, show_ai_ = true;

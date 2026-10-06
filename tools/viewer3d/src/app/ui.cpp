@@ -261,6 +261,7 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
         if (ImGui::MenuItem("Duplicar", "Ctrl+D", false, alive)) track->duplicate_selected();
         if (ImGui::MenuItem("Apagar", "Delete", false, alive)) track->delete_selected();
         if (ImGui::MenuItem("Restaurar do arquivo", "R", false, sel >= 0)) track->restore_selected();
+        if (ImGui::MenuItem("Pôr no chão", "T", false, alive)) track->settle_selected();
         if (ImGui::MenuItem("Girar +15°", "E", false, alive)) track->turn_selected(15.0f);
         if (ImGui::MenuItem("Girar −15°", "Q", false, alive)) track->turn_selected(-15.0f);
         ImGui::Separator();
@@ -352,6 +353,9 @@ void EditorUi::toolbar(TrackView& track) {
     ImGui::SetNextItemWidth(ImGui::CalcTextSize("livre").x + 40);
     if (ImGui::Combo("##giro", &ti, turn_names, 4)) track.snap_turn = turns[ti];
     tooltip("Passo do girar por arraste e pelo anel do gizmo");
+    ImGui::SameLine();
+    ImGui::Checkbox("Grudar no chão", &track.follow_ground);
+    tooltip("Ao arrastar no chão, a altura do objeto acompanha o terreno (mantém a folga que ele tinha)");
 
     ImGui::SameLine(0, 18);
     ImGui::SetNextItemWidth(160);
@@ -618,6 +622,8 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
         tooltip("Só objetos e: (objects.ens); ornamentos e árvores têm contagem fixa");
         ImGui::SameLine();
         if (ImGui::Button("Apagar (Del)")) track.delete_selected();
+        if (ImGui::Button("Pôr no chão (T)")) track.settle_selected();
+        tooltip("Baixa (ou sobe) o objeto até o terreno que está sob ele, só na altura");
     }
 
     if (ImGui::CollapsingHeader("Matriz (atual | arquivo)")) {
@@ -749,6 +755,7 @@ void EditorUi::help_window() {
         {"Delete", "apagar"},
         {"Ctrl+D", "duplicar (objetos e:)"},
         {"R", "restaurar do arquivo"},
+        {"T", "pôr no chão (altura do terreno sob o objeto)"},
         {"F", "enquadrar seleção ou rota"},
         {"Esc", "tirar seleção; fechar janela de confirmação"},
         {"Ctrl+Q", "sair (pergunta se há edições não gravadas)"},

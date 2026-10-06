@@ -44,6 +44,11 @@ struct Options {
     float terrain_dist = 0.0f;
     float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
     dr2::render::TextureCache::Options tex;
+    const char* touch_test = nullptr;   // "IDX,dx,dy,dz[,commit]": desloca a instância em 8 quadros só pelo reenvio parcial (ou, com commit, fecha o passo e força o corte completo)
+    const char* settle_list = nullptr;  // arquivo com índices de instância: assenta todas antes de seguir (teste do reenvio parcial)
+    bool settle_redo = false;           // depois de assentar, desfaz e refaz tudo (reenvio completo): a imagem tem de ser a mesma
+    const char* ground_check = nullptr;  // arquivo com índices de instância: assenta cada uma, testa o picking de cima e de baixo do terreno e sai
+    const char* probe_rays = nullptr;  // arquivo com raios (ox oy oz dx dy dz por linha): imprime a distância até o terreno e sai
     bool wait_textures = false;  // só conta quadros com a fila de texturas vazia (capturas iguais entre execuções)
     double autosave = 60.0;  // segundos entre autosaves (0 = desligado)
     bool has_camera = false;
@@ -102,6 +107,16 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.tex.max_side = static_cast<std::size_t>(std::strtoul(argv[++i], nullptr, 10));  // 0 = sem limite
         } else if (std::strcmp(argv[i], "--tex-threads") == 0 && i + 1 < argc) {
             opt.tex.threads = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--probe-rays") == 0 && i + 1 < argc) {
+            opt.probe_rays = argv[++i];
+        } else if (std::strcmp(argv[i], "--touch-test") == 0 && i + 1 < argc) {
+            opt.touch_test = argv[++i];
+        } else if (std::strcmp(argv[i], "--settle-list") == 0 && i + 1 < argc) {
+            opt.settle_list = argv[++i];
+        } else if (std::strcmp(argv[i], "--settle-redo") == 0) {
+            opt.settle_redo = true;
+        } else if (std::strcmp(argv[i], "--ground-check") == 0 && i + 1 < argc) {
+            opt.ground_check = argv[++i];
         } else if (std::strcmp(argv[i], "--wait-textures") == 0) {
             opt.wait_textures = true;
         } else if (std::strcmp(argv[i], "--walk") == 0 && i + 1 < argc) {
@@ -117,7 +132,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--probe-rays arq] [--ground-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -478,6 +493,78 @@ int run(const Options& opt) {
         cam.dist = opt.camera[2];
         cam.target = {opt.camera[3], opt.camera[4], opt.camera[5]};
     }
+    if (opt.probe_rays) {
+        // teste da sonda de raio: uma linha por raio, "ox oy oz dx dy dz"; imprime a distância ou "none"
+        if (!track) {
+            std::fprintf(stderr, "--probe-rays precisa de --track\n");
+            return 1;
+        }
+        std::FILE* f = std::fopen(opt.probe_rays, "r");
+        if (!f) {
+            std::fprintf(stderr, "não abriu %s\n", opt.probe_rays);
+            return 1;
+        }
+        float v[6];
+        while (std::fscanf(f, "%f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+            const glm::vec3 d = glm::normalize(glm::vec3(v[3], v[4], v[5]));
+            float t = 0;
+            if (track->terrain_hit({{v[0], v[1], v[2]}, d}, t)) std::printf("%.5f\n", static_cast<double>(t));
+            else std::printf("none\n");
+        }
+        std::fclose(f);
+        return 0;
+    }
+    if (opt.ground_check) {
+        // teste do assentar e da oclusão: por instância, "i x z y_antes y_depois pick_de_cima pick_de_baixo".
+        // Cima: raio 40 m acima, vertical, até o centro. Baixo: 30 m abaixo do centro, para cima (o terreno, se existe, tapa).
+        if (!track) {
+            std::fprintf(stderr, "--ground-check precisa de --track\n");
+            return 1;
+        }
+        std::FILE* f = std::fopen(opt.ground_check, "r");
+        if (!f) {
+            std::fprintf(stderr, "não abriu %s\n", opt.ground_check);
+            return 1;
+        }
+        unsigned idx;
+        while (std::fscanf(f, "%u", &idx) == 1) {
+            if (idx >= track->instances().n) continue;
+            const float* m = track->instances().matrix(idx);
+            const glm::vec3 c{m[9], m[10], m[11]};
+            const int above = track->pick_ray({c + glm::vec3(0, 40, 0), {0, -1, 0}}, c);
+            const int below = track->pick_ray({c - glm::vec3(0, 30, 0), {0, 1, 0}}, c);
+            track->select(static_cast<int>(idx));
+            track->settle_selected();
+            const float y1 = track->instances().matrix(idx)[10];
+            std::printf("%u %.5f %.5f %.5f %.5f %d %d %s\n", idx, static_cast<double>(c.x), static_cast<double>(c.z), static_cast<double>(c.y),
+                        static_cast<double>(y1), above, below, track->track().types[track->instances().type[idx]].name.c_str());
+            track->undo();
+        }
+        std::fclose(f);
+        return 0;
+    }
+    if (opt.settle_list && track) {
+        std::FILE* f = std::fopen(opt.settle_list, "r");
+        if (!f) {
+            std::fprintf(stderr, "não abriu %s\n", opt.settle_list);
+            return 1;
+        }
+        unsigned idx;
+        std::size_t n = 0;
+        while (std::fscanf(f, "%u", &idx) == 1) {
+            if (idx >= track->instances().n) continue;
+            track->select(static_cast<int>(idx));
+            track->settle_selected();
+            ++n;
+        }
+        std::fclose(f);
+        track->deselect();
+        std::printf("assentadas %zu instâncias; %zu passos no histórico\n", n, track->history().size());
+        if (opt.settle_redo) {
+            while (track->undo()) {}
+            while (track->redo()) {}
+        }
+    }
     dr2::app::EditorUi ui(window, platform.context());
     ui.panels = opt.panels;
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
@@ -527,6 +614,29 @@ int run(const Options& opt) {
         glViewport(vx, vy, vw, vh);
         const float aspect = static_cast<float>(vw) / static_cast<float>(vh);
         const glm::mat4 view_proj = cam.proj(aspect) * cam.view();
+        if (track && opt.touch_test) {
+            // teste do reenvio parcial: do quadro 20 ao 27 move a instância um oitavo do deslocamento por quadro
+            static unsigned idx = 0;
+            static float off[3], base[12];
+            static bool commit = false, parsed = false;
+            if (!parsed) {
+                parsed = true;
+                char tail[16] = {};
+                if (std::sscanf(opt.touch_test, "%u,%f,%f,%f,%15s", &idx, &off[0], &off[1], &off[2], tail) >= 4) commit = std::strcmp(tail, "commit") == 0;
+                else idx = ~0u;
+            }
+            if (idx < track->instances().n) {
+                if (frames == 20 && track->begin_change(idx)) std::copy(track->instances().matrix(idx), track->instances().matrix(idx) + 12, base);
+                if (frames >= 20 && frames < 28 && track->changing()) {
+                    const float k = static_cast<float>(frames - 19) / 8.0f;
+                    float m[12];
+                    std::copy(base, base + 12, m);
+                    for (int c = 0; c < 3; ++c) m[9 + c] += off[c] * k;
+                    track->set_matrix(idx, m);
+                }
+                if (frames == 28 && commit && track->changing()) track->end_change("teste do touch");
+            }
+        }
         if (track) track->draw(view_proj, cam);
         else scene->draw(view_proj);
         glViewport(0, 0, w, h);

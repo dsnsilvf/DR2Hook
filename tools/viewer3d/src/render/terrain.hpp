@@ -33,6 +33,9 @@ public:
     // `max_dist` > 0 também corta as malhas cuja caixa fica a mais que isso (no plano xz) de `center`.
     void draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& center = {},
               float max_dist = 0.0f) const;
+    // Desenha, com o programa da sonda já em uso, todas as malhas cuja caixa toca o frustum, numa chamada só
+    // (sem textura, sem corte por raio). Só a TerrainProbe chama.
+    void draw_probe(const glm::mat4& view_proj) const;
     std::size_t drawn() const { return drawn_; }
     // Caixa de todas as malhas; false se não há malha.
     bool bounds(glm::vec3& lo, glm::vec3& hi) const {
@@ -59,6 +62,8 @@ private:
     mutable std::vector<GLuint> tex_;   // textura GL de cada parte neste quadro (0 = ainda não chegou ou sem arquivo)
     mutable std::vector<GLsizei> counts_;
     mutable std::vector<const void*> offsets_;
+    mutable std::vector<GLsizei> probe_counts_;
+    mutable std::vector<const void*> probe_offsets_;
 };
 
 }  // namespace dr2::render

@@ -112,6 +112,22 @@ bool outside(const std::array<glm::vec4, 6>& planes, const glm::vec3& lo, const 
 
 }  // namespace
 
+void Terrain::draw_probe(const glm::mat4& view_proj) const {
+    vao_.bind();
+    const auto planes = frustum_planes(view_proj);
+    probe_counts_.clear();
+    probe_offsets_.clear();
+    for (const Part& p : parts_) {
+        if (outside(planes, p.lo, p.hi)) continue;
+        probe_counts_.push_back(p.count);
+        probe_offsets_.push_back(reinterpret_cast<const void*>(p.first_index * sizeof(std::uint32_t)));
+    }
+    if (!probe_counts_.empty())
+        glMultiDrawElements(GL_TRIANGLES, probe_counts_.data(), GL_UNSIGNED_INT, probe_offsets_.data(),
+                            static_cast<GLsizei>(probe_counts_.size()));
+    glBindVertexArray(0);
+}
+
 void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm::mat4& view_proj, const glm::vec3& center,
                    float max_dist) const {
     vao_.bind();

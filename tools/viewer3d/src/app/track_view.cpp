@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 
 #ifdef __GLIBC__
@@ -72,6 +73,7 @@ TrackView::TrackView(const std::string& dir, std::string out, bool resume, rende
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
+    probe_ = std::make_unique<render::TerrainProbe>();
     if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
     if (std::filesystem::exists(out_)) {
         if (resume) resume_edits();
@@ -322,6 +324,7 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_DELETE: delete_selected(); return true;
     case SDLK_TAB: switch_route((mod & SDL_KMOD_SHIFT) ? -1 : 1); return true;
     case SDLK_R: restore_selected(); return true;
+    case SDLK_T: settle_selected(); return true;
     case SDLK_Q:
     case SDLK_E: turn_selected(((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f)); return true;
     case SDLK_F1: show_terrain_ = !show_terrain_; return true;
@@ -463,7 +466,7 @@ bool TrackView::begin_edit(float x, float y, float w, float h, const render::Orb
     close_change();
     if (tool_ == Tool::Navigate || drag_.active) return false;
     const auto ray = render::mouse_ray(cam, x, y, w, h);
-    const int hit = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_);
+    const int hit = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_, visible_terrain_t(ray));
     if (hit < 0) return false;
     sel_ = hit;
     drag_ = EditDrag{};
@@ -472,6 +475,9 @@ bool TrackView::begin_edit(float x, float y, float w, float h, const render::Orb
     drag_.before = edit::snapshot(inst_, {drag_.i});
     std::copy(inst_.matrix(drag_.i), inst_.matrix(drag_.i) + kInstFloats, drag_.base);
     drag_.has_start = render::ground(ray, drag_.base[10], drag_.start);
+    float gy = 0;
+    drag_.has_ground = follow_ground && terrain_height(drag_.base[9], drag_.base[11], drag_.base[10] + 1.0f, gy);
+    drag_.ground_off = drag_.has_ground ? drag_.base[10] - gy : 0.0f;
     drag_.sy = y;
     drag_.ex = x;
     drag_.shift = shift;
@@ -497,6 +503,10 @@ void TrackView::edit_drag(float x, float y, float w, float h, const render::Orbi
                 m[9] = snapped(drag_.base[9] + p.x - drag_.start.x, snap_move);
                 m[11] = snapped(drag_.base[11] + p.z - drag_.start.z, snap_move);
                 m[10] = drag_.base[10];
+                float gy = 0;
+                // grudado: a altura segue o terreno, com a mesma folga de quando pegou o objeto
+                if (follow_ground && drag_.has_ground && terrain_height(m[9], m[11], drag_.base[10] + 1.0f, gy))
+                    m[10] = gy + drag_.ground_off;
             }
         }
     } else {
@@ -517,7 +527,48 @@ void TrackView::end_edit() {
 void TrackView::click(float x, float y, float w, float h, const render::OrbitCamera& cam) {
     close_change();
     if (drag_.active) return;
-    sel_ = render::pick(render::mouse_ray(cam, x, y, w, h), inst_, *objects_, cam.target, draw_dist_, layers_);
+    const auto ray = render::mouse_ray(cam, x, y, w, h);
+    sel_ = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_, visible_terrain_t(ray));
+}
+
+int TrackView::pick_ray(const render::Ray& ray, const glm::vec3& target) {
+    return render::pick(ray, inst_, *objects_, target, draw_dist_, layers_, visible_terrain_t(ray));
+}
+
+float TrackView::visible_terrain_t(const render::Ray& ray) {
+    // o terreno escondido não esconde nada: sem ele na tela, o raio não para nele
+    float t = 0;
+    if (show_terrain_ && terrain_hit(ray, t)) return t + kTerrainSlack;
+    return std::numeric_limits<float>::infinity();
+}
+
+bool TrackView::terrain_hit(const render::Ray& ray, float& t) {
+    return probe_ && terrain_ && probe_->cast(*terrain_, ray.o, ray.d, 40000.0f, t);
+}
+
+bool TrackView::terrain_height(float x, float z, float y_from, float& y) {
+    return probe_ && terrain_ && probe_->height(*terrain_, x, z, y_from, y);
+}
+
+void TrackView::settle_selected() {
+    if (sel_ < 0 || drag_.active || inst_.hidden[static_cast<std::size_t>(sel_)]) return;
+    const auto i = static_cast<std::uint32_t>(sel_);
+    float m[kInstFloats];
+    std::copy(inst_.matrix(i), inst_.matrix(i) + kInstFloats, m);
+    float y = 0;
+    // o que está até 1 m acima da origem conta como chão (calombo); acima disso (ponte) fica de fora
+    if (!terrain_height(m[9], m[11], m[10] + 1.0f, y)) {
+        set_status("sem terreno em x " + std::to_string(static_cast<int>(m[9])) + ", z " + std::to_string(static_cast<int>(m[11])));
+        return;
+    }
+    if (std::fabs(y - m[10]) < 1e-4f) {
+        set_status("já está no chão");
+        return;
+    }
+    if (!begin_change(i)) return;
+    m[10] = y;
+    set_matrix(i, m);
+    end_change("Assentar no terreno");
 }
 
 bool TrackView::save() {

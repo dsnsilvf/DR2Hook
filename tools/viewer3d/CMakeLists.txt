@@ -47,6 +47,7 @@ add_library(dr2render STATIC
     src/render/gl.cpp
     src/render/track_shader.cpp
     src/render/terrain.cpp
+    src/render/terrain_probe.cpp
     src/render/texture.cpp
     src/render/lines.cpp
     src/render/instances.cpp
