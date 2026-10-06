@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Iterator
 import struct
 import zlib
 
@@ -34,6 +35,21 @@ def _is_encrypted(arc: NefsArchive, item_id: int) -> bool:
     return _inflate(first, min(BLOCK_SIZE, size)) is None
 
 
+class BlockPatch:
+    """Troca parcial: `data` é o arquivo inteiro já editado e `touched` os blocos de 64 KiB que mudaram.
+
+    Os blocos que não mudaram são copiados do volume sem descomprimir, o que torna viável editar um
+    arquivo de centenas de MB (o `tracksplit.pssg` passa de 500 MB) sem recomprimir tudo.
+    """
+
+    def __init__(self, data: bytes | bytearray, touched: set[int]):
+        self.data = data
+        self.touched = touched
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
 def encode_blocks(data: bytes, key: bytes, encrypted: bool) -> list[bytes]:
     blocks = []
     for pos in range(0, len(data), BLOCK_SIZE):
@@ -45,12 +61,27 @@ def encode_blocks(data: bytes, key: bytes, encrypted: bool) -> list[bytes]:
     return blocks
 
 
+def _patched_blocks(arc: NefsArchive, item_id: int, patch: BlockPatch, encrypted: bool) -> Iterator[bytes]:
+    """Gera os blocos comprimidos do arquivo: o original onde nada mudou, recomprimido onde mudou."""
+    offset, ends = arc._blocks(item_id)
+    with open(arc.data_path, "rb") as src:
+        prev = 0
+        for index, end in enumerate(ends):
+            if index in patch.touched:
+                chunk = bytes(patch.data[index * BLOCK_SIZE : (index + 1) * BLOCK_SIZE])
+                yield from encode_blocks(chunk, arc.key, encrypted)
+            else:
+                src.seek(offset + prev)
+                yield src.read(end - prev)
+            prev = end
+
+
 def replace_file(arc: NefsArchive, path: str, data: bytes, out_path: str) -> dict[str, int]:
     """Grava em `out_path` uma cópia do pacote com `path` trocado por `data`."""
     return replace_files(arc, {path: data}, out_path)[path]
 
 
-def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) -> dict[str, dict[str, int]]:
+def replace_files(arc: NefsArchive, changes: dict[str, bytes | BlockPatch], out_path: str) -> dict[str, dict[str, int]]:
     """Grava em `out_path` uma cópia do pacote com vários arquivos trocados, copiando o volume uma vez só."""
     entries = {}
     for path, data in changes.items():
@@ -59,6 +90,8 @@ def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) ->
             raise ValueError(f"{path} não é um arquivo com dados")
         old_blocks = (entry.size + BLOCK_SIZE - 1) // BLOCK_SIZE
         new_blocks = (len(data) + BLOCK_SIZE - 1) // BLOCK_SIZE
+        if isinstance(data, BlockPatch) and len(data) != entry.size:
+            raise ValueError(f"{path}: a troca parcial não pode mudar o tamanho do arquivo")
         if new_blocks != old_blocks:
             raise ValueError(f"{path}: {new_blocks} blocos contra {old_blocks} originais; o cabeçalho cresceria")
         entries[path] = entry
@@ -76,7 +109,10 @@ def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) ->
         for path, data in changes.items():
             entry = entries[path]
             encrypted = _is_encrypted(arc, entry.id)
-            blocks = encode_blocks(data, arc.key, encrypted)
+            if isinstance(data, BlockPatch):
+                blocks = _patched_blocks(arc, entry.id, data, encrypted)
+            else:
+                blocks = encode_blocks(data, arc.key, encrypted)
             fh.write(b"\0" * (-fh.tell() % 16))
             start = fh.tell()
             ends, total = [], 0
@@ -97,7 +133,7 @@ def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) ->
                 if struct.unpack_from("<5I", header, p2 + i * 20)[4] == entry.id:
                     struct.pack_into("<I", header, p2 + i * 20 + 12, len(data))
                     break
-            results[path] = {"offset": start, "blocks": len(blocks), "bytes": total, "encrypted": int(encrypted)}
+            results[path] = {"offset": start, "blocks": len(ends), "bytes": total, "encrypted": int(encrypted)}
 
         plain_header = bytes(header)
         if arc.header[:4] == MAGIC and _intro_is_plain(arc.data_path):

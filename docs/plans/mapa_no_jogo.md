@@ -150,6 +150,32 @@ Causa: o campo de 32 bytes em +4 do cabeçalho é um **SHA-256 de `"NeFS"` + cab
 
 Com isso, **a escrita de pacotes que o jogo aceita está resolvida**: o E3 (pórtico de largada subido 40 m, `build/redirect/montalegre_E3_hash.nefs`) carregou até a largada. A conferência visual da altura do pórtico ainda não foi feita (a câmera do replay/benchmark não coincide entre as execuções); usar a câmera livre (F9) no ponto de largada na próxima vez.
 
+## Terreno do Ring no jogo (2026-10-06, em andamento)
+
+Ferramentas novas: `BlockPatch` em `tools/egodata/nefs_write.py` (grava só os blocos de 64 KiB tocados e copia os outros sem descomprimir), `tools/uiview/track/terrain_patch.py` (localiza as malhas do `tracksplit.pssg` pelo deslocamento absoluto e edita posições, índices e caixas de culling no lugar), `scripts/research/terrain_probe.py` e `terrain_transplant.py`, e o comando remoto `cam` (ver `docs/guides/remote_commands.md`).
+
+**Fatos novos**
+- Um `tracksplit.pssg` editado de 561 MB vira um `.nefs` de ~1,35 GB em segundos (o arquivo vai inteiro para o fim do volume, mas só os blocos tocados são recomprimidos). Os vértices ficam em big-endian: posição `float3`, cor ARGB, `ST half4`.
+- **T1 (jogo):** as 169 malhas de material `batchmaterial` (176 mil vértices, 262 mil triângulos, só posição + cor + ST, sem textura declarada) **são o terreno visível**. Jogar o `y` delas para -5000 apaga o chão e a pista, e ficam só os objetos sobre um plano claro (a paisagem de fundo). O carro do benchmark continua andando (a colisão é do `track.jpk`). A edição de vértices do `tracksplit.pssg` portanto chega ao jogo.
+- Nas malhas `batchmaterial` o `ST` é sempre `(0,0,0,1)` e a cor ARGB tem A=0, R de 0 a 255, G=0, B=199: o jogo deriva o mapeamento de textura da posição no mundo, e R parece ser um peso de mistura. As matrizes `TRANSFORM` são identidade, então os vértices estão em coordenadas de mundo. O enrolamento dos triângulos do Ring (normal +Y em CCW no plano XZ) é o mesmo do jogo.
+- A hierarquia de culling é `ROOTNODE > surface > LAND_i_j > RENDERNODE` com `BOUNDINGBOX` de 6 floats (mínimo e máximo, big-endian); os contêineres sem volume têm zeros.
+
+**T2 (Ring em 22 das 169 malhas):** `terrain_transplant.py` empacota os 180 462 triângulos do Ring (terreno de 4 m e fundo reduzido à metade da resolução, sem o fundo dentro da área dos tiles) nas malhas `batchmaterial` de maior capacidade, completa com triângulos degenerados, esconde as outras 1906 malhas e desloca o Ring por `(8, 1334, -290)` para a largada coincidir com a da Montalegre. O arquivo relido tem os 180 462 triângulos, y de 1425 a 1573, x ±1300. No jogo:
+- Com as caixas de culling **abertas** (`widen_bounding_boxes`), a simulação **parou**: o carro ficou preso na largada, a câmera livre não mexeu e a imagem ficou com camadas espelhadas e "tudo transparente". Hipótese: culling aberto faz o motor processar o mundo todo (sombras ou LOD) e o quadro trava.
+- Com as caixas intactas (`--no-widen`), a câmera livre responde e o chão aparece **lavado de branco** (as árvores e os prédios aparecem boiando); **a geometria do Ring não é reconhecível**. O formato dos dados está certo, então a hipótese é que o sombreador do `batchmaterial` precisa de algo que não escrevemos (cor/peso por vértice, textura derivada da posição, ou os intervalos de mistura), ou que o plano claro é o próprio Ring sem textura.
+
+**Próximos passos propostos**
+1. Isolar o sombreador: preencher **uma** malha com um quadrado plano de 500 m perto da largada, variando a cor do vértice (R = 0, 128, 255; B = 199 ou 0), e fotografar de cima com o `cam`. Isso diz se o chão branco é a nossa geometria e como a cor controla a aparência.
+2. Copiar a cor dos vértices vizinhos da Montalegre (por posição) em vez de uma cor fixa, se a cor for peso de mistura.
+3. Se a aparência não der certo com o `batchmaterial`, usar as malhas de terreno comuns (`terrain_wsm_*`, 12 texturas por material) e mapear materiais do Ring para materiais do hospedeiro.
+4. Só depois, os objetos do Ring (E4) reposicionando instâncias de `objects.ens`/`ornaments.bin`/`trees.bin`.
+
+**Armadilhas desta rodada**
+- O core compilado do HEAD **cai** na carga da pista (acesso nulo em `exe+0x966a49`). O core que vinha funcionando foi feito do branch `backup/ghost-limit-wip-2026-10-05` (tem a correção do GhostLab/áudio, ainda não integrada ao HEAD). Para testar, foi compilado um core a partir de uma worktree desse branch (`build/core_wip`, saída em `build/win-corewip/dr2hook_core.dll`) com as três mudanças do `cam` copiadas por cima, e instalado na pasta do jogo (backup do anterior: `dr2hook_core.dll.bak-before-cam-20261006`). Nada disso foi commitado no branch de trabalho além do `cam`.
+- **Não use F8 (recarregar o core) com o jogo em corrida:** derrubou o jogo (`GhostLab[crash]`). Reinicie o jogo a cada teste.
+- Linhas antigas em `dr2hook_cmd.txt` são executadas no próximo boot: um `key f9` esquecido liga a câmera livre durante a carga e derruba o jogo. Apague o arquivo antes de abrir.
+- O jogo pausou sozinho uma vez durante a captura de tela; `unpause` pelo canal remoto retoma, mas depois disso o `cam` não refletiu na imagem.
+
 ## Alternativa que não passa pelos `.nefs`
 
 Desenhar o Ring **por cima** do jogo, na overlay do DR2Hook (que já tem o swapchain D3D11 hookado), usando a câmera livre para a visão. Não exige formato do jogo nem `.nefs`, nem decifrar colisão. Perde a iluminação, os materiais e a oclusão do jogo, e a projeção da câmera precisa ser lida do motor (hoje só a posição e a base da câmera livre são conhecidas). Serve para ver o mapa na janela do jogo, mas não é "o mapa dentro do jogo". Fica anotada como plano B, se o U1 der errado.

@@ -1,4 +1,5 @@
 #include "dr2hook/remote_commands.h"
+#include "dr2hook/free_camera.h"
 
 #include "dr2hook/logger.h"
 #include "dr2hook/safety.h"
@@ -112,7 +113,7 @@ std::string Status() {
 }
 
 std::string Help() {
-  return "comandos: help | status | stack | pause | unpause | link <nome> | key <tecla> | crash | toast <texto> | "
+  return "comandos: help | status | stack | pause | unpause | link <nome> | key <tecla> | cam [ex ey ez tx ty tz] | crash | toast <texto> | "
          "mods | opt <mod> <opcao> [valor] | log <texto>";
 }
 
@@ -187,6 +188,19 @@ std::string Run(const std::string &line, HWND hwnd) {
     if (!OverlayManager::IsInitialized()) return "overlay ainda nao iniciado";
     OverlayManager::AddNotification(Rest(line, 1), 3.0f, ToastType::Info);
     return "ok";
+  }
+  if (cmd == "cam") {
+    // cam                      -> pose atual da camera livre
+    // cam <ex ey ez> <tx ty tz> -> poe o olho em e e olha para t (camera livre ligada)
+    if (args.size() == 1) return FreeCamera::RemotePose();
+    if (args.size() != 7) return "uso: cam [ex ey ez tx ty tz]";
+    float v[6];
+    for (int i = 0; i < 6; ++i) {
+      char *end = nullptr;
+      v[i] = std::strtof(args[i + 1].c_str(), &end);
+      if (end == nullptr || *end != '\0') return "numero invalido: " + args[i + 1];
+    }
+    return FreeCamera::RemoteLookAt(v[0], v[1], v[2], v[3], v[4], v[5]);
   }
   if (cmd == "key") {
     if (args.size() < 2) return "uso: key <tecla>";

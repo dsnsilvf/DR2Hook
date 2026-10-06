@@ -21,6 +21,7 @@ Para o próximo lote, esperar o `dr2hook_cmd.txt` sumir e ler o `.out`.
 | `unpause` | Atalho de `link continue` no menu de pausa. Volta à corrida (passando pela contagem). Validado. |
 | `link <nome>` | Posta a transição `<nome>` (`options`, `back`, `continue`, `restart_race`, `quit`…) no estado do topo, se for uma tela. O runner abre o link no próximo tick, como se o item tivesse sido escolhido. Recusa em evento online e quando o topo não é uma tela. |
 | `key <tecla>` | Posta `WM_KEYDOWN`/`WM_KEYUP` na janela: `f8`, `f9`, `f11`, `esc`, `insert`, letras, `0x77`. Alcança os atalhos do core, o F8 e o `onKeyDown` dos mods. **Não move os menus nativos** (o jogo lê Raw Input); para isso use `link`. |
+| `cam` / `cam <ex ey ez> <tx ty tz>` | Sem argumentos, mostra a pose da câmera livre. Com seis números, põe o olho em `e` e olha para `t` (metros do mundo). Exige a câmera livre ligada (`key f9`), senão responde `camera livre desligada`. Serve para tirar prints aéreos sem segurar teclas. |
 | `crash` | Insta crash (mesmo do F11). Só em treino offline. |
 | `mods` | Lista os mods Lua e as opções (`[índice] id = valor`). |
 | `opt <mod> <opção> [valor]` | Mexe numa opção de mod, por índice ou id. `valor`: índice do combo (toggle: `0` Off, `1` On) ou o texto do valor. Sem valor: botão chama, toggle e choice avançam. |

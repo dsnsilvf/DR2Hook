@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #if defined(_WIN32)
@@ -68,6 +69,14 @@ std::atomic<int> g_speedStep{kSpeedStepDefault};
 std::atomic<int> g_mouseX{0};
 std::atomic<int> g_mouseY{0};
 std::atomic<bool> g_armMouse{false};
+
+struct PendingLook {
+  bool set = false;
+  float eye[3]{};
+  float target[3]{};
+};
+std::mutex g_pendingMutex;
+PendingLook g_pending;
 
 bool g_cursorHidden = false;
 bool g_ignoreWarp = false;
@@ -199,6 +208,27 @@ void Apply(void *camera) {
       g_seedFailed.store(true, std::memory_order_relaxed);
       Logger::Warn("FreeCamera: a câmera da especial não tem base usável.");
       return;
+    }
+  }
+
+  {
+    PendingLook look;
+    {
+      std::lock_guard<std::mutex> lock(g_pendingMutex);
+      look = g_pending;
+      g_pending.set = false;
+    }
+    if (look.set) {
+      const FreeCamVec3 eye{look.eye[0], look.eye[1], look.eye[2]};
+      const FreeCamVec3 forward = FreeCamNormalize(
+          {look.target[0] - eye.x, look.target[1] - eye.y, look.target[2] - eye.z});
+      const FreeCamVec3 right = FreeCamNormalize(FreeCamCross({0.f, 1.f, 0.f}, forward));
+      if (FreeCamLength(forward) > 0.5f && FreeCamLength(right) > 0.5f) {
+        g_pose.eye = eye;
+        g_pose.forward = forward;
+        g_pose.right = right;
+        g_pose.up = FreeCamNormalize(FreeCamCross(forward, right));
+      }
     }
   }
 
@@ -463,6 +493,32 @@ void FreeCamera::Shutdown() {
     ShowCursor(TRUE);
     g_cursorHidden = false;
   }
+}
+
+std::string FreeCamera::RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz) {
+  if (!g_enabled.load(std::memory_order_relaxed)) {
+    return "camera livre desligada (key f9)";
+  }
+  std::lock_guard<std::mutex> lock(g_pendingMutex);
+  g_pending.set = true;
+  g_pending.eye[0] = ex;
+  g_pending.eye[1] = ey;
+  g_pending.eye[2] = ez;
+  g_pending.target[0] = tx;
+  g_pending.target[1] = ty;
+  g_pending.target[2] = tz;
+  return "ok";
+}
+
+std::string FreeCamera::RemotePose() {
+  if (!g_enabled.load(std::memory_order_relaxed) || !g_hasPose.load(std::memory_order_relaxed)) {
+    return "camera livre desligada (key f9)";
+  }
+  char text[160];
+  std::snprintf(text, sizeof(text), "olho %.2f %.2f %.2f  frente %.3f %.3f %.3f", static_cast<double>(g_pose.eye.x),
+                static_cast<double>(g_pose.eye.y), static_cast<double>(g_pose.eye.z), static_cast<double>(g_pose.forward.x),
+                static_cast<double>(g_pose.forward.y), static_cast<double>(g_pose.forward.z));
+  return text;
 }
 
 void FreeCamera::OnFrame(HWND hwnd) {
