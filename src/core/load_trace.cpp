@@ -65,7 +65,9 @@ HANDLE WINAPI DetourCreateFileW(LPCWSTR name, DWORD access, DWORD share,
   // Pacote .nefs aberto só para leitura e com regra no ini: abre o arquivo do destino. O log e
   // o aviso de fase seguem com o nome original, que é o que o jogo pediu.
   LPCWSTR open_name = name;
-  std::wstring redirected;
+  std::wstring redirected, overlay;
+  // Overlay da LoadProbe: <jogo>\dr2hook_overlay\... aponta para a pasta configurada.
+  if (!t_inDetour && LoadProbeRewritePath(name, &overlay)) open_name = overlay.c_str();
   if (!g_redirects.empty() && name != nullptr && disposition == OPEN_EXISTING && EndsWithNefs(name) &&
       !t_inDetour && ApplyRedirect(g_redirects, name, &redirected)) {
     t_inDetour = true;

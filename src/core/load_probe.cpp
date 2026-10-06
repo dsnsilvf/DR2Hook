@@ -36,6 +36,11 @@ struct Config {
   bool exe = true;             // hooks no carregador de pista do exe (eventos, PSSG, classes)
   int head = 48;               // bytes iniciais dos dados de buffer/textura no log
   double stopAfterStart = 20.0; // segundos depois do "racestart" para fechar o trace
+  // Overlay experimental: monta <jogo>\dr2hook_overlay como camada de pasta do I/O do jogo e
+  // redireciona esse prefixo para overlay_dir (fora da pasta do jogo). Vazio desliga.
+  std::wstring overlayDir;
+  std::string overlayMount = "/data"; // ponto de montagem virtual
+  int overlayFlag = 1;                // flag da entrada de montagem (a pista montada como pasta usa 1)
 };
 
 Config g_cfg;
@@ -168,7 +173,15 @@ bool ReadConfig() {
     else if (key == "exe") g_cfg.exe = val == "1";
     else if (key == "head") g_cfg.head = (std::max)(0, (std::min)(512, std::atoi(val.c_str())));
     else if (key == "stop_after_start") g_cfg.stopAfterStart = std::atof(val.c_str());
+    else if (key == "overlay_dir") {
+      wchar_t w[MAX_PATH] = {};
+      MultiByteToWideChar(CP_UTF8, 0, val.c_str(), -1, w, MAX_PATH);
+      g_cfg.overlayDir = w;
+    } else if (key == "overlay_mount") g_cfg.overlayMount = val;
+    else if (key == "overlay_flag") g_cfg.overlayFlag = std::atoi(val.c_str());
   }
+  if (!g_cfg.overlayDir.empty() && g_cfg.overlayDir.back() != L'\\' && g_cfg.overlayDir.back() != L'/')
+    g_cfg.overlayDir += L'\\';
   if (g_cfg.out.empty()) g_cfg.out = GameDir() + L"dr2hook_loadprobe";
   if (g_cfg.out.back() != L'\\' && g_cfg.out.back() != L'/') g_cfg.out += L'\\';
   return g_cfg.enabled;
@@ -229,13 +242,15 @@ void LogAttr(LPCWSTR name, bool found) {
 }
 
 DWORD WINAPI DetourGetAttrW(LPCWSTR name) {
-  const DWORD r = g_origGetAttrW(name);
+  std::wstring real;
+  const DWORD r = g_origGetAttrW(LoadProbeRewritePath(name, &real) ? real.c_str() : name);
   LogAttr(name, r != INVALID_FILE_ATTRIBUTES);
   return r;
 }
 
 BOOL WINAPI DetourGetAttrExW(LPCWSTR name, GET_FILEEX_INFO_LEVELS level, LPVOID info) {
-  const BOOL r = g_origGetAttrExW(name, level, info);
+  std::wstring real;
+  const BOOL r = g_origGetAttrExW(LoadProbeRewritePath(name, &real) ? real.c_str() : name, level, info);
   LogAttr(name, r != FALSE);
   return r;
 }
@@ -580,10 +595,68 @@ uint64_t DetourSubmit(void *mgr, const void *data, int size, const char *name, i
   return g_origSubmit(mgr, data, size, name, flags, a6, a7);
 }
 
+// ---- Overlay experimental (camada de pasta do próprio I/O do jogo) ----
+
+std::wstring g_overlayVirt; // "<jogo>\dr2hook_overlay\" em minúsculas; vazio = overlay desligado
+std::atomic<bool> g_overlayMounted{false};
+
+bool BytesAt(uintptr_t rva, const char *hex) {
+  const auto *fn = reinterpret_cast<const uint8_t *>(g_exeBase + rva);
+  for (size_t i = 0; hex[i * 3] != 0; ++i) {
+    if (fn[i] != std::strtoul(std::string(hex + i * 3, 2).c_str(), nullptr, 16)) return false;
+    if (hex[i * 3 + 2] == 0) break;
+  }
+  return true;
+}
+
+// Mesma sequência que 0x1403a3d70 usa para /data/video: camada de pasta de 0x128 bytes
+// (construtor 0x1407fcd40), raiz "dispositivo:/caminho" (0x140813860, dispositivo 0 = pasta do jogo)
+// e montagem no sistema de I/O global (0x140815840), que põe a entrada na frente da lista.
+void MountOverlay() {
+  using GetMemFn = void *(*)();
+  using TrackerFn = void *(*)(void *, const char *);
+  using CtorFn = void *(*)(void *);
+  using InitFn = int (*)(void *, void *, const char *);
+  using MountFn = int (*)(void *, void *, const char *, int, void **, void *);
+  if (!BytesAt(0xb2730, "40 53 48 83 ec 20") || !BytesAt(0x865180, "48 89 54 24 10 48 89 4c 24 08") ||
+      !BytesAt(0x7fcd40, "48 8d 05 39 d6 ac 00") || !BytesAt(0x813860, "48 83 79 08 00 48 8b c1") ||
+      !BytesAt(0x815840, "4c 89 44 24 18 41 54 41 55")) {
+    Logger::Warn("LoadProbe: overlay ignorado, bytes do exe diferentes do esperado.");
+    return;
+  }
+  void *iosys = ReadOr<void *>(reinterpret_cast<const void *>(g_exeBase + 0x16925f8), nullptr);
+  if (iosys == nullptr) {
+    Logger::Warn("LoadProbe: overlay ignorado, sistema de I/O ainda nulo.");
+    return;
+  }
+  void *layer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 0x128); // nunca liberada: a montagem fica até o fim
+  reinterpret_cast<CtorFn>(g_exeBase + 0x7fcd40)(layer);
+  void *pool = reinterpret_cast<TrackerFn>(g_exeBase + 0x865180)(reinterpret_cast<GetMemFn>(g_exeBase + 0xb2730)(),
+                                                                  "INPUT_IO_LAYER");
+  const int init = reinterpret_cast<InitFn>(g_exeBase + 0x813860)(layer, pool, "00000000:/dr2hook_overlay");
+  void *entry = nullptr;
+  const int mount = init == 0 ? reinterpret_cast<MountFn>(g_exeBase + 0x815840)(
+                                    iosys, layer, g_cfg.overlayMount.c_str(), g_cfg.overlayFlag, &entry, nullptr)
+                              : -1;
+  char msg[200];
+  std::snprintf(msg, sizeof(msg), "LoadProbe: overlay em %s (flag %d): init=%d mount=%d entrada=%p",
+                g_cfg.overlayMount.c_str(), g_cfg.overlayFlag, init, mount, entry);
+  Logger::Info(msg);
+  Busy busy;
+  Line l("overlay");
+  l.add("\t%s\t%d\t%d\t%d\t%p", g_cfg.overlayMount.c_str(), g_cfg.overlayFlag, init, mount, entry);
+  l.emit();
+}
+
 // Pedido de carga por arquivo (0x140c5ff80): o manifesto vem de um arquivo do sistema virtual
 // (ex.: `tracks/track_loader.xml`, que mora no raceload.jpk do game_1.dat) e r9 é a tabela de
 // tokens (%location%, %track%, %route%...) montada em 0x140487480.
 uint64_t DetourSubmitFile(void *mgr, const char *file, int flags, void *tokens, void *a5, uint8_t a6) {
+  // O .nefs da pista já está montado quando o track_loader é pedido; montando depois, a pasta
+  // fica na frente dele na lista.
+  if (!g_overlayVirt.empty() && file != nullptr && std::strcmp(file, "tracks/track_loader.xml") == 0 &&
+      !g_overlayMounted.exchange(true))
+    MountOverlay();
   if (g_on.load(std::memory_order_relaxed) && !t_busy) {
     Busy busy;
     Line l("subfile");
@@ -688,6 +761,25 @@ void OnTick(double dt) {
 
 } // namespace
 
+bool LoadProbeRewritePath(const wchar_t *path, std::wstring *out) {
+  if (g_overlayVirt.empty() || path == nullptr) return false;
+  // Aceita também a própria pasta sem a barra final (a camada consulta a raiz).
+  const size_t n = g_overlayVirt.size();
+  size_t i = 0;
+  for (; i < n; ++i) {
+    wchar_t c = static_cast<wchar_t>(std::towlower(path[i]));
+    if (c == L'/') c = L'\\';
+    if (c != g_overlayVirt[i]) break;
+  }
+  if (i < n && !(i == n - 1 && path[i] == 0)) return false;
+  std::wstring rest = i == n ? std::wstring(path + n) : std::wstring();
+  for (auto &c : rest)
+    if (c == L'/') c = L'\\';
+  *out = g_cfg.overlayDir + rest;
+  if (rest.empty()) out->pop_back();
+  return true;
+}
+
 void LoadProbeOnOpen(void *handle, const wchar_t *path, unsigned long access) {
   if (!g_on.load(std::memory_order_relaxed) || t_busy || path == nullptr) return;
   Busy busy;
@@ -751,6 +843,11 @@ bool InstallLoadProbe() {
   const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(g_exeBase);
   const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(g_exeBase + dos->e_lfanew);
   g_exeEnd = g_exeBase + nt->OptionalHeader.SizeOfImage;
+  if (!g_cfg.overlayDir.empty() && g_cfg.exe) {
+    g_overlayVirt = GameDir() + L"dr2hook_overlay\\";
+    for (auto &c : g_overlayVirt) c = c == L'/' ? L'\\' : static_cast<wchar_t>(std::towlower(c));
+    Logger::Info("LoadProbe: overlay " + Narrow(g_overlayVirt.c_str()) + " -> " + Narrow(g_cfg.overlayDir.c_str()));
+  }
 
   SYSTEMTIME st;
   GetLocalTime(&st);
@@ -823,6 +920,7 @@ void UninstallLoadProbe() {}
 void LoadProbeOnOpen(void *, const wchar_t *, unsigned long) {}
 void LoadProbeOnRead(void *, unsigned long, void *) {}
 void LoadProbeMark(const char *) {}
+bool LoadProbeRewritePath(const wchar_t *, std::wstring *) { return false; }
 } // namespace dr2hook
 
 #endif

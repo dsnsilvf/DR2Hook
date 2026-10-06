@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace dr2hook {
 
 // Sonda de engenharia reversa do carregamento de pista. Ligada por dr2hook_loadprobe.ini
@@ -16,5 +18,8 @@ void LoadProbeOnOpen(void *handle, const wchar_t *path, unsigned long access);
 void LoadProbeOnRead(void *handle, unsigned long size, void *overlapped);
 // Marca na linha do tempo (eventos nomeados da corrida, abertura de especial).
 void LoadProbeMark(const char *what);
+// Overlay experimental (overlay_dir= no ini): um caminho sob <jogo>\dr2hook_overlay\ vira o mesmo
+// caminho sob overlay_dir. Devolve true e preenche *out quando reescreve.
+bool LoadProbeRewritePath(const wchar_t *path, std::wstring *out);
 
 } // namespace dr2hook

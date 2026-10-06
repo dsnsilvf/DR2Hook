@@ -168,10 +168,35 @@ e "Patching %s from content". Hipótese: o motor já sabe servir uma location a 
 pasta (modo de desenvolvimento), e esse seria o caminho para arquivos soltos sem editar
 NeFS nem exe.
 
+### Overlay de teste (CONFIRMADO, 2026-10-06)
+
+A LoadProbe monta uma camada de pasta própria em `/data` com a mesma sequência, logo depois do
+pedido de `tracks/track_loader.xml` (chaves `overlay_dir`, `overlay_mount` e `overlay_flag` no
+`dr2hook_loadprobe.ini`):
+
+```
+alocador = 0x140865180(0x1400b2730(), "INPUT_IO_LAYER")
+camada   = HeapAlloc(0x128, zerado); 0x1407fcd40(camada)
+0x140813860(camada, alocador, "00000000:/dr2hook_overlay")   ; dispositivo 0 = pasta do jogo
+0x140815840(*0x1416925f8, camada, "/data", 1, &entrada, 0)   ; sem insertBefore: entra na frente
+```
+
+A camada consulta `<jogo>\dr2hook_overlay\...` com `GetFileAttributesW` e abre com `CreateFileW`.
+A sonda reescreve esse prefixo para a pasta do `overlay_dir`, que fica fora da pasta do jogo.
+
+Rodada r6 (`trace_20261006_120232.tsv`, Montalegre): `init=0 mount=0`. Houve 309 consultas na
+pasta, 308 não acharam e caíram para o `.nefs`, e uma achou e abriu
+`tracks/locations/portugal/montalegre_rallycross/lighting_midday_dry_00.xml`. A cópia tinha o
+sol e a névoa em magenta, e o cenário inteiro ficou magenta.
+
+- A camada de pasta montada por último tem prioridade sobre o `.nefs` no mesmo ponto.
+- Arquivo ausente na pasta é lido do pacote.
+- Os caminhos na pasta são os caminhos virtuais sob `/data` (`tracks/locations/<loc>/<track>/...`).
+
 ## 8. Em aberto
 
 - Formato do `base.ctpk`.
 - Decodificador do BXML (`\x01BXML`/`\0BXML`; o `bxml.py` do repo é outro formato).
 - Quem liga o bit 8 do pedido de montagem e o que é o "Patching from disc".
-- Prioridade entre uma camada de pasta e o `.nefs` montado no mesmo ponto.
+- Quais arquivos da pista passam pela camada (os PSSG do tracksplit, os `.ens`) e se o cache de dataset os guarda entre corridas.
 - Uso do UAV nos VB do terreno.
