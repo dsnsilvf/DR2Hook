@@ -43,6 +43,8 @@ struct Options {
     bool fresh = false;  // não retoma o edits.json que já existe
     float terrain_dist = 0.0f;
     float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
+    dr2::render::TextureCache::Options tex;
+    bool wait_textures = false;  // só conta quadros com a fila de texturas vazia (capturas iguais entre execuções)
     double autosave = 60.0;  // segundos entre autosaves (0 = desligado)
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
@@ -89,6 +91,19 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 std::fprintf(stderr, "--terrain-dist precisa de metros >= 0 (0 = sem limite)\n");
                 return false;
             }
+        } else if (std::strcmp(argv[i], "--tex-mb") == 0 && i + 1 < argc) {
+            const double mb = std::strtod(argv[++i], nullptr);
+            if (!std::isfinite(mb) || mb < 16) {
+                std::fprintf(stderr, "--tex-mb precisa de megabytes >= 16 (limite de VRAM das texturas)\n");
+                return false;
+            }
+            opt.tex.budget_bytes = static_cast<std::size_t>(mb * 1048576.0);
+        } else if (std::strcmp(argv[i], "--tex-max-side") == 0 && i + 1 < argc) {
+            opt.tex.max_side = static_cast<std::size_t>(std::strtoul(argv[++i], nullptr, 10));  // 0 = sem limite
+        } else if (std::strcmp(argv[i], "--tex-threads") == 0 && i + 1 < argc) {
+            opt.tex.threads = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--wait-textures") == 0) {
+            opt.wait_textures = true;
         } else if (std::strcmp(argv[i], "--walk") == 0 && i + 1 < argc) {
             opt.walk = std::strtof(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--autosave") == 0 && i + 1 < argc) {
@@ -102,7 +117,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -413,7 +428,7 @@ void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2:
         if (old_unsaved) old_edits = track->current_edits();  // se a nova falhar, a anterior volta como estava
     }
     auto open = [&](const std::string& d, const std::string& out) {
-        auto next = std::make_unique<dr2::app::TrackView>(d, out, !opt.fresh);
+        auto next = std::make_unique<dr2::app::TrackView>(d, out, !opt.fresh, opt.tex);
         next->terrain_dist() = opt.terrain_dist;
         track = std::move(next);
         scene.reset();
@@ -451,7 +466,7 @@ int run(const Options& opt) {
     std::unique_ptr<TestScene> scene;
     std::unique_ptr<dr2::app::TrackView> track;
     if (opt.track) {
-        track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh);
+        track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh, opt.tex);
         track->terrain_dist() = opt.terrain_dist;
         track->frame_route(cam);
     } else {
@@ -478,6 +493,8 @@ int run(const Options& opt) {
     long title_frames = 0;
     long frames = 0;
     float fps = 0.0f;
+    double worst_ms = 0.0;
+    long worst_frame = 0;
     bool running = true;
 
     while (running) {
@@ -485,6 +502,8 @@ int run(const Options& opt) {
         while (SDL_PollEvent(&event))
             if (!handle_event(event, cam, drag, track.get(), ui, vp, input)) running = false;
         const Uint64 frame_t = SDL_GetPerformanceCounter();
+        const double frame_ms = static_cast<double>(frame_t - last_t) * 1000.0 / static_cast<double>(freq);
+        if (frames > 10 && frame_ms > worst_ms) worst_ms = frame_ms, worst_frame = frames;
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
         walk_keys(cam, dt, input, ui);
@@ -514,7 +533,10 @@ int run(const Options& opt) {
         ui.render(track.get(), cam, view_proj, vp);
         dr2::gl::warn("quadro");  // um erro de GL num quadro avisa, não fecha o editor com edições abertas
 
-        ++frames;
+        // com --wait-textures o quadro só conta quando não há textura a caminho (limite de 5000 espera)
+        static long waited = 0;
+        const bool settling = opt.wait_textures && track && track->textures().busy() && ++waited < 5000;
+        if (!settling) ++frames;
         const bool last = opt.frames > 0 && frames >= opt.frames;
         if (last && opt.screenshot) dr2::gl::save_ppm(opt.screenshot, w, h);  // antes do swap: lê o back buffer
         SDL_GL_SwapWindow(window);
@@ -547,6 +569,13 @@ int run(const Options& opt) {
         if (track) {
             std::printf("%s\n", track->title().c_str());
             const auto& o = track->objects();
+            const auto& tx = track->textures();
+            std::printf("pior quadro %.1f ms (quadro %ld)\n", worst_ms, worst_frame);
+            std::printf("texturas: %zu na GPU, %zu enviadas, %zu descartadas, %zu reduzidas, %zu falharam, %zu na fila; %.0f de %.0f MB; decodificação %.2f s\n",
+                        tx.loaded(), tx.created(), tx.evicted(), tx.downscaled(), tx.failed(), tx.pending(),
+                        static_cast<double>(tx.gpu_bytes()) / 1048576.0, static_cast<double>(tx.budget()) / 1048576.0, tx.decode_seconds());
+            if (std::size_t total = 0, free = 0; dr2::gl::vram_kb(total, free))
+                std::printf("VRAM da GPU: %.0f MB usados de %.0f MB\n", static_cast<double>(total - free) / 1024.0, static_cast<double>(total) / 1024.0);
             std::printf("cortes=%zu (%.3f ms cada) reenvios parciais=%zu células no último=%zu\n", o.culls(),
                         o.culls() ? o.cull_seconds() * 1000.0 / static_cast<double>(o.culls()) : 0.0, o.partial_updates(), o.last_cells());
         }

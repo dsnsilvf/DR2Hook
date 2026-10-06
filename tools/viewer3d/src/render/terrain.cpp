@@ -119,7 +119,7 @@ void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm:
     shader.set_highlight(0.0f);
     if (tex_.size() != parts_.size()) {
         tex_.assign(parts_.size(), 0);
-        tex_done_.assign(parts_.size(), false);
+        handle_.assign(parts_.size(), -2);
     }
     const auto planes = frustum_planes(view_proj);
     drawn_ = 0;
@@ -142,9 +142,9 @@ void Terrain::draw(const TrackShader& shader, TextureCache* textures, const glm:
             if (dx * dx + dz * dz > max_dist * max_dist) continue;
         }
         ++drawn_;
-        if (textures && !tex_done_[k]) {
-            tex_[k] = textures->for_material(p.material);
-            tex_done_[k] = true;
+        if (textures) {
+            if (handle_[k] == -2) handle_[k] = textures->handle(p.material);
+            tex_[k] = textures->use(handle_[k]);  // 0 enquanto a textura não chegou: cor fixa
         }
         const GLuint tex = textures ? tex_[k] : 0;
         const bool same = prev < parts_.size() && (tex ? tex == bound && tex_[prev] == tex

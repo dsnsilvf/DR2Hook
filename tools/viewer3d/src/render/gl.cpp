@@ -84,6 +84,30 @@ bool warn(const char* where) {
     return ok;
 }
 
+bool vram_kb(std::size_t& total, std::size_t& free) {
+    GLint v[4] = {0, 0, 0, 0};
+    while (glGetError() != GL_NO_ERROR) {}  // não herda erro de outro lugar
+    if (GLEW_NVX_gpu_memory_info) {
+        GLint t = 0, f = 0;
+        glGetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &t);
+        glGetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &f);
+        if (glGetError() == GL_NO_ERROR && t > 0) {
+            total = static_cast<std::size_t>(t);
+            free = static_cast<std::size_t>(f);
+            return true;
+        }
+    }
+    if (GLEW_ATI_meminfo) {
+        glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, v);
+        if (glGetError() == GL_NO_ERROR) {
+            total = 0;
+            free = static_cast<std::size_t>(v[0]);
+            return true;
+        }
+    }
+    return false;
+}
+
 void save_ppm(const char* path, int width, int height) {
     if (width <= 0 || height <= 0) throw std::runtime_error("save_ppm: tamanho inválido");
     const std::size_t row = static_cast<std::size_t>(width) * 3;

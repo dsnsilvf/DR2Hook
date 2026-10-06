@@ -36,6 +36,7 @@ public:
         GLsizei count = 0;
         std::string material;
         glm::vec3 color{};
+        mutable int tex_handle = -2;  // TextureCache::handle, resolvido no primeiro desenho (-2 = ainda não)
     };
     struct Type {
         std::string name;

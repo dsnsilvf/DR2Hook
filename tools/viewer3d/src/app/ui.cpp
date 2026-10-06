@@ -510,9 +510,21 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
             row("Tipos", std::to_string(t.types.size()));
             row("Materiais", std::to_string(t.materials.size()));
             auto& tex = track.textures();
-            char buf[64];
-            std::snprintf(buf, sizeof buf, "%zu (%zu falharam), %.1f MB", tex.created(), tex.failed(), static_cast<double>(tex.bytes_rgba()) / 1e6);
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "%zu na GPU, %zu na fila, %zu falharam", tex.loaded(), tex.pending(), tex.failed());
             row("Texturas", buf);
+            std::snprintf(buf, sizeof buf, "%.0f de %.0f MB%s", static_cast<double>(tex.gpu_bytes()) / 1048576.0,
+                          static_cast<double>(tex.budget()) / 1048576.0, tex.over_budget() ? "  (acima do limite!)" : "");
+            row("VRAM das texturas", buf);
+            if (std::size_t total = 0, free = 0; gl::vram_kb(total, free)) {
+                std::snprintf(buf, sizeof buf, total ? "%.0f MB usados de %.0f MB" : "%.0f MB livres", total ? static_cast<double>(total - free) / 1024.0 : static_cast<double>(free) / 1024.0,
+                              static_cast<double>(total) / 1024.0);
+                row("VRAM da GPU", buf);
+            }
+            if (tex.evicted() || tex.downscaled()) {
+                std::snprintf(buf, sizeof buf, "%zu reduzidas, %zu descartadas por falta de espaço", tex.downscaled(), tex.evicted());
+                row("", buf);
+            }
             row("Portões", std::to_string(track.route().gates.size()));
             row("Linhas da IA", std::to_string(track.route().ai.size()));
             row("Grava em", track.out_path());

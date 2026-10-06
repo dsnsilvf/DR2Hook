@@ -51,8 +51,8 @@ std::string TrackView::default_out(const std::string& dir, const std::string& id
     return "build/uiview/saves/" + id + ".edits.json";
 }
 
-TrackView::TrackView(const std::string& dir, std::string out, bool resume)
-    : track_(read_track(dir)), dir_(dir), textures_(dir, track_.materials), out_(std::move(out)) {
+TrackView::TrackView(const std::string& dir, std::string out, bool resume, render::TextureCache::Options tex)
+    : track_(read_track(dir)), dir_(dir), textures_(dir, track_.materials, tex), out_(std::move(out)) {
     if (out_.empty()) out_ = default_out(dir, track_.id);
     if (edit::inside_game_folder(out_)) throw std::runtime_error("--out " + out_ + " fica dentro da pasta do jogo");
     if (std::filesystem::is_directory(out_)) throw std::runtime_error("--out " + out_ + " é uma pasta; passe o caminho do arquivo .json");
@@ -232,18 +232,11 @@ void TrackView::load_route(std::size_t index) {
 #endif
         terrain_file_ = route.terrain_file;
         const MeshTotals& tot = loaded.tot;
-        // texturas do terreno já na carga, para medir (as dos objetos vêm sob demanda)
-        const std::size_t before = textures_.created();
-        const auto t0 = std::chrono::steady_clock::now();
-        for (const auto& part : terrain_->parts()) textures_.for_material(part.material);
-        glFinish();
-        const double tex_s = seconds_since(t0);
+        // as texturas (terreno e objetos) vêm em segundo plano, na ordem em que o desenho pede
         std::fprintf(stderr,
                      "viewer3d: %s %s: %zu malhas, %zu vértices, %zu triângulos; leitura %.3f s (%.1f MB), envio à GPU %.3f s\n",
                      track_.id.c_str(), route.terrain_file.c_str(), tot.meshes, tot.verts, tot.tris, loaded.read_s,
                      static_cast<double>(loaded.bytes) / 1e6, loaded.upload_s);
-        std::fprintf(stderr, "viewer3d: texturas do terreno: %zu novas (%zu falharam no total), %.1f MB RGBA no total, %.3f s\n",
-                     textures_.created() - before, textures_.failed(), static_cast<double>(textures_.bytes_rgba()) / 1e6, tex_s);
     }
     route_index_ = index;
     route_ = &route;
@@ -344,6 +337,7 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
 }
 
 void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam) {
+    textures_.begin_frame();  // envia o que as threads decodificaram, dentro do orçamento do quadro
     objects_->cull(inst_, cam.target, cam.dist, draw_dist_, layers_, edit_rev_);
     shader_.use();
     shader_.set_view_proj(view_proj);

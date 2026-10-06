@@ -55,8 +55,8 @@ private:
     std::vector<std::size_t> order_;  // partes ordenadas por material (textura)
     std::size_t meshes_ = 0, vertices_ = 0, triangles_ = 0;
     mutable std::size_t drawn_ = 0;
-    mutable std::vector<GLuint> tex_;  // textura de cada parte, resolvida uma vez (sem busca por nome a cada quadro)
-    mutable std::vector<bool> tex_done_;
+    mutable std::vector<int> handle_;   // handle de textura de cada parte (-2 = ainda não resolvido), uma busca por nome só
+    mutable std::vector<GLuint> tex_;   // textura GL de cada parte neste quadro (0 = ainda não chegou ou sem arquivo)
     mutable std::vector<GLsizei> counts_;
     mutable std::vector<const void*> offsets_;
 };

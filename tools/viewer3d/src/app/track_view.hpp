@@ -29,7 +29,7 @@ public:
 
     // `out`: caminho do edits.json (vazio = default_out). Se ele existe e `resume`, as edições dele
     // voltam para a sessão (continuar de onde parou).
-    TrackView(const std::string& dir, std::string out, bool resume = true);
+    TrackView(const std::string& dir, std::string out, bool resume = true, render::TextureCache::Options tex = {});
     ~TrackView();
     TrackView(const TrackView&) = delete;
     TrackView& operator=(const TrackView&) = delete;

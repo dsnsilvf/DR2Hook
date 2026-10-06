@@ -12,6 +12,7 @@ endif()
 find_package(SDL3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
 # GLM só de cabeçalhos; nem toda distribuição instala o glmConfig.cmake.
@@ -52,7 +53,7 @@ add_library(dr2render STATIC
     src/render/pick.cpp
 )
 target_include_directories(dr2render PUBLIC src)
-target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers PRIVATE PkgConfig::WEBP)
+target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers Threads::Threads PRIVATE PkgConfig::WEBP)
 
 # Dear ImGui 1.91.9b (third_party/imgui/README.md) com os backends SDL3 e OpenGL3: os painéis do app.
 # Sem os avisos do projeto (código de terceiros, sem mudança).

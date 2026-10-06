@@ -189,7 +189,8 @@ void InstanceRenderer::touch(const Instances& inst, std::uint32_t i) {
 
 void InstanceRenderer::draw_parts(const TrackShader& shader, TextureCache& textures, const Type& ty, GLsizei count) const {
     for (const Part& p : ty.parts) {
-        const GLuint tex = textures.for_material(p.material);
+        if (p.tex_handle == -2) p.tex_handle = textures.handle(p.material);
+        const GLuint tex = textures.use(p.tex_handle);
         const bool cut = p.material.empty() || p.material[0] != 'g';
         if (tex) {
             glActiveTexture(GL_TEXTURE0);

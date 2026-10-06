@@ -17,6 +17,11 @@ bool warn(const char* where);
 // Quantos erros de GL warn já viu (os painéis mostram, mesmo depois que o stderr para de avisar).
 int warned_errors();
 
+// VRAM da GPU em KB, pelas extensões GL_NVX_gpu_memory_info (NVIDIA) ou GL_ATI_meminfo (AMD): `total` é
+// a que o driver oferece, `free` a livre agora (AMD não informa o total: vem 0). false se nenhuma existe
+// (Mesa/Intel).
+bool vram_kb(std::size_t& total, std::size_t& free);
+
 // Lê o back buffer (RGB) e grava PPM P6, com a primeira linha do arquivo no topo da imagem.
 // Chame antes do SDL_GL_SwapWindow do quadro que quer gravar.
 void save_ppm(const char* path, int width, int height);
