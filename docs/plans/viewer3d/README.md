@@ -95,6 +95,8 @@ Converter o PPM para ver: `python3 -c "from PIL import Image; Image.open('arq.pp
 
 ## Depois do MVP (não fazer agora)
 
+Melhorias de GPU já feitas e a fazer, com medidas e checklist para a RTX 4050: [melhorias_gpu.md](melhorias_gpu.md).
+
 Em ordem provável: (1) **Polônia** com LOD e streaming de blocos; (2) portar PSSG/NEFS para `dr2core` em C++ (mmap e cache em disco) comparando com o Python como oráculo; (3) ImGui (backends SDL3+OpenGL3) para painéis; (4) Windows nativo e empacotamento; (5) o Car Explorer no app nativo; (6) comunicação com o hook do jogo (canal local) para mostrar o carro no mapa. Nada disso entra no MVP.
 
 ## Estado

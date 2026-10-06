@@ -150,4 +150,6 @@ Falta, na máquina do dono, com a Montalegre:
 
 (Fora do plano; anotar aqui e seguir.)
 
+- Melhorias de GPU (texturas comprimidas e em segundo plano, corte incremental das instâncias, picking com profundidade, índices de 16 bits, medição de VRAM): [`melhorias_gpu.md`](../../docs/plans/viewer3d/melhorias_gpu.md).
+
 - Um modo `--script` que leia uma lista de ações (selecionar, mover, gravar) para testar a edição sem `xdotool`.

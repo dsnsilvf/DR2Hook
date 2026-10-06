@@ -179,6 +179,8 @@ Ver o item 3. O que mais muda o uso:
 
 ## 12. Os 5 próximos passos
 
+As melhorias de GPU (feitas, a fazer e o checklist para a 4050) estão anotadas em [`plans/viewer3d/melhorias_gpu.md`](../plans/viewer3d/melhorias_gpu.md).
+
 1. **Testar na sua máquina:** Montalegre, RTX 4050, `--vsync 0`, e o `edit_roundtrip` com o `python -m tools.uiview.track.edit` num `.nefs` novo. Tudo até aqui foi em software.
 2. **Texturas assíncronas e comprimidas (BC1/BC3),** com limite de tamanho e contagem de memória de vídeo. É o maior risco de VRAM que sobrou.
 3. **Separar a sessão de edição do `TrackView`** e dividir o `ui.cpp`, antes de crescer mais.
