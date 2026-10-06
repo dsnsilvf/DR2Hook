@@ -84,6 +84,14 @@ Anotar para cada câmera, na Montalegre e na pista de estresse:
 
 | Câmera | FPS | Tempos de carga e envio (stderr) | VRAM (`nvidia-smi`) | RAM (pico) |
 | --- | --- | --- | --- | --- |
+| Montalegre, padrão | 323 | leitura 0,006 s, envio 0,009 s | 671 MB | 344 MB |
+| Montalegre, rente ao chão | 433 | idem | 621 MB | 351 MB |
+| Montalegre, panorâmica | 351 | idem | 674 MB | 352 MB |
+| Estresse (27,4 M vértices, 35,7 M triângulos), padrão | 159 | leitura 0,68 s, envio 0,73 s | 1697 MB | 2270 MB |
+| Estresse, rente ao chão | 164 | leitura 0,51 s, envio 0,71 s | 1696 MB | 2270 MB |
+| Estresse, panorâmica | 154 | leitura 0,53 s, envio 0,69 s | 1698 MB | 2270 MB |
+
+Medido na RTX 4050 do dono em 2026-10-06, `--vsync 0 --frames 300 --wait-textures`, commit `3435fb2`; a VRAM é a leitura de `GL_NVX_gpu_memory_info` do próprio viewer, com 42 MB em uso antes de abrir. Pior quadro: 7 a 22 ms na Montalegre, 17 a 21 ms no estresse. Texturas da Montalegre: 335 a 376 na GPU, 217 a 267 MB estimados de 1536, 0 descartadas, ~0,5 s de decodificação nas threads. As três câmeras do estresse vêm da checklist e olham para o mesmo ponto fixo `(0, 100, 0)`; o número parecido nas três indica que o corte por frustum e a grade seguram a pista de 27 M vértices, mas elas não varrem a pista toda.
 
 Com esses números, decidir:
 - se o raio automático (item 3.2) é necessário;
