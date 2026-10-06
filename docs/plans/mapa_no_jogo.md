@@ -164,6 +164,8 @@ Ferramentas novas: `BlockPatch` em `tools/egodata/nefs_write.py` (grava só os b
 - Com as caixas de culling **abertas** (`widen_bounding_boxes`), a simulação **parou**: o carro ficou preso na largada, a câmera livre não mexeu e a imagem ficou com camadas espelhadas e "tudo transparente". Hipótese: culling aberto faz o motor processar o mundo todo (sombras ou LOD) e o quadro trava.
 - Com as caixas intactas (`--no-widen`), a câmera livre responde e o chão aparece **lavado de branco** (as árvores e os prédios aparecem boiando); **a geometria do Ring não é reconhecível**. O formato dos dados está certo, então a hipótese é que o sombreador do `batchmaterial` precisa de algo que não escrevemos (cor/peso por vértice, textura derivada da posição, ou os intervalos de mistura), ou que o plano claro é o próprio Ring sem textura.
 
+**Mudança de direção (2026-10-06, a pedido do dono):** os passos abaixo (quadrado de teste etc.) ficam suspensos. Antes de qualquer novo transplante, fazer engenharia reversa do carregamento da pista (leitores de `tracksplit`/`objects.ens`/`track.jpk`, montagem do terreno e do culling, uso de cor/ST pelo sombreador do `batchmaterial`) e só então fornecer a pista por um caminho próprio, em vez de sobrescrever dados da hospedeira.
+
 **Próximos passos propostos**
 1. Isolar o sombreador: preencher **uma** malha com um quadrado plano de 500 m perto da largada, variando a cor do vértice (R = 0, 128, 255; B = 199 ou 0), e fotografar de cima com o `cam`. Isso diz se o chão branco é a nossa geometria e como a cor controla a aparência.
 2. Copiar a cor dos vértices vizinhos da Montalegre (por posição) em vez de uma cor fixa, se a cor for peso de mistura.
