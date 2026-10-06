@@ -126,11 +126,52 @@ Ela grava `trace_<data>.tsv`, com tipos `open`, `read`, `attr`, `mark`, `tevent`
 `pssg+`/`pssg-`, `submit`, `subfile`, `buf`, `tex2d`, `layout` e `class`. Também grava
 `modules_<data>.txt`, `manifests/` (manifestos do `c5fda0`) e `shaders/`.
 
-## 6. Em aberto
+## 6. Tokens da corrida (medidos, 2026-10-06)
+
+A tabela passada ao `c5ff80` é um hash map (inserção em `0x1401d5de0`). A lista encadeada tem o
+sentinela em tabela+0x20, o próximo nó em nó+8, a chave (`char*`) em nó+0x20 e o valor em
+nó+0x58. Cada valor é uma string fixa de 0x100 bytes. A LoadProbe grava uma linha `token` por
+entrada. Na Montalegre via AutoStage, `tracks/track_loader.xml` recebeu 44 tokens, entre eles:
+
+| token | valor | token | valor |
+|---|---|---|---|
+| `location` | `portugal` | `ppLocation` | `portugal/` |
+| `track` | `montalegre_rallycross` | `ppTrack` | `montalegre_rallycross/` |
+| `route` | `route_0` | `aoRoute` | `route_0` |
+| `routeID` / `route_number` | `0` | `tutorials` | `montalegre_rallycross` |
+| `skyTime` / `skyCloud` / `skyVariant` | `midday` / `dry` / `00` | `gameMode` | `tool` |
+| `bindTrackAfterLoad` | `1` | `bindObjectIndexData` | `0` |
+| `entitiesEnabled` / `crowdEnable` | `1` / `1` | `direction` | `fwd` |
+
+Os `gameMode*` vazios fazem as linhas `%gameModeAITrack%ai_track.xml` virarem `ai_track.xml`.
+Trocar `location`/`track` (e `pp*`) na tabela muda todos os caminhos do manifesto de uma vez.
+
+## 7. Sistema de arquivos virtual: camadas de pasta
+
+`0x1403a3d70` cria o I/O no boot. Ele monta `/data` com `game/game.nefs` e as partes sem
+cabeçalho (`game.dat`, `game_1.dat`) e também monta **pastas soltas** do disco em
+`/data/video` e `/data/input`. A camada de pasta é criada assim:
+
+```
+camada = alocador->vtable[0x18](0x128, 8)       ; 0x128 bytes
+0x1407fcd40(camada)                             ; construtor da camada de pasta
+0x14080d110(caminho, 0x104, base, "video")      ; junta pasta do jogo + nome
+0x140813860(camada, alocador, caminho)          ; raiz da camada no disco
+0x140815840(iosys, camada, "/data/video", prioridade, &montagem, 0)
+```
+
+A montagem da pista (`0x140505ae0`, chamada por vtable na thread de montagem) usa o mesmo
+caminho quando o pedido tem o bit 8 em pedido+0x14: monta uma pasta (base em pedido+0x28, nome em
+pedido+0x58) no ponto virtual pedido+0xda com prioridade 1. Sem o bit, monta o pacote
+(`0x14081a170`/`81a180`/`81a190`). Os logs internos dessa função falam em "Patching %s from disc"
+e "Patching %s from content". Hipótese: o motor já sabe servir uma location a partir de uma
+pasta (modo de desenvolvimento), e esse seria o caminho para arquivos soltos sem editar
+NeFS nem exe.
+
+## 8. Em aberto
 
 - Formato do `base.ctpk`.
 - Decodificador do BXML (`\x01BXML`/`\0BXML`; o `bxml.py` do repo é outro formato).
-- Onde o caminho virtual (`tracks/locations/...`) vira item do `.nefs`: seria o ponto para servir
-  arquivos soltos por cima do pacote.
-- Layout da tabela de tokens passada ao `c5ff80`.
+- Quem liga o bit 8 do pedido de montagem e o que é o "Patching from disc".
+- Prioridade entre uma camada de pasta e o `.nefs` montado no mesmo ponto.
 - Uso do UAV nos VB do terreno.

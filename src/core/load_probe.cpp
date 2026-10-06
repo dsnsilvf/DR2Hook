@@ -590,6 +590,19 @@ uint64_t DetourSubmitFile(void *mgr, const char *file, int flags, void *tokens, 
     l.add("\t%s\t%d\t%p\t%p\t%u", SafeStr(file, 160).c_str(), flags, tokens, a5, a6);
     l.stack();
     l.emit();
+    // Tabela de tokens (hash map de 0x1401d5de0): lista com sentinela em +0x20, próximo nó em
+    // nó+8, chave (char*) em nó+0x20 e, pelo layout do par montado em 0x140489d61, valor em nó+0x58.
+    if (tokens != nullptr) {
+      const char *sentinel = static_cast<const char *>(tokens) + 0x20;
+      const char *node = ReadOr<const char *>(sentinel + 8, nullptr);
+      for (int i = 0; i < 256 && node != nullptr && node != sentinel; ++i) {
+        Line t("token");
+        t.add("\t%s\t%s\t%s", SafeStr(file, 60).c_str(), SafeStr(ReadOr<const char *>(node + 0x20, nullptr), 64).c_str(),
+              SafeStr(ReadOr<const char *>(node + 0x58, nullptr), 160).c_str());
+        t.emit();
+        node = ReadOr<const char *>(node + 8, nullptr);
+      }
+    }
   }
   return g_origSubmitFile(mgr, file, flags, tokens, a5, a6);
 }
@@ -770,7 +783,7 @@ bool InstallLoadProbe() {
     else g_attrTargets[1] = nullptr;
   }
   RegisterTickCallback(&OnTick);
-  Logger::Info("LoadProbe: ativo em " + Narrow(trace.c_str()) + " (D3D11 " + std::to_string(gpu) + "/5, exe " + std::to_string(exe) + "/5, atributos " +
+  Logger::Info("LoadProbe: ativo em " + Narrow(trace.c_str()) + " (D3D11 " + std::to_string(gpu) + "/5, exe " + std::to_string(exe) + "/" + std::to_string(std::size(g_exeTargets)) + ", atributos " +
                std::to_string(attr) + "/2, pilha " + std::to_string(g_cfg.stack) + ").");
   return true;
 }
