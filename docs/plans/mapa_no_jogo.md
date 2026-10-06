@@ -134,7 +134,21 @@ locations\portugal__montalegre_rallycross.nefs = Z:\home\deivison\Projetos\DR2Mo
 - **U2 fechada:** dá para entregar ao jogo um `.nefs` de fora da pasta do jogo, sem escrever nela.
 - A `dxgi.dll` instalada foi trocada pela de `build/win-redirect/`; a anterior ficou em `dxgi.dll.bak-before-redirect-20261006`.
 
-**Preparação do E3 (offline, ainda não carregado no jogo):** `scripts/research/make_edit_test.py` monta um `edits.json` que sobe 40 m o pórtico de largada do Montalegre (`mnt_startgantry_a`, um registro em `route_0/ornaments.bin`), e `python -m tools.uiview.track.edit` grava `build/redirect/montalegre_edit.nefs`. Conferência: dos 67 arquivos com dados, **só `route_0/ornaments.bin` difere, em 1 byte**, e o tamanho e os blocos dos arquivos grandes são iguais. Falta carregar no jogo, que exige o OK do dono.
+**Preparação do E3 (offline, ainda não carregado no jogo):** `scripts/research/make_edit_test.py` monta um `edits.json` que sobe 40 m o pórtico de largada do Montalegre (`mnt_startgantry_a`, um registro em `route_0/ornaments.bin`), e `python -m tools.uiview.track.edit` grava `build/redirect/montalegre_edit.nefs`. Conferência: dos 67 arquivos com dados, **só `route_0/ornaments.bin` difere, em 1 byte**, e o tamanho e os blocos dos arquivos grandes são iguais. Carregado no jogo com o OK do dono (resultado abaixo).
+
+**Resultado do E3 e U1 fechada (2026-10-06):** o primeiro `montalegre_edit.nefs` derrubou o jogo na abertura (`exe+0x816b13`). Controles, todos com o mesmo redirect e a mesma largada pelo AutoStage:
+
+| Pacote | Cabeçalho | Resultado |
+|---|---|---|
+| cópia idêntica | igual | carrega |
+| C: cópia + 64 KiB no fim | igual | carrega |
+| D: mesmo conteúdo gravado por `replace_files` | 10 bytes diferem (1 offset em P1, 6 fins de bloco em P4) | **crash** |
+| F: cópia com 1 bit trocado no campo de 32 bytes em +4 | 1 bit | **crash** |
+| E3 recalculando o campo em +4 | P1/P4 novos + hash novo | **carrega** |
+
+Causa: o campo de 32 bytes em +4 do cabeçalho é um **SHA-256 de `"NeFS"` + cabeçalho a partir do offset 0x24 até o fim do cabeçalho** (103.936 B no Montalegre; conferido com o original). O jogo o confere ao abrir o pacote (`0x14087f4e0` chama `0x14087d4f0`: inicializa o hash, atualiza com os 4 bytes do magic e com `header[0x24:tamanho]`, finaliza e compara com `header+4`; se diferir, o erro vira `0x140816b10`, que escreve em `*(int*)código` de propósito, daí o "acesso ao endereço 6"). O tamanho do arquivo e o conteúdo editado não importam. `tools/egodata/nefs_write.py` agora recalcula o hash (`header_hash`/`with_header_hash`) quando o intro do pacote está em claro, que é o caso dos pacotes de pista. Os pacotes de carros/UI com intro assinado ainda não passam por esse caminho.
+
+Com isso, **a escrita de pacotes que o jogo aceita está resolvida**: o E3 (pórtico de largada subido 40 m, `build/redirect/montalegre_E3_hash.nefs`) carregou até a largada. A conferência visual da altura do pórtico ainda não foi feita (a câmera do replay/benchmark não coincide entre as execuções); usar a câmera livre (F9) no ponto de largada na próxima vez.
 
 ## Alternativa que não passa pelos `.nefs`
 

@@ -2,13 +2,15 @@
 
 O cabeçalho do pacote não muda de tamanho: o arquivo novo vai para o fim do volume, e só
 mudam o offset do item (P1), os fins de bloco (P4) e o tamanho no diretório (P2). O intro
-de 128 bytes (assinado, não dá para refazer) fica como está, e o resto do cabeçalho é
+de 128 bytes (assinado, não dá para refazer) fica como está (nos pacotes de pista, em claro, o
+hash SHA-256 em +4 é recalculado: o jogo o confere e cai se não bater), e o resto do cabeçalho é
 cifrado de novo com a mesma chave. Por isso o arquivo novo precisa caber no mesmo número
 de blocos de 64 KiB do original.
 """
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import struct
 import zlib
@@ -99,7 +101,7 @@ def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) ->
 
         plain_header = bytes(header)
         if arc.header[:4] == MAGIC and _intro_is_plain(arc.data_path):
-            stored = plain_header
+            stored = with_header_hash(plain_header)
         else:
             rest = plain_header[INTRO_SIZE:]
             pad = -len(rest) % 16
@@ -107,6 +109,15 @@ def replace_files(arc: NefsArchive, changes: dict[str, bytes], out_path: str) ->
         fh.seek(0)
         fh.write(stored)
     return results
+
+
+def header_hash(header: bytes) -> bytes:
+    """SHA-256 de `NeFS` + cabeçalho a partir do offset 0x24; o jogo confere com os 32 bytes em +4."""
+    return hashlib.sha256(header[:4] + header[0x24:]).digest()
+
+
+def with_header_hash(header: bytes) -> bytes:
+    return header[:4] + header_hash(header) + header[0x24:]
 
 
 def _intro_is_plain(path: str) -> bool:
