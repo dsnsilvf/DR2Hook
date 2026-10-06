@@ -53,8 +53,23 @@ add_library(dr2render STATIC
 target_include_directories(dr2render PUBLIC src)
 target_link_libraries(dr2render PUBLIC dr2core GLEW::GLEW OpenGL::GL glm_headers PRIVATE PkgConfig::WEBP)
 
-add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp)
-target_link_libraries(viewer3d PRIVATE dr2render dr2edit SDL3::SDL3)
+# Dear ImGui 1.91.9b (third_party/imgui/README.md) com os backends SDL3 e OpenGL3: os painéis do app.
+# Sem os avisos do projeto (código de terceiros, sem mudança).
+add_library(imgui STATIC
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_sdl3.cpp
+    third_party/imgui/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui SYSTEM PUBLIC third_party/imgui third_party/imgui/backends)
+target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+target_compile_options(imgui PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)
+target_link_libraries(imgui PUBLIC SDL3::SDL3 ${CMAKE_DL_LIBS})
+
+add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp src/app/ui.cpp)
+target_link_libraries(viewer3d PRIVATE dr2render dr2edit imgui SDL3::SDL3)
 
 add_executable(camera_test tests/camera_test.cpp)
 target_include_directories(camera_test PRIVATE src)

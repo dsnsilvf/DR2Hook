@@ -14,6 +14,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <cmath>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
@@ -24,8 +26,11 @@ class TrackView {
 public:
     enum class Tool { Navigate, Move, Rotate };
 
-    // `out`: caminho do edits.json (vazio = build/uiview/saves/<id>.edits.json).
-    TrackView(const std::string& dir, std::string out);
+    // `out`: caminho do edits.json (vazio = default_out). Se ele existe e `resume`, as edições dele
+    // voltam para a sessão (continuar de onde parou).
+    TrackView(const std::string& dir, std::string out, bool resume = true);
+    // <raiz>/saves/<id>.edits.json para uma pista em <raiz>/tracks/<id>; senão build/uiview/saves/.
+    static std::string default_out(const std::string& dir, const std::string& id);
 
     // Enquadra a rota como tvFrameRoute: centro da caixa da IA e dos portões, pitch 0,7.
     void frame_route(render::OrbitCamera& cam) const;
@@ -42,17 +47,62 @@ public:
     void click(float x, float y, float w, float h, const render::OrbitCamera& cam);
     bool has_selection() const { return sel_ >= 0; }
     void deselect() { sel_ = -1; }
+    // Instância selecionada (-1 = nenhuma). select aceita apagadas (pela árvore, para Restaurar);
+    // mover e girar não agem nelas.
+    int selected() const { return sel_; }
+    void select(int i);
     // Grava o edits.json; false se falhou (a mensagem fica em status() e o programa segue).
     bool save();
     // Há edições diferentes das da última gravação (ou do arquivo aberto)?
     bool unsaved() const;
     // Última mensagem para o usuário (gravou, falhou, não abriu a rota).
     const std::string& status() const { return status_; }
+    double status_age() const;  // segundos desde a última mensagem
     void set_status(std::string msg);
     Tool tool() const { return tool_; }
     const Instances& instances() const { return inst_; }
     // Troca para a rota seguinte (+1) ou anterior (-1), guardando as edições da atual.
     void switch_route(int step);
+    // Abre a rota `index` (guarda as edições da atual); se falhar, fica na atual e avisa em status().
+    void open_route(std::size_t index);
+    std::size_t route_index() const { return route_index_; }
+    const Route& route() const { return *route_; }
+
+    // Ações (as mesmas dos atalhos), para os painéis.
+    void set_tool(Tool t) { if (!drag_.active) tool_ = t; }
+    bool undo();
+    bool redo();
+    // Volta ou avança o histórico até a posição `pos` (0 = antes da primeira edição).
+    void history_go(std::size_t pos);
+    const edit::History& history() const { return hist_; }
+    void delete_selected();
+    void duplicate_selected();
+    void restore_selected();
+    void turn_selected(float deg);
+    void frame_selected(render::OrbitCamera& cam) const;
+
+    // Mudança contínua (campos numéricos, gizmo): begin guarda o antes, set_matrix aplica sem
+    // histórico, end empilha um passo só. A posição fica na matriz (m[9..11]).
+    bool begin_change(std::uint32_t i);
+    void set_matrix(const float* m);
+    void end_change(const char* label);
+    bool changing() const { return drag_.active; }
+
+    // Encaixe: passo do mover (m; 0 = livre) e do girar por arraste (graus; 0 = livre).
+    float snap_move = 0.0f, snap_turn = 0.0f;
+
+    // Camadas e raio, para os painéis.
+    render::Layers& layers() { return layers_; }
+    bool& show_terrain() { return show_terrain_; }
+    bool& show_gates() { return show_gates_; }
+    bool& show_ai() { return show_ai_; }
+    float& draw_dist() { return draw_dist_; }
+    const render::InstanceRenderer& objects() const { return *objects_; }
+    const render::Terrain& terrain() const { return *terrain_; }
+    render::TextureCache& textures() { return textures_; }
+    const std::string& out_path() const { return out_; }
+    // Arquivo de origem do tipo pelo kind: objects.ens (e), ornaments.bin (o), trees.bin (t).
+    static const char* source_file(const std::string& type_name);
     // Corta pela câmera atual e desenha.
     void draw(const glm::mat4& view_proj, const render::OrbitCamera& cam);
     std::string title() const;
@@ -80,8 +130,13 @@ private:
     int sel_ = -1;
     edit::History hist_;
     std::string status_;
+    std::chrono::steady_clock::time_point status_time_{};
+    void resume_edits();
     std::string saved_text_;  // edits.json da última gravação (ou sem edições), para saber se há o que gravar
     bool wrote_ = false;      // já gravou nesta sessão (a cópia .bak só no primeiro Ctrl+S)
+    unsigned saves_ = 0;
+    mutable bool unsaved_ = false;
+    mutable unsigned unsaved_rev_ = ~0u, unsaved_saves_ = ~0u;
     std::string current_edits() const;
     void after_history();
     struct Saved {
@@ -99,10 +154,10 @@ private:
         glm::vec3 start{};
         float sy = 0, ex = 0;
         bool shift = false;
+        bool numeric = false;  // begin_change (painel ou gizmo), não arraste do mouse no chão
     } drag_;
-    void frame_selected(render::OrbitCamera& cam) const;
     void commit(const char* label, std::vector<edit::Snap> before);
-    void delete_selected();
+    float snapped(float v, float step) const { return step > 0 ? std::round(v / step) * step : v; }
     bool show_terrain_ = true, show_gates_ = true, show_ai_ = true;
 };
 

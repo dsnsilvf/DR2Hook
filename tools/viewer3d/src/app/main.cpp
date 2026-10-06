@@ -11,6 +11,7 @@
 // "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
 
 #include "app/track_view.hpp"
+#include "app/ui.hpp"
 #include "render/camera.hpp"
 #include "render/gl.hpp"
 
@@ -37,6 +38,8 @@ struct Options {
     const char* track = nullptr;
     const char* out = nullptr;  // edits.json
     int vsync = 1;
+    bool panels = true;
+    bool fresh = false;  // não retoma o edits.json que já existe
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
 };
@@ -72,8 +75,12 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.has_camera = true;
         } else if (std::strcmp(argv[i], "--vsync") == 0 && i + 1 < argc) {
             opt.vsync = std::atoi(argv[++i]) != 0 ? 1 : 0;
+        } else if (std::strcmp(argv[i], "--fresh") == 0) {
+            opt.fresh = true;
+        } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
+            opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -102,7 +109,7 @@ public:
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-        window_ = SDL_CreateWindow("DR2 Viewer3D", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        window_ = SDL_CreateWindow("DR2 Viewer3D", 1440, 810, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!window_) {
             auto err = sdl_error("SDL_CreateWindow");
             release();
@@ -135,6 +142,7 @@ public:
     Platform& operator=(const Platform&) = delete;
 
     SDL_Window* window() const { return window_; }
+    SDL_GLContext context() const { return context_; }
 
 private:
     void release() {
@@ -264,6 +272,7 @@ struct Drag {
     bool active = false;
     bool pan = false;
     bool edit = false;
+    bool gizmo = false;
     Uint8 button = 0;
     float moved = 0;
 };
@@ -273,71 +282,81 @@ struct Input {
     // Teclas apertadas durante um atalho com Ctrl: não andam até serem soltas (soltar o Ctrl antes do S
     // não move a câmera).
     bool chord[SDL_SCANCODE_COUNT] = {};
-    // Sair com edições não gravadas pede confirmação: o segundo Esc (ou fechar) até este instante sai.
-    Uint64 quit_until = 0;
 };
 
-// Sair agora? Com edições não gravadas, a primeira tentativa só avisa.
-bool confirm_quit(dr2::app::TrackView* track, Input& input) {
-    if (!track || !track->unsaved()) return true;
-    const Uint64 now = SDL_GetTicks();
-    if (now < input.quit_until) return true;
-    input.quit_until = now + 3000;
-    track->set_status("edições não gravadas: Ctrl+S grava; Esc ou fechar de novo em 3 s sai sem gravar");
-    return false;
-}
-
-// Traduz eventos SDL em chamadas da câmera e da pista. Devolve false para sair.
+// Traduz eventos SDL em chamadas da câmera, da pista e dos painéis. Devolve false para sair.
+// `vp` é a área do 3D na janela: o mouse fora dela é dos painéis.
 bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& drag, dr2::app::TrackView* track,
-                  SDL_Window* window, Input& input) {
-    int ww = 1, wh = 1;
-    SDL_GetWindowSize(window, &ww, &wh);
-    const float w = static_cast<float>(std::max(1, ww)), h = static_cast<float>(std::max(1, wh));
+                  dr2::app::EditorUi& ui, const dr2::app::Rect& vp, Input& input) {
     const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    // um arraste começado no 3D continua mesmo se o mouse passar sobre um painel
+    const bool ui_took = ui.event(event) && !drag.active;
     switch (event.type) {
     case SDL_EVENT_QUIT:
-        return !confirm_quit(track, input);
+        if (ui.ask_quit(track)) return false;
+        break;
     case SDL_EVENT_KEY_UP:
         input.chord[event.key.scancode] = false;
         break;
     case SDL_EVENT_KEY_DOWN:
         if (event.key.mod & SDL_KMOD_CTRL) input.chord[event.key.scancode] = true;
+        if (ui_took) break;
+        if (event.key.key == SDLK_F10) {
+            ui.panels = !ui.panels;
+            break;
+        }
+        if (event.key.key == SDLK_F11) {
+            ui.toggle_help();
+            break;
+        }
         if (event.key.key == SDLK_ESCAPE) {
-            if (track && track->has_selection()) track->deselect();  // Esc tira a seleção; sem seleção, sai
-            else return !confirm_quit(track, input);
+            if (track) track->deselect();  // Esc só tira a seleção; sair é Ctrl+Q ou fechar a janela
+            else if (ui.ask_quit(track)) return false;  // cena de teste: nada a perder
+            break;
+        }
+        if (event.key.key == SDLK_Q && (event.key.mod & SDL_KMOD_CTRL)) {
+            if (ui.ask_quit(track)) return false;
             break;
         }
         if (track && track->key(event.key.key, event.key.mod, cam)) break;
         if (event.key.key == SDLK_F) cam.reset();
         break;
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if (drag.active) break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+        if (drag.active || ui_took) break;
+        const float x = event.button.x, y = event.button.y;
+        if (!vp.contains(x, y)) break;
         drag = Drag{};
         drag.button = event.button.button;
         if (event.button.button == SDL_BUTTON_LEFT) {
             drag.active = true;
+            if (track) drag.gizmo = ui.gizmo_press(*track, cam, x, y);
             // com Mover/Girar sobre um objeto, Shift é subir e descer; fora de objeto, Shift é pan
-            if (track) drag.edit = track->begin_edit(event.button.x, event.button.y, w, h, cam, shift);
-            drag.pan = shift && !drag.edit;
+            if (track && !drag.gizmo) drag.edit = track->begin_edit(x - vp.x, y - vp.y, vp.w, vp.h, cam, shift);
+            drag.pan = shift && !drag.edit && !drag.gizmo;
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             drag.active = true;
             drag.pan = true;
         }
         break;
+    }
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (!drag.active || event.button.button != drag.button) break;
-        if (drag.edit) track->end_edit();
-        else if (track && drag.button == SDL_BUTTON_LEFT && drag.moved < 5) track->click(event.button.x, event.button.y, w, h, cam);
+        if (drag.gizmo) ui.gizmo_release(*track);
+        else if (drag.edit) track->end_edit();
+        else if (track && drag.button == SDL_BUTTON_LEFT && drag.moved < 5)
+            track->click(event.button.x - vp.x, event.button.y - vp.y, vp.w, vp.h, cam);
         drag = Drag{};
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (!drag.active) break;
         drag.moved += std::fabs(event.motion.xrel) + std::fabs(event.motion.yrel);
-        if (drag.edit) track->edit_drag(event.motion.x, event.motion.y, w, h, cam, shift);
+        if (drag.gizmo) ui.gizmo_drag(*track, cam, event.motion.x, event.motion.y);
+        else if (drag.edit) track->edit_drag(event.motion.x - vp.x, event.motion.y - vp.y, vp.w, vp.h, cam, shift);
         else if (drag.pan) cam.pan(event.motion.xrel, event.motion.yrel);
         else cam.orbit(event.motion.xrel, event.motion.yrel);
         break;
     case SDL_EVENT_MOUSE_WHEEL:
+        if (ui_took) break;
         cam.zoom(event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
         break;
     default:
@@ -347,13 +366,30 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
 }
 
 // WASD a cada quadro, pelo estado do teclado (segurar a tecla anda continuamente).
-void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input) {
+void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input, const dr2::app::EditorUi& ui) {
     if (SDL_GetModState() & SDL_KMOD_CTRL) return;  // Ctrl+S, Ctrl+Z…: atalhos, não andar
+    if (ui.wants_keyboard()) return;                // digitando num campo
     const bool* keys = SDL_GetKeyboardState(nullptr);
     auto down = [&](SDL_Scancode k) { return keys[k] && !input.chord[k] ? 1.0f : 0.0f; };
     const float ahead = down(SDL_SCANCODE_W) - down(SDL_SCANCODE_S);
     const float side = down(SDL_SCANCODE_D) - down(SDL_SCANCODE_A);
     if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
+}
+
+// Abre a pista em `dir` no lugar da atual; se falhar, a atual continua e a mensagem vai para os painéis.
+void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2::app::TrackView>& track,
+                std::unique_ptr<TestScene>& scene, dr2::render::OrbitCamera& cam, dr2::app::EditorUi& ui) {
+    try {
+        // --out só vale para a pista da linha de comando; as outras gravam no caminho padrão
+        auto next = std::make_unique<dr2::app::TrackView>(dir, opt.track && dir == opt.track && opt.out ? opt.out : "");
+        track = std::move(next);
+        scene.reset();
+        track->frame_route(cam);
+        ui.show_message("");
+    } catch (const std::exception& e) {
+        ui.show_message("não abriu " + dir + ": " + e.what());
+        std::fprintf(stderr, "viewer3d: não abriu %s: %s\n", dir.c_str(), e.what());
+    }
 }
 
 int run(const Options& opt) {
@@ -366,7 +402,7 @@ int run(const Options& opt) {
     std::unique_ptr<TestScene> scene;
     std::unique_ptr<dr2::app::TrackView> track;
     if (opt.track) {
-        track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "");
+        track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh);
         track->frame_route(cam);
     } else {
         scene = std::make_unique<TestScene>(cam.target);
@@ -377,37 +413,53 @@ int run(const Options& opt) {
         cam.dist = opt.camera[2];
         cam.target = {opt.camera[3], opt.camera[4], opt.camera[5]};
     }
+    dr2::app::EditorUi ui(window, platform.context());
+    ui.panels = opt.panels;
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
     Drag drag;
     Input input;
+    dr2::app::Rect vp;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 title_t0 = SDL_GetPerformanceCounter();
     Uint64 last_t = title_t0;
     const Uint64 start_t = title_t0;
     long title_frames = 0;
     long frames = 0;
+    float fps = 0.0f;
     bool running = true;
 
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event))
-            if (!handle_event(event, cam, drag, track.get(), window, input)) running = false;
+            if (!handle_event(event, cam, drag, track.get(), ui, vp, input)) running = false;
         const Uint64 frame_t = SDL_GetPerformanceCounter();
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
-        walk_keys(cam, dt, input);
+        walk_keys(cam, dt, input, ui);
 
-        int w = 0, h = 0;
+        // painéis primeiro: dizem quanto sobra para o 3D
+        vp = ui.frame(track.get(), cam, fps);
+        if (ui.quit_request) running = false;
+
+        int w = 0, h = 0, ww = 1, wh = 1;
         SDL_GetWindowSizeInPixels(window, &w, &h);
+        SDL_GetWindowSize(window, &ww, &wh);
+        const float sx = static_cast<float>(w) / static_cast<float>(std::max(1, ww));
+        const float sy = static_cast<float>(h) / static_cast<float>(std::max(1, wh));
         glViewport(0, 0, w, h);
         glClearColor(0.55f, 0.68f, 0.82f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
+        const int vx = static_cast<int>(vp.x * sx), vw = std::max(1, static_cast<int>(vp.w * sx));
+        const int vh = std::max(1, static_cast<int>(vp.h * sy)), vy = h - static_cast<int>(vp.y * sy) - vh;
+        glViewport(vx, vy, vw, vh);
+        const float aspect = static_cast<float>(vw) / static_cast<float>(vh);
         const glm::mat4 view_proj = cam.proj(aspect) * cam.view();
         if (track) track->draw(view_proj, cam);
         else scene->draw(view_proj);
+        glViewport(0, 0, w, h);
+        ui.render(track.get(), cam, view_proj, vp);
         dr2::gl::warn("quadro");  // um erro de GL num quadro avisa, não fecha o editor com edições abertas
 
         ++frames;
@@ -415,14 +467,22 @@ int run(const Options& opt) {
         if (last && opt.screenshot) dr2::gl::save_ppm(opt.screenshot, w, h);  // antes do swap: lê o back buffer
         SDL_GL_SwapWindow(window);
 
+        if (!ui.open_request.empty()) {
+            const std::string dir = std::move(ui.open_request);
+            ui.open_request.clear();
+            drag = Drag{};
+            open_track(dir, opt, track, scene, cam, ui);
+        }
+
         ++title_frames;
         const Uint64 now = SDL_GetPerformanceCounter();
         const double elapsed = static_cast<double>(now - title_t0) / static_cast<double>(freq);
         if (elapsed >= 0.5) {
+            fps = static_cast<float>(title_frames / elapsed);
             char title[512];
             const std::string what = track ? " | " + track->title() : std::string();
             std::snprintf(title, sizeof title, "DR2 Viewer3D | %s | GL %s%s | %.0f fps", renderer.c_str(), version.c_str(),
-                          what.c_str(), title_frames / elapsed);
+                          what.c_str(), static_cast<double>(fps));
             SDL_SetWindowTitle(window, title);
             title_t0 = now;
             title_frames = 0;

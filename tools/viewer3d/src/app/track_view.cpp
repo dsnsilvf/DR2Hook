@@ -2,6 +2,7 @@
 
 #include "core/dr2m.hpp"
 #include "core/io.hpp"
+#include "core/json.hpp"
 #include "edit/edits_json.hpp"
 #include "render/pick.hpp"
 
@@ -28,9 +29,20 @@ std::string thousands(std::size_t n) {
 
 }  // namespace
 
-TrackView::TrackView(const std::string& dir, std::string out)
+std::string TrackView::default_out(const std::string& dir, const std::string& id) {
+    // pista exportada em <raiz>/tracks/<id>: grava em <raiz>/saves, qualquer que seja a pasta atual
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path abs = fs::absolute(fs::path(dir), ec).lexically_normal();
+    if (!abs.has_filename()) abs = abs.parent_path();
+    if (!ec && abs.parent_path().filename() == "tracks")
+        return (abs.parent_path().parent_path() / "saves" / (id + ".edits.json")).generic_string();
+    return "build/uiview/saves/" + id + ".edits.json";
+}
+
+TrackView::TrackView(const std::string& dir, std::string out, bool resume)
     : track_(read_track(dir)), dir_(dir), textures_(dir, track_.materials), out_(std::move(out)) {
-    if (out_.empty()) out_ = "build/uiview/saves/" + track_.id + ".edits.json";
+    if (out_.empty()) out_ = default_out(dir, track_.id);
     if (edit::inside_game_folder(out_)) throw std::runtime_error("--out " + out_ + " fica dentro da pasta do jogo");
     if (std::filesystem::is_directory(out_)) throw std::runtime_error("--out " + out_ + " é uma pasta; passe o caminho do arquivo .json");
 
@@ -44,8 +56,41 @@ TrackView::TrackView(const std::string& dir, std::string out)
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
-    if (std::filesystem::exists(out_))
-        std::fprintf(stderr, "viewer3d: %s já existe; o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak\n", out_.c_str());
+    if (std::filesystem::exists(out_)) {
+        if (resume) resume_edits();
+        else set_status(out_ + " já existe e não foi lido (--fresh); o primeiro Ctrl+S guarda uma cópia dele em .<n>.bak");
+    }
+}
+
+void TrackView::resume_edits() {
+    // continua a sessão anterior: as edições gravadas voltam para as rotas, sem histórico
+    try {
+        const json::Value doc = json::parse_file(out_);
+        edit::ApplyReport rep;
+        for (const std::string& name : edit::routes_in_edits(doc)) {
+            std::size_t k = 0;
+            while (k < track_.routes.size() && track_.routes[k].name != name) ++k;
+            if (k == track_.routes.size()) {
+                rep.skipped.push_back(name + ": rota não existe nesta pista");
+                continue;
+            }
+            if (k == route_index_) {
+                edit::apply_edits(doc, track_, track_.routes[k], inst_, rep);
+            } else {
+                Instances other = read_dr2i(read_file(join_path(dir_, "inst_" + name + ".bin")), track_.types.size());
+                edit::apply_edits(doc, track_, track_.routes[k], other, rep);
+                saved_[k] = Saved{std::move(other), edit::History{}};
+            }
+        }
+        objects_->regroup(inst_);
+        ++edit_rev_;
+        saved_text_ = current_edits();  // o que está no arquivo não é "não gravado"
+        for (const std::string& w : rep.skipped) std::fprintf(stderr, "viewer3d: edits.json: ficou de fora: %s\n", w.c_str());
+        set_status("retomadas " + std::to_string(rep.applied) + " edições de " + out_ +
+                   (rep.skipped.empty() ? "" : "; " + std::to_string(rep.skipped.size()) + " ficaram de fora (veja o terminal)"));
+    } catch (const std::exception& e) {
+        set_status("não leu " + out_ + ": " + e.what() + "; começando sem edições (o primeiro Ctrl+S guarda o arquivo em .<n>.bak)");
+    }
 }
 
 void TrackView::load_route(std::size_t index) {
@@ -112,9 +157,12 @@ void TrackView::load_route(std::size_t index) {
 
 void TrackView::switch_route(int step) {
     const std::size_t n = track_.routes.size();
-    if (n < 2 || drag_.active) return;
-    const std::size_t next = (route_index_ + n + static_cast<std::size_t>(step % static_cast<int>(n) + static_cast<int>(n))) % n;
-    if (next == route_index_) return;
+    if (n < 2) return;
+    open_route((route_index_ + n + static_cast<std::size_t>(step % static_cast<int>(n) + static_cast<int>(n))) % n);
+}
+
+void TrackView::open_route(std::size_t next) {
+    if (drag_.active || next == route_index_ || next >= track_.routes.size()) return;
     saved_[route_index_] = Saved{std::move(inst_), std::move(hist_)};
     try {
         load_route(next);
@@ -141,21 +189,12 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     if (mod & SDL_KMOD_CTRL) {
         switch (key) {
         case SDLK_Z:
-            if (drag_.active) return true;
-            if ((mod & SDL_KMOD_SHIFT) ? hist_.redo(inst_) : hist_.undo(inst_)) after_history();
+            if (mod & SDL_KMOD_SHIFT) redo();
+            else undo();
             return true;
-        case SDLK_Y:
-            if (!drag_.active && hist_.redo(inst_)) after_history();
-            return true;
+        case SDLK_Y: redo(); return true;
         case SDLK_S: save(); return true;
-        case SDLK_D:
-            // duplicar só vale para objetos de objects.ens (ornamentos e árvores têm contagem fixa)
-            if (sel_ >= 0 && !drag_.active && track_.types[inst_.type[static_cast<std::size_t>(sel_)]].name.starts_with("e:")) {
-                sel_ = static_cast<int>(edit::duplicate(inst_, hist_, static_cast<std::uint32_t>(sel_)));
-                objects_->regroup(inst_);
-                ++edit_rev_;
-            }
-            return true;
+        case SDLK_D: duplicate_selected(); return true;
         default: return false;
         }
     }
@@ -169,21 +208,9 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_3: tool_ = Tool::Rotate; return true;
     case SDLK_DELETE: delete_selected(); return true;
     case SDLK_TAB: switch_route((mod & SDL_KMOD_SHIFT) ? -1 : 1); return true;
-    case SDLK_R:
-        if (sel_ >= 0 && !drag_.active) {
-            edit::restore(inst_, hist_, static_cast<std::uint32_t>(sel_));
-            ++edit_rev_;
-        }
-        return true;
+    case SDLK_R: restore_selected(); return true;
     case SDLK_Q:
-    case SDLK_E:
-        if (sel_ >= 0 && !drag_.active) {
-            const float deg = ((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f);
-            if (inst_.hidden[static_cast<std::size_t>(sel_)]) return true;
-            edit::turn(inst_, hist_, static_cast<std::uint32_t>(sel_), deg);
-            ++edit_rev_;
-        }
-        return true;
+    case SDLK_E: turn_selected(((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f)); return true;
     case SDLK_F1: show_terrain_ = !show_terrain_; return true;
     case SDLK_F2: layers_.obj = !layers_.obj; return true;
     case SDLK_F3: layers_.tree = !layers_.tree; return true;
@@ -223,8 +250,86 @@ void TrackView::commit(const char* label, std::vector<edit::Snap> before) {
     ++edit_rev_;
 }
 
-void TrackView::delete_selected() {
+bool TrackView::undo() {
+    if (drag_.active || !hist_.undo(inst_)) return false;
+    after_history();
+    return true;
+}
+
+bool TrackView::redo() {
+    if (drag_.active || !hist_.redo(inst_)) return false;
+    after_history();
+    return true;
+}
+
+void TrackView::history_go(std::size_t pos) {
+    while (hist_.pos() > pos && undo()) {}
+    while (hist_.pos() < pos && redo()) {}
+}
+
+void TrackView::select(int i) {
+    if (drag_.active) return;
+    sel_ = i >= 0 && static_cast<std::uint32_t>(i) < inst_.n ? i : -1;
+}
+
+void TrackView::duplicate_selected() {
+    // duplicar só vale para objetos de objects.ens (ornamentos e árvores têm contagem fixa)
+    if (sel_ < 0 || drag_.active || inst_.hidden[static_cast<std::size_t>(sel_)]) return;
+    if (!track_.types[inst_.type[static_cast<std::size_t>(sel_)]].name.starts_with("e:")) {
+        set_status("duplicar só vale para objetos e: (objects.ens); ornamentos e árvores têm contagem fixa");
+        return;
+    }
+    sel_ = static_cast<int>(edit::duplicate(inst_, hist_, static_cast<std::uint32_t>(sel_)));
+    objects_->regroup(inst_);
+    ++edit_rev_;
+}
+
+void TrackView::restore_selected() {
     if (sel_ < 0 || drag_.active) return;
+    edit::restore(inst_, hist_, static_cast<std::uint32_t>(sel_));
+    ++edit_rev_;
+}
+
+void TrackView::turn_selected(float deg) {
+    if (sel_ < 0 || drag_.active || inst_.hidden[static_cast<std::size_t>(sel_)]) return;
+    edit::turn(inst_, hist_, static_cast<std::uint32_t>(sel_), deg);
+    ++edit_rev_;
+}
+
+bool TrackView::begin_change(std::uint32_t i) {
+    if (drag_.active || i >= inst_.n || inst_.hidden[i]) return false;
+    drag_ = EditDrag{};
+    drag_.active = true;
+    drag_.numeric = true;
+    drag_.i = i;
+    drag_.before = edit::snapshot(inst_, {i});
+    return true;
+}
+
+void TrackView::set_matrix(const float* m) {
+    if (!drag_.active) return;
+    std::copy(m, m + kInstFloats, inst_.matrix(drag_.i));
+    ++edit_rev_;
+}
+
+void TrackView::end_change(const char* label) {
+    if (!drag_.active) return;
+    drag_.active = false;
+    edit::snap_to_file(inst_, drag_.i);
+    commit(label, std::move(drag_.before));
+}
+
+const char* TrackView::source_file(const std::string& type_name) {
+    switch (type_name.empty() ? '?' : type_name[0]) {
+    case 'e': return "objects.ens";
+    case 'o': return "ornaments.bin";
+    case 't': return "trees.bin";
+    default: return "?";
+    }
+}
+
+void TrackView::delete_selected() {
+    if (sel_ < 0 || drag_.active || inst_.hidden[static_cast<std::size_t>(sel_)]) return;
     const auto i = static_cast<std::uint32_t>(sel_);
     auto before = edit::snapshot(inst_, {i});
     inst_.hidden[i] = 1;
@@ -251,7 +356,7 @@ bool TrackView::begin_edit(float x, float y, float w, float h, const render::Orb
 }
 
 void TrackView::edit_drag(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift) {
-    if (!drag_.active) return;
+    if (!drag_.active || drag_.numeric) return;
     float* m = inst_.matrix(drag_.i);
     if (tool_ == Tool::Move && shift != drag_.shift) {
         // trocou entre subir/descer e arrastar no chão: recomeça do ponto atual, sem perder o que já mudou
@@ -262,23 +367,25 @@ void TrackView::edit_drag(float x, float y, float w, float h, const render::Orbi
     }
     if (tool_ == Tool::Move) {
         if (shift) {
-            m[10] = drag_.base[10] - (y - drag_.sy) * std::max(0.02f, cam.dist * 0.002f);
+            m[10] = snapped(drag_.base[10] - (y - drag_.sy) * std::max(0.02f, cam.dist * 0.002f), snap_move);
         } else if (drag_.has_start) {
             glm::vec3 p;
             if (render::ground(render::mouse_ray(cam, x, y, w, h), drag_.base[10], p)) {
-                m[9] = drag_.base[9] + p.x - drag_.start.x;
-                m[11] = drag_.base[11] + p.z - drag_.start.z;
+                m[9] = snapped(drag_.base[9] + p.x - drag_.start.x, snap_move);
+                m[11] = snapped(drag_.base[11] + p.z - drag_.start.z, snap_move);
                 m[10] = drag_.base[10];
             }
         }
     } else {
-        edit::spin(m, drag_.base, (x - drag_.ex) * 0.01f);
+        float th = (x - drag_.ex) * 0.01f;
+        if (snap_turn > 0) th = snapped(th, snap_turn * 3.14159265f / 180.0f);
+        edit::spin(m, drag_.base, th);
     }
     ++edit_rev_;
 }
 
 void TrackView::end_edit() {
-    if (!drag_.active) return;
+    if (!drag_.active || drag_.numeric) return;
     drag_.active = false;
     edit::snap_to_file(inst_, drag_.i);
     commit(tool_ == Tool::Move ? "Mover" : "Girar", std::move(drag_.before));
@@ -304,6 +411,7 @@ bool TrackView::save() {
         edit::write_text(out_, text);
         wrote_ = true;
         saved_text_ = text;
+        ++saves_;
         set_status("gravado " + out_ + " (" + std::to_string(count) + " edições)" + (bak.empty() ? "" : "; anterior em " + bak));
         std::printf("gravado %s (%zu edições)%s%s\n", out_.c_str(), count, bak.empty() ? "" : "; anterior copiado para ",
                     bak.c_str());
@@ -324,12 +432,23 @@ std::string TrackView::current_edits() const {
     return edit::edits_json(track_, routes, nullptr);
 }
 
-bool TrackView::unsaved() const { return current_edits() != saved_text_; }
+bool TrackView::unsaved() const {
+    // os painéis perguntam a cada quadro: só recalcula quando algo mudou
+    if (unsaved_rev_ != edit_rev_ || unsaved_saves_ != saves_) {
+        unsaved_ = current_edits() != saved_text_;
+        unsaved_rev_ = edit_rev_;
+        unsaved_saves_ = saves_;
+    }
+    return unsaved_;
+}
 
 void TrackView::set_status(std::string msg) {
     std::fprintf(stderr, "viewer3d: %s\n", msg.c_str());
     status_ = std::move(msg);
+    status_time_ = std::chrono::steady_clock::now();
 }
+
+double TrackView::status_age() const { return seconds_since(status_time_); }
 
 void TrackView::after_history() {
     ++edit_rev_;

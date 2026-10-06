@@ -4,7 +4,7 @@ Visualizador e editor 3D nativo (C++20, SDL3, OpenGL 3.3 core) das pistas já ex
 
 ## Dependências
 
-SDL3, GLEW, OpenGL, libwebp, GLM (só cabeçalhos), pkg-config e CMake ≥ 3.20 (Ninja opcional).
+SDL3, GLEW, OpenGL, libwebp, GLM (só cabeçalhos), pkg-config e CMake ≥ 3.20 (Ninja opcional). O Dear ImGui 1.91.9b (painéis) vem em `third_party/imgui/` ([nota](third_party/imgui/README.md)); uma fonte com acentos é lida do sistema (DejaVu Sans ou Noto Sans), senão a do ImGui.
 
 | Sistema | Pacotes |
 | --- | --- |
@@ -50,6 +50,16 @@ Xvfb :99 -screen 0 1600x900x24 &
 DISPLAY=:99 ./build/viewer3d/viewer3d --track ... --frames 60 --screenshot e.ppm
 ```
 
+## Janela
+
+- **Menu**: Arquivo (abrir outra pista de `build/uiview/tracks/`, gravar, sair), Editar (as ações abaixo), Exibir (camadas, painéis, histórico), Ajuda (atalhos).
+- **Barra de ferramentas**: Navegar/Mover/Girar, Desfazer/Refazer, Gravar (laranja quando há edições não gravadas), rota, encaixe do mover (0,1/0,5/1 m) e do girar (5/15/45°), distância de desenho.
+- **Cena** (esquerda): terreno e camadas com visibilidade, tipos com contagem (filtro por nome), instâncias com o id de texto do `objects.ens`; editadas em amarelo, apagadas em cinza (clicar numa apagada seleciona para Restaurar). Duplo clique enquadra. Embaixo, o **Histórico**: clicar num passo volta ou avança até ele.
+- **Inspector** (direita): sem seleção, a pista (rotas, contagens, texturas, onde grava); com seleção, tipo, kind, arquivo de origem, idnum, estado, **posição X/Y/Z e giro Y editáveis** (arraste ou Ctrl+clique para digitar; um passo de histórico por edição), escala, botões de giro, Enquadrar/Restaurar/Duplicar/Apagar, a matriz atual e a do arquivo, e os materiais do tipo com a textura em miniatura (passe o mouse para ampliar).
+- **Viewport**: caixa amarela na seleção; com Mover, gizmo de setas X/Y/Z (arraste uma seta para mover só naquele eixo); com Girar, um anel em volta do objeto.
+- **Barra de status**: ferramenta, gravado/não gravado, última mensagem (some depois de 8 s; erros em vermelho, 30 s), instâncias, raio, fps.
+- **Retomar**: se o `edits.json` de saída já existe, as edições dele voltam ao abrir (as que não batem com a pista exportada ficam de fora, com aviso). `--fresh` ignora o arquivo.
+
 ## Controles
 
 A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview/web/js/trackview.js`).
@@ -61,18 +71,19 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Zoom | roda |
 | Andar | W A S D (Shift = ×3; parado com Ctrl apertado) |
 | Ferramentas | **1** Navegar, **2** Mover (arrastar no chão; com Shift, antes ou durante o arraste, sobe e desce), **3** Girar (arrastar para os lados) |
-| Selecionar | clique sem arrastar; clique no vazio ou **Esc** tira a seleção |
+| Selecionar | clique sem arrastar (ou na Cena); clique no vazio ou **Esc** tira a seleção |
 | Apagar | **Delete** |
 | Duplicar | **Ctrl+D**: cópia 2 m adiante em x, já selecionada (só objetos `e:` de `objects.ens`, como no web) |
 | Girar no teclado | **E** +15°, **Q** −15°; com **Shift**, ±90° |
 | Restaurar | **R** volta o selecionado à matriz do arquivo e o mostra |
 | Rota | **Tab** próxima, **Shift+Tab** anterior; cada rota guarda as próprias edições e histórico |
 | Histórico | **Ctrl+Z** desfaz; **Ctrl+Y** ou **Ctrl+Shift+Z** refaz (300 passos) |
-| Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás). Se o arquivo já existia ao abrir, o primeiro Ctrl+S guarda uma cópia em `<arquivo>.<n>.bak`. A gravação é atômica (`.tmp` e renomeia); se falhar, o editor avisa no título e continua aberto |
+| Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás). Se o arquivo já existia ao abrir, o primeiro Ctrl+S guarda uma cópia em `<arquivo>.<n>.bak`. A gravação é atômica (`.tmp` e renomeia); se falhar, o editor avisa na barra de status e continua aberto |
 | Enquadrar | **F**: o selecionado, ou a rota sem seleção (na cena de teste, volta ao início) |
 | Camadas | **F1** terreno, **F2** objetos, **F3** árvores, **F4** terreno distante, **G** portões, **I** linha da IA |
 | Distância de desenho | **[** e **]** (100 a 4000 m, padrão 700 m) |
-| Sair | **Esc** sem seleção, ou fechar a janela. Com edições não gravadas, a primeira vez só avisa; repetir em 3 s sai sem gravar |
+| Sair | **Ctrl+Q** ou fechar a janela; com edições não gravadas, pergunta (Gravar e sair / Sair sem gravar / Cancelar). **Esc** não sai |
+| Painéis | **F10** esconde e mostra; **F11** atalhos |
 
 O título mostra a ferramenta, a rota, as contagens do terreno, as instâncias visíveis/total, o raio, o histórico, "não gravado" quando há edições fora do arquivo, a seleção (tipo, `kind`, `idnum`, posição) e a última mensagem (gravou, não gravou, não abriu a rota).
 
@@ -83,10 +94,12 @@ Se uma rota não abre no **Tab** (arquivo truncado ou ausente), a rota atual fic
 | Opção | Efeito |
 | --- | --- |
 | `--track DIR` | abre a pista exportada em `DIR` (rota 0) |
-| `--out arq.json` | onde **Ctrl+S** grava (padrão `build/uiview/saves/<id>.edits.json`); caminho na pasta do jogo, ou uma pasta, é recusado com código 1 |
+| `--out arq.json` | onde **Ctrl+S** grava (padrão `<raiz>/saves/<id>.edits.json` para uma pista em `<raiz>/tracks/<id>`, independente da pasta atual); caminho na pasta do jogo, ou uma pasta, é recusado com código 1 |
 | `--frames N` | roda `N` quadros, imprime `OK renderer=... gl=... frames=N fps=...` (e as contagens da pista) e sai com 0 |
 | `--screenshot arq.ppm` | com `--frames`, grava o último quadro em PPM (P6) antes de sair |
 | `--vsync 0\|1` | sincronia vertical (padrão 1); `0` para medir FPS |
+| `--panels 0\|1` | começa sem os painéis (o 3D ocupa a janela, para comparar capturas com o web) |
+| `--fresh` | não retoma o `edits.json` que já existe (o primeiro Ctrl+S guarda uma cópia dele) |
 | `--camera yaw,pitch,dist,x,y,z` | estado exato da câmera, para comparar capturas com o viewer web (valores finitos, `dist` > 0, \|pitch\| ≤ 1,5) |
 
 Ver o PPM: `python3 -c "from PIL import Image; Image.open('arq.ppm').save('arq.png')"`. No `stderr` saem os tempos de leitura e de envio à GPU do terreno, e os das texturas.
@@ -98,7 +111,7 @@ Ver o PPM: `python3 -c "from PIL import Image; Image.open('arq.ppm').save('arq.p
 | `src/core/` | `dr2core`: JSON, DR2M, DR2I, `track.json` | nada (o CMake falha se ganhar dependência) |
 | `src/edit/` | `dr2edit`: histórico, giro, `edits.json` | `dr2core` |
 | `src/render/` | `dr2render`: GL, câmera, shader da pista, terreno, texturas, instâncias, linhas, picking | `dr2core`, GLEW, GLM, libwebp |
-| `src/app/` | `viewer3d`: janela, entrada, laço, `TrackView` | tudo e SDL3 |
+| `src/app/` | `viewer3d`: janela, entrada, laço, `TrackView`, painéis (`ui.cpp`) | tudo, SDL3 e `imgui` (`third_party/imgui`) |
 
 ## Verificado
 
@@ -112,6 +125,7 @@ Neste ambiente não há GPU nem jogo: tudo rodou no Mesa llvmpipe sob Xvfb, com 
 | 4 e 5 | `core_tests --track`: 164 malhas / 151 989 vértices / 263 862 triângulos iguais ao `unpack_geom`; leitura 0,007 s (5,3 MB), envio 0,009 s; 5 texturas do terreno; mesmo quadro e mesmas texturas que o web |
 | 6 | 1011 instâncias; nas mesmas câmeras do web, 995, 935 e 980 visíveis, os mesmos números do web; ~20 fps no llvmpipe |
 | 7+ | duplicar, restaurar, ±15°/±90° e troca de rota (pista sintética com `route_1`): sessão com `xdotool` → 3 edições em duas rotas (giro de 105°, cópia `added`, apagar na `route_1`), aprovadas pelo `edit_roundtrip.py` |
+| R2 | painéis: com `xdotool`, seleção no 3D e na Cena (filtro "tyre"), seta X do gizmo move 72,31→80,86, X digitado no Inspector, clique no Histórico volta ao arquivo, Ctrl+Q pede confirmação, retomar o edits.json gravado (1 edição de volta) |
 | 7 | `edit_test OK`; sessão com `xdotool`: mover, girar, apagar, Ctrl+Z ×2, Ctrl+Y, Ctrl+S → 2 edições (x/z de uma barreira, linhas da matriz de outra); segunda sessão com apagar barreira, apagar árvore e mover árvore → 3 edições; as duas passam no `edit_roundtrip.py` |
 
 Falta, na máquina do dono, com a Montalegre:
@@ -121,9 +135,10 @@ Falta, na máquina do dono, com a Montalegre:
 
 ## O que ficou de fora
 
-- Edição numérica da posição (o web tem campos X/Y/Z).
 - As linhas de portões e da IA mostram só a rota atual (o web desenha as de todas as rotas).
-- ImGui, PSSG em C++, Polônia, Windows.
+- PSSG em C++, Polônia, Windows.
+- Seleção múltipla, assentar no terreno, picking que respeita o terreno (hoje um objeto atrás de um morro pode ser selecionado), zoom em direção ao cursor.
+- Docking de painéis (a 1.91.9b sem o ramo docking): o layout é fixo, as larguras das laterais se ajustam arrastando a borda.
 
 ## Ideias
 

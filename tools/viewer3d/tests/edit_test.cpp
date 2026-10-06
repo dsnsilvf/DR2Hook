@@ -240,6 +240,44 @@ void test_write_backup() {
     fs::remove_all(dir);
 }
 
+// edits.json de volta para a sessão (retomar): gravar, ler e gravar de novo dá o mesmo texto (R2 P0-2).
+void test_apply_edits() {
+    Track track = make_track();
+    track.types[0].name = "e:barreira";
+    Instances inst = make_instances(6);
+    edit::History h;
+    inst.matrix(0)[9] += 3.5f;
+    inst.hidden[1] = 1;
+    edit::turn(inst, h, 3, 30.0f);
+    edit::duplicate(inst, h, 0);  // tipo 0 é e:
+    const std::string text = edit::edits_json(track, track.routes[0], inst);
+    const json::Value doc = json::parse(text);
+    check(edit::routes_in_edits(doc) == std::vector<std::string>{"route_0"}, "retomar: rotas do arquivo");
+    Instances fresh = make_instances(6);
+    edit::ApplyReport rep;
+    edit::apply_edits(doc, track, track.routes[0], fresh, rep);
+    check(rep.applied == 4 && rep.skipped.empty() && fresh.n == 7, "retomar: aplica mover, apagar, girar e cópia");
+    check(edit::edits_json(track, track.routes[0], fresh) == text, "retomar: gravar de novo dá o mesmo arquivo");
+
+    Instances moved = make_instances(6);
+    moved.m0[0 * 12 + 9] += 10.0f;  // a pista foi exportada de novo: o original mudou
+    moved.m = moved.m0;
+    edit::ApplyReport rep2;
+    edit::apply_edits(doc, track, track.routes[0], moved, rep2);
+    check(rep2.applied == 3 && rep2.skipped.size() == 1, "retomar: original mudado fica de fora");
+
+    Track other = make_track();
+    other.id = "outra";
+    bool threw = false;
+    try {
+        edit::ApplyReport r;
+        edit::apply_edits(doc, other, other.routes[0], fresh, r);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    check(threw, "retomar: recusa edits.json de outra pista");
+}
+
 }  // namespace
 
 int main() {
@@ -250,6 +288,7 @@ int main() {
     test_game_folder();
     test_full_turn();
     test_write_backup();
+    test_apply_edits();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;
 }

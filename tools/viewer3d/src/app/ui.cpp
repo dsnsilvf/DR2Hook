@@ -1,0 +1,888 @@
+#include "app/ui.hpp"
+
+#include "edit/history.hpp"
+#include "render/pick.hpp"
+#include "render/texture.hpp"
+
+#include <SDL3/SDL.h>
+#include <imgui.h>
+#include <imgui_impl_opengl3.h>
+#include <imgui_impl_sdl3.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+
+namespace dr2::app {
+
+namespace {
+
+constexpr float kPi = 3.14159265358979f;
+const ImVec4 kRed(0.95f, 0.45f, 0.40f, 1.0f), kYellow(0.95f, 0.80f, 0.35f, 1.0f), kGrey(0.55f, 0.55f, 0.55f, 1.0f),
+    kGreen(0.55f, 0.85f, 0.55f, 1.0f);
+
+// Fonte com acentos: DejaVu ou Noto do sistema; sem nenhuma, a do ImGui (só Latin-1).
+void load_font(float scale) {
+    static const ImWchar ranges[] = {0x0020, 0x00FF, 0x2013, 0x2026, 0x2190, 0x2193, 0x2212, 0x2212, 0};
+    const char* const candidates[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",          "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "C:/Windows/Fonts/segoeui.ttf",
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    for (const char* path : candidates) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec) && io.Fonts->AddFontFromFileTTF(path, 15.0f * scale, nullptr, ranges))
+            return;
+    }
+    ImFontConfig cfg;
+    cfg.SizePixels = 13.0f * scale;
+    io.Fonts->AddFontDefault(&cfg);
+}
+
+// "e:core_barr~a" -> "core_barr~a" (o kind vai à parte)
+std::string short_name(const std::string& name) { return name.size() > 2 && name[1] == ':' ? name.substr(2) : name; }
+
+bool contains_ci(const std::string& text, const char* needle) {
+    if (!*needle) return true;
+    const auto it = std::search(text.begin(), text.end(), needle, needle + std::strlen(needle),
+                                [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
+    return it != text.end();
+}
+
+// Rótulo de uma instância: id de texto do objects.ens se houver, senão o idnum; cópias dizem de quem.
+std::string instance_label(const TrackView& track, std::uint32_t i) {
+    const Instances& inst = track.instances();
+    const std::uint32_t id = inst.idnum[i];
+    if (id >= kAdded) return "cópia de #" + std::to_string(id - kAdded);
+    const std::string& name = track.track().types[inst.type[i]].name;
+    const auto& ens = track.route().ens_ids;
+    if (!name.empty() && name[0] == 'e' && id < ens.size() && !ens[id].empty()) return "#" + std::to_string(id) + "  " + ens[id];
+    return "#" + std::to_string(id);
+}
+
+// Ângulo em Y da matriz (convenção de edit::spin: a linha 0 vai de +x para −z com θ positivo).
+float yaw_of(const float* m) { return std::atan2(-m[2], m[0]); }
+
+bool project(const glm::mat4& view_proj, const Rect& vp, const glm::vec3& p, glm::vec2& out) {
+    const glm::vec4 c = view_proj * glm::vec4(p, 1.0f);
+    if (c.w <= 1e-4f) return false;
+    out = {vp.x + (c.x / c.w * 0.5f + 0.5f) * vp.w, vp.y + (0.5f - c.y / c.w * 0.5f) * vp.h};
+    return true;
+}
+
+float seg_dist(glm::vec2 p, glm::vec2 a, glm::vec2 b) {
+    const glm::vec2 ab = b - a;
+    const float t = std::clamp(glm::dot(p - a, ab) / std::max(1e-6f, glm::dot(ab, ab)), 0.0f, 1.0f);
+    return glm::length(p - (a + t * ab));
+}
+
+float snapped(float v, float step) { return step > 0 ? std::round(v / step) * step : v; }
+
+void tooltip(const char* text) {
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
+}
+
+}  // namespace
+
+EditorUi::EditorUi(SDL_Window* window, void* gl_context) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;  // nada de imgui.ini na pasta de trabalho
+    ImGui::StyleColorsDark();
+    const float scale = std::max(1.0f, SDL_GetWindowDisplayScale(window));
+    ImGui::GetStyle().ScaleAllSizes(scale);
+    ImGui::GetStyle().WindowRounding = 0.0f;
+    left_w_ *= scale;
+    right_w_ *= scale;
+    load_font(scale);
+    ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
+    ImGui_ImplOpenGL3_Init("#version 330");
+}
+
+EditorUi::~EditorUi() {
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+}
+
+bool EditorUi::event(const SDL_Event& e) {
+    ImGui_ImplSDL3_ProcessEvent(&e);
+    const ImGuiIO& io = ImGui::GetIO();
+    switch (e.type) {
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_WHEEL:
+        return io.WantCaptureMouse;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_TEXT_INPUT:
+        return io.WantCaptureKeyboard;
+    default:
+        return false;
+    }
+}
+
+bool EditorUi::wants_keyboard() const { return ImGui::GetIO().WantCaptureKeyboard; }
+
+bool EditorUi::ask_quit(TrackView* track) {
+    if (!track || !track->unsaved()) return true;
+    pending_ = Pending::Quit;
+    return false;
+}
+
+void EditorUi::ask_open(TrackView* track, const std::string& dir) {
+    if (track && track->unsaved()) {
+        pending_ = Pending::Open;
+        pending_dir_ = dir;
+    } else {
+        open_request = dir;
+    }
+}
+
+void EditorUi::scan_tracks() {
+    tracks_.clear();
+    std::error_code ec;
+    for (const char* root : {"build/uiview/tracks"}) {
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+            if (std::filesystem::is_regular_file(entry.path() / "track.json", ec)) tracks_.push_back(entry.path().generic_string());
+        }
+    }
+    std::sort(tracks_.begin(), tracks_.end());
+    tracks_scanned_ = true;
+}
+
+Rect EditorUi::frame(TrackView* track, render::OrbitCamera& cam, float fps) {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+    const ImGuiViewport* main = ImGui::GetMainViewport();
+    const float W = main->Size.x, H = main->Size.y;
+
+    menu_bar(track, cam);
+    float top = ImGui::GetFrameHeight();
+    const float status_h = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y;
+    if (track && panels) {
+        const float bar_h = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().WindowPadding.y * 2;
+        ImGui::SetNextWindowPos(ImVec2(0, top));
+        ImGui::SetNextWindowSize(ImVec2(W, bar_h));
+        if (ImGui::Begin("##ferramentas", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus))
+            toolbar(*track);
+        ImGui::End();
+        top += bar_h;
+    }
+    const float side_h = std::max(50.0f, H - top - status_h);
+    Rect left{0, top, 0, side_h}, right{W, top, 0, side_h};
+    if (track && panels) {
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                                       ImGuiWindowFlags_NoBringToFrontOnFocus;
+        left_w_ = std::clamp(left_w_, 160.0f, W * 0.45f);
+        right_w_ = std::clamp(right_w_, 200.0f, W * 0.45f);
+        ImGui::SetNextWindowPos(ImVec2(0, top));
+        ImGui::SetNextWindowSize(ImVec2(left_w_, side_h));
+        if (ImGui::Begin("Cena", nullptr, flags)) scene_tree(*track, cam, left);
+        left_w_ = ImGui::GetWindowWidth();
+        ImGui::End();
+        ImGui::SetNextWindowPos(ImVec2(W - right_w_, top));
+        ImGui::SetNextWindowSize(ImVec2(right_w_, side_h));
+        if (ImGui::Begin("Inspector", nullptr, flags)) inspector(*track, cam, right);
+        right_w_ = ImGui::GetWindowWidth();
+        ImGui::End();
+        left.w = left_w_;
+        right.x = W - right_w_;
+        right.w = right_w_;
+    }
+    status_bar(track, fps, Rect{0, H - status_h, W, status_h});
+    if (show_help_) help_window();
+    modals(track);
+
+    vp_ = Rect{left.x + left.w, top, std::max(1.0f, right.x - (left.x + left.w)), side_h};
+    return vp_;
+}
+
+void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
+    if (!ImGui::BeginMainMenuBar()) return;
+    if (ImGui::BeginMenu("Arquivo")) {
+        if (ImGui::BeginMenu("Abrir pista")) {
+            if (!tracks_scanned_) scan_tracks();
+            if (tracks_.empty()) ImGui::TextDisabled("nada em build/uiview/tracks");
+            for (const std::string& dir : tracks_) {
+                const bool current = track && std::filesystem::path(dir) == std::filesystem::path(track->track().dir);
+                if (ImGui::MenuItem(std::filesystem::path(dir).filename().string().c_str(), nullptr, current, !current))
+                    ask_open(track, dir);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Procurar de novo")) scan_tracks();
+            ImGui::EndMenu();
+        } else {
+            tracks_scanned_ = false;  // relê ao abrir o submenu
+        }
+        if (ImGui::MenuItem("Gravar edits.json", "Ctrl+S", false, track != nullptr)) track->save();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Sair", "Ctrl+Q") && ask_quit(track)) quit_request = true;
+        ImGui::EndMenu();
+    }
+    if (track && ImGui::BeginMenu("Editar")) {
+        const int sel = track->selected();
+        const bool alive = sel >= 0 && !track->instances().hidden[static_cast<std::size_t>(sel)];
+        if (ImGui::MenuItem("Desfazer", "Ctrl+Z", false, track->history().pos() > 0)) track->undo();
+        if (ImGui::MenuItem("Refazer", "Ctrl+Y", false, track->history().pos() < track->history().size())) track->redo();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Duplicar", "Ctrl+D", false, alive)) track->duplicate_selected();
+        if (ImGui::MenuItem("Apagar", "Delete", false, alive)) track->delete_selected();
+        if (ImGui::MenuItem("Restaurar do arquivo", "R", false, sel >= 0)) track->restore_selected();
+        if (ImGui::MenuItem("Girar +15°", "E", false, alive)) track->turn_selected(15.0f);
+        if (ImGui::MenuItem("Girar −15°", "Q", false, alive)) track->turn_selected(-15.0f);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Enquadrar", "F")) {
+            if (sel >= 0) track->frame_selected(cam);
+            else track->frame_route(cam);
+        }
+        if (ImGui::MenuItem("Tirar seleção", "Esc", false, sel >= 0)) track->deselect();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Exibir")) {
+        if (track) {
+            ImGui::MenuItem("Terreno", "F1", &track->show_terrain());
+            ImGui::MenuItem("Objetos", "F2", &track->layers().obj);
+            ImGui::MenuItem("Árvores", "F3", &track->layers().tree);
+            ImGui::MenuItem("Terreno distante", "F4", &track->layers().dist);
+            ImGui::MenuItem("Portões", "G", &track->show_gates());
+            ImGui::MenuItem("Linha da IA", "I", &track->show_ai());
+            ImGui::Separator();
+        }
+        ImGui::MenuItem("Painéis", "F10", &panels);
+        ImGui::MenuItem("Histórico", nullptr, &show_history_);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Ajuda")) {
+        ImGui::MenuItem("Atalhos", "F11", &show_help_);
+        ImGui::EndMenu();
+    }
+    ImGui::EndMainMenuBar();
+}
+
+void EditorUi::toolbar(TrackView& track) {
+    static const char* const names[] = {"Navegar (1)", "Mover (2)", "Girar (3)"};
+    static const char* const tips[] = {"Arrastar orbita a câmera; clique seleciona",
+                                       "Arrastar o objeto no chão; Shift sobe e desce; setas do gizmo prendem num eixo",
+                                       "Arrastar para os lados gira em Y; o anel do gizmo gira em torno do objeto"};
+    for (int k = 0; k < 3; ++k) {
+        if (k) ImGui::SameLine();
+        const bool on = static_cast<int>(track.tool()) == k;
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(names[k])) track.set_tool(static_cast<TrackView::Tool>(k));
+        if (on) ImGui::PopStyleColor();
+        tooltip(tips[k]);
+    }
+    ImGui::SameLine(0, 18);
+    ImGui::BeginDisabled(track.history().pos() == 0);
+    if (ImGui::Button("Desfazer")) track.undo();
+    ImGui::EndDisabled();
+    tooltip("Ctrl+Z");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(track.history().pos() >= track.history().size());
+    if (ImGui::Button("Refazer")) track.redo();
+    ImGui::EndDisabled();
+    tooltip("Ctrl+Y ou Ctrl+Shift+Z");
+    ImGui::SameLine();
+    const bool dirty = track.unsaved();
+    if (dirty) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.40f, 0.10f, 1.0f));
+    if (ImGui::Button("Gravar")) track.save();
+    if (dirty) ImGui::PopStyleColor();
+    tooltip(("Ctrl+S: grava " + track.out_path()).c_str());
+
+    ImGui::SameLine(0, 18);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("route_00000").x + 30);
+    if (ImGui::BeginCombo("##rota", track.route().name.c_str())) {
+        for (std::size_t k = 0; k < track.track().routes.size(); ++k)
+            if (ImGui::Selectable(track.track().routes[k].name.c_str(), k == track.route_index())) track.open_route(k);
+        ImGui::EndCombo();
+    }
+    tooltip("Rota (Tab / Shift+Tab). Cada rota guarda as próprias edições e histórico");
+
+    ImGui::SameLine(0, 18);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Encaixe");
+    ImGui::SameLine();
+    static const float moves[] = {0.0f, 0.1f, 0.5f, 1.0f};
+    static const char* const move_names[] = {"livre", "0,1 m", "0,5 m", "1 m"};
+    int mi = 0;
+    for (int k = 0; k < 4; ++k)
+        if (track.snap_move == moves[k]) mi = k;
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("0,5 m").x + 40);
+    if (ImGui::Combo("##mover", &mi, move_names, 4)) track.snap_move = moves[mi];
+    tooltip("Passo do mover (arraste no chão, Shift e gizmo)");
+    ImGui::SameLine();
+    static const float turns[] = {0.0f, 5.0f, 15.0f, 45.0f};
+    static const char* const turn_names[] = {"livre", "5°", "15°", "45°"};
+    int ti = 0;
+    for (int k = 0; k < 4; ++k)
+        if (track.snap_turn == turns[k]) ti = k;
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("livre").x + 40);
+    if (ImGui::Combo("##giro", &ti, turn_names, 4)) track.snap_turn = turns[ti];
+    tooltip("Passo do girar por arraste e pelo anel do gizmo");
+
+    ImGui::SameLine(0, 18);
+    ImGui::SetNextItemWidth(160);
+    ImGui::SliderFloat("Distância", &track.draw_dist(), 100.0f, 4000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic);
+    tooltip("Raio de desenho dos objetos e árvores ([ e ])");
+}
+
+void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect&) {
+    const Instances& inst = track.instances();
+    const auto& types = track.objects().types();
+    const int sel = track.selected();
+    if (sel != last_sel_) {
+        scroll_to_sel_ = sel >= 0;
+        last_sel_ = sel;
+    }
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##filtro", "filtrar tipos (nome)", filter_, sizeof filter_);
+
+    const float hist_h = show_history_ ? std::min(ImGui::GetContentRegionAvail().y * 0.35f, 220.0f) : 0.0f;
+    ImGui::BeginChild("##arvore", ImVec2(0, -hist_h), ImGuiChildFlags_None);
+    struct LayerRow {
+        const char* label;
+        render::Layer layer;
+        bool* on;
+    };
+    const LayerRow rows[] = {{"Objetos", render::Layer::Obj, &track.layers().obj},
+                             {"Árvores", render::Layer::Tree, &track.layers().tree},
+                             {"Terreno distante", render::Layer::Dist, &track.layers().dist}};
+    ImGui::Checkbox("##terreno", &track.show_terrain());
+    tooltip("Mostrar o terreno (F1)");
+    ImGui::SameLine();
+    ImGui::TextUnformatted(("Terreno  " + std::to_string(track.terrain().meshes()) + " malhas").c_str());
+    for (const LayerRow& row : rows) {
+        std::size_t n_types = 0, n_inst = 0;
+        for (const auto& ty : types)
+            if (ty.layer == row.layer && !ty.group.empty()) ++n_types, n_inst += ty.group.size();
+        ImGui::PushID(row.label);
+        ImGui::Checkbox("##on", row.on);
+        tooltip("Mostrar a camada");
+        ImGui::SameLine();
+        const bool sel_here = sel >= 0 && types[inst.type[static_cast<std::size_t>(sel)]].layer == row.layer;
+        if (sel_here && scroll_to_sel_) ImGui::SetNextItemOpen(true);
+        char label[96];
+        std::snprintf(label, sizeof label, "%s (%zu tipos, %zu)", row.label, n_types, n_inst);
+        if (ImGui::TreeNodeEx(label, row.layer == render::Layer::Obj ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+            for (std::size_t t = 0; t < types.size(); ++t) {
+                const auto& ty = types[t];
+                if (ty.layer != row.layer || ty.group.empty() || !contains_ci(ty.name, filter_)) continue;
+                const bool sel_type = sel >= 0 && inst.type[static_cast<std::size_t>(sel)] == t;
+                if (sel_type && scroll_to_sel_) ImGui::SetNextItemOpen(true);
+                std::snprintf(label, sizeof label, "%s  (%zu)%s###t%zu", short_name(ty.name).c_str(), ty.group.size(),
+                              ty.empty ? "  sem malha" : "", t);
+                if (sel_type) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+                const bool open = ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_SpanAvailWidth);
+                if (sel_type) ImGui::PopStyleColor();
+                if (!open) continue;
+                std::size_t sel_pos = ty.group.size();
+                if (sel_type && scroll_to_sel_)
+                    sel_pos = static_cast<std::size_t>(
+                        std::find(ty.group.begin(), ty.group.end(), static_cast<std::uint32_t>(sel)) - ty.group.begin());
+                ImGuiListClipper clip;
+                clip.Begin(static_cast<int>(ty.group.size()));
+                if (sel_pos < ty.group.size()) clip.IncludeItemByIndex(static_cast<int>(sel_pos));
+                while (clip.Step()) {
+                    for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r) {
+                        const std::uint32_t i = ty.group[static_cast<std::size_t>(r)];
+                        std::string text = instance_label(track, i);
+                        const bool hidden = inst.hidden[i] != 0;
+                        const bool edited = !hidden && edit::changed(inst, i);
+                        const bool added = inst.idnum[i] >= kAdded;
+                        if (hidden) text += added ? "  (desfeita)" : "  (apagada)";
+                        else if (added) text += "  (nova)";
+                        else if (edited) text += "  (editada)";
+                        if (hidden) ImGui::PushStyleColor(ImGuiCol_Text, kGrey);
+                        else if (edited || added) ImGui::PushStyleColor(ImGuiCol_Text, kYellow);
+                        ImGui::PushID(static_cast<int>(i));
+                        if (ImGui::Selectable(text.c_str(), static_cast<int>(i) == sel, ImGuiSelectableFlags_AllowDoubleClick)) {
+                            track.select(static_cast<int>(i));
+                            last_sel_ = track.selected();
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) track.frame_selected(cam);
+                        }
+                        if (static_cast<std::size_t>(r) == sel_pos && scroll_to_sel_) {
+                            ImGui::SetScrollHereY(0.4f);
+                            scroll_to_sel_ = false;
+                        }
+                        ImGui::PopID();
+                        if (hidden || edited || added) ImGui::PopStyleColor();
+                    }
+                }
+                ImGui::TreePop();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    if (show_history_) {
+        const edit::History& h = track.history();
+        ImGui::SeparatorText(("Histórico " + std::to_string(h.pos()) + "/" + std::to_string(h.size())).c_str());
+        ImGui::BeginChild("##historico");
+        if (ImGui::Selectable("(arquivo aberto)", h.pos() == 0)) track.history_go(0);
+        for (std::size_t k = 0; k < h.entries().size(); ++k) {
+            const auto& e = h.entries()[k];
+            const bool future = k >= h.pos();
+            if (future) ImGui::PushStyleColor(ImGuiCol_Text, kGrey);
+            char label[96];
+            std::snprintf(label, sizeof label, "%zu. %s%s###h%zu", k + 1, e.label.c_str(), e.before.size() > 1 ? " (vários)" : "", k);
+            if (ImGui::Selectable(label, k + 1 == h.pos())) track.history_go(k + 1);
+            if (future) ImGui::PopStyleColor();
+        }
+        if (h.size() > 0 && h.pos() == h.size()) ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+    }
+}
+
+void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&) {
+    const Instances& inst = track.instances();
+    const int sel = track.selected();
+    if (sel < 0) {
+        const Track& t = track.track();
+        ImGui::SeparatorText("Pista");
+        ImGui::TextWrapped("%s", t.id.c_str());
+        ImGui::TextDisabled("%s", t.src.c_str());
+        ImGui::TextDisabled("%s", t.dir.c_str());
+        ImGui::Spacing();
+        if (ImGui::BeginTable("##pista", 2, ImGuiTableFlags_SizingFixedFit)) {
+            auto row = [](const char* k, const std::string& v) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", k);
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(v.c_str());
+            };
+            row("Rota", track.route().name + "  (" + std::to_string(track.route_index() + 1) + " de " + std::to_string(t.routes.size()) + ")");
+            row("Terreno", track.route().terrain_file);
+            row("Malhas", std::to_string(track.terrain().meshes()));
+            row("Vértices", std::to_string(track.terrain().vertices()));
+            row("Triângulos", std::to_string(track.terrain().triangles()));
+            row("Instâncias", std::to_string(track.objects().visible()) + " visíveis de " + std::to_string(inst.n));
+            row("Tipos", std::to_string(t.types.size()));
+            row("Materiais", std::to_string(t.materials.size()));
+            auto& tex = track.textures();
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "%zu (%zu falharam), %.1f MB", tex.created(), tex.failed(), static_cast<double>(tex.bytes_rgba()) / 1e6);
+            row("Texturas", buf);
+            row("Portões", std::to_string(track.route().gates.size()));
+            row("Linhas da IA", std::to_string(track.route().ai.size()));
+            row("Grava em", track.out_path());
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Clique num objeto (no 3D ou na Cena) para inspecionar.");
+        return;
+    }
+
+    const auto i = static_cast<std::uint32_t>(sel);
+    const std::string& name = track.track().types[inst.type[i]].name;
+    const auto& ty = track.objects().types()[inst.type[i]];
+    const bool hidden = inst.hidden[i] != 0;
+    const bool added = inst.idnum[i] >= kAdded;
+    ImGui::SeparatorText("Objeto");
+    ImGui::TextWrapped("%s", short_name(name).c_str());
+    ImGui::TextDisabled("kind %c  ·  %s", name.empty() ? '?' : name[0], TrackView::source_file(name));
+    ImGui::TextUnformatted(instance_label(track, i).c_str());
+    if (hidden) ImGui::TextColored(kGrey, added ? "Cópia desfeita" : "Apagado nesta sessão");
+    else if (added) ImGui::TextColored(kYellow, "Cópia nova (vai como added no edits.json)");
+    else if (edit::changed(inst, i)) ImGui::TextColored(kYellow, "Editado");
+    else ImGui::TextDisabled("Como no arquivo");
+
+    // Transformação: posição e giro em Y editáveis, escala só leitura
+    ImGui::SeparatorText("Transformação");
+    ImGui::BeginDisabled(hidden);
+    static float base[kInstFloats];
+    static float yaw0 = 0.0f;
+    const float* m = inst.matrix(i);
+    float pos[3] = {m[9], m[10], m[11]};
+    ImGui::SetNextItemWidth(-1);
+    const bool pos_changed = ImGui::DragFloat3("##pos", pos, 0.05f, 0.0f, 0.0f, "%.3f");
+    if (ImGui::IsItemActivated() && track.begin_change(i)) std::copy(m, m + kInstFloats, base);
+    if (pos_changed) {
+        if (!track.changing() && track.begin_change(i)) std::copy(m, m + kInstFloats, base);
+        float next[kInstFloats];
+        std::copy(m, m + kInstFloats, next);
+        next[9] = pos[0];
+        next[10] = pos[1];
+        next[11] = pos[2];
+        track.set_matrix(next);
+    }
+    if (ImGui::IsItemDeactivated()) track.end_change("Mover (campo)");
+    tooltip("Posição X Y Z em metros. Arraste ou Ctrl+clique para digitar");
+    float deg = yaw_of(m) * 180.0f / kPi;
+    ImGui::SetNextItemWidth(-1);
+    const bool yaw_changed = ImGui::DragFloat("##yaw", &deg, 0.5f, -360.0f, 360.0f, "giro Y %.2f°");
+    if (ImGui::IsItemActivated() && track.begin_change(i)) {
+        std::copy(m, m + kInstFloats, base);
+        yaw0 = yaw_of(m);
+    }
+    if (yaw_changed) {
+        if (!track.changing() && track.begin_change(i)) {
+            std::copy(m, m + kInstFloats, base);
+            yaw0 = yaw_of(m);
+        }
+        float next[kInstFloats];
+        edit::spin(next, base, deg * kPi / 180.0f - yaw0);
+        track.set_matrix(next);
+    }
+    if (ImGui::IsItemDeactivated()) track.end_change("Girar (campo)");
+    tooltip("Ângulo em Y em graus. Arraste ou Ctrl+clique para digitar");
+    const float sx = std::hypot(m[0], m[1], m[2]), sy = std::hypot(m[3], m[4], m[5]), sz = std::hypot(m[6], m[7], m[8]);
+    ImGui::TextDisabled("escala %.3f  %.3f  %.3f", static_cast<double>(sx), static_cast<double>(sy), static_cast<double>(sz));
+    ImGui::EndDisabled();
+
+    if (!hidden) {
+        if (ImGui::Button("−90°")) track.turn_selected(-90.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("−15°")) track.turn_selected(-15.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("+15°")) track.turn_selected(15.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("+90°")) track.turn_selected(90.0f);
+    }
+    if (ImGui::Button("Enquadrar (F)")) track.frame_selected(cam);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!hidden && !edit::changed(inst, i));
+    if (ImGui::Button("Restaurar (R)")) track.restore_selected();
+    ImGui::EndDisabled();
+    tooltip("Volta à matriz do arquivo e mostra de novo");
+    if (!hidden) {
+        ImGui::BeginDisabled(!name.starts_with("e:"));
+        if (ImGui::Button("Duplicar (Ctrl+D)")) track.duplicate_selected();
+        ImGui::EndDisabled();
+        tooltip("Só objetos e: (objects.ens); ornamentos e árvores têm contagem fixa");
+        ImGui::SameLine();
+        if (ImGui::Button("Apagar (Del)")) track.delete_selected();
+    }
+
+    if (ImGui::CollapsingHeader("Matriz (atual | arquivo)")) {
+        if (ImGui::BeginTable("##m", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame)) {
+            static const char* const rows[] = {"linha 0", "linha 1", "linha 2", "posição"};
+            for (int r = 0; r < 4; ++r) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", rows[r]);
+                for (int c = 0; c < 3; ++c) {
+                    ImGui::TableNextColumn();
+                    const float a = m[r * 3 + c], b = inst.m0[i * kInstFloats + static_cast<std::size_t>(r * 3 + c)];
+                    if (a != b) ImGui::TextColored(kYellow, "%.4g", static_cast<double>(a));
+                    else ImGui::Text("%.4g", static_cast<double>(a));
+                    if (a != b && ImGui::IsItemHovered()) ImGui::SetTooltip("arquivo: %.6g", static_cast<double>(b));
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Tipo e materiais", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const TypeInfo& info = track.track().types[inst.type[i]];
+        ImGui::Text("%zu malha(s) em objects.bin, %zu instância(s) nesta rota", info.count, ty.group.size());
+        if (ty.empty) {
+            ImGui::TextColored(kGrey, "Sem malha: não desenha (marcador)");
+        } else {
+            const glm::vec3 size = ty.hi - ty.lo;
+            ImGui::Text("caixa %.2f × %.2f × %.2f m", static_cast<double>(size.x), static_cast<double>(size.y), static_cast<double>(size.z));
+        }
+        const float thumb = ImGui::GetTextLineHeight() * 3.0f;
+        for (std::size_t k = 0; k < ty.parts.size(); ++k) {
+            const auto& part = ty.parts[k];
+            ImGui::PushID(static_cast<int>(k));
+            const GLuint tex = track.textures().for_material(part.material);
+            if (tex) {
+                ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(thumb, thumb));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(256, 256));
+                    ImGui::EndTooltip();
+                }
+            } else {
+                ImGui::ColorButton("##cor", ImVec4(part.color.r, part.color.g, part.color.b, 1.0f), ImGuiColorEditFlags_NoTooltip,
+                                   ImVec2(thumb, thumb));
+            }
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::TextWrapped("%s", part.material.c_str());
+            const auto it = track.track().materials.find(part.material);
+            if (it != track.track().materials.end()) ImGui::TextDisabled("%s", it->second.c_str());
+            else ImGui::TextDisabled("sem textura (cor fixa)");
+            ImGui::TextDisabled("%d triângulos", part.count / 3);
+            ImGui::EndGroup();
+            ImGui::PopID();
+        }
+    }
+}
+
+void EditorUi::status_bar(TrackView* track, float fps, const Rect& area) {
+    ImGui::SetNextWindowPos(ImVec2(area.x, area.y));
+    ImGui::SetNextWindowSize(ImVec2(area.w, area.h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 3));
+    if (ImGui::Begin("##status", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        if (track) {
+            static const char* const tools[] = {"Navegar", "Mover", "Girar"};
+            ImGui::Text("%s", tools[static_cast<int>(track->tool())]);
+            ImGui::SameLine(0, 16);
+            if (track->unsaved()) ImGui::TextColored(kYellow, "não gravado");
+            else ImGui::TextDisabled("gravado");
+            ImGui::SameLine(0, 16);
+            const std::string& msg = message_.empty() ? track->status() : message_;
+            const bool bad = msg.starts_with("NÃO") || msg.starts_with("não ");
+            // a mensagem some depois de um tempo (erros ficam mais) para não contradizer o estado atual
+            const bool fresh = !message_.empty() || track->status_age() < (bad ? 30.0 : 8.0);
+            if (!fresh) ImGui::TextDisabled("%s", sel_hint(*track).c_str());
+            else if (bad) ImGui::TextColored(kRed, "%s", msg.c_str());
+            else ImGui::TextUnformatted(msg.c_str());
+            if (fresh && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", msg.c_str());
+        } else {
+            ImGui::TextUnformatted(message_.empty() ? "Cena de teste: abra uma pista em Arquivo > Abrir pista" : message_.c_str());
+        }
+        char right[160];
+        if (track)
+            std::snprintf(right, sizeof right, "inst %zu/%u  ·  %.0f m  ·  %.0f fps", track->objects().visible(), track->instances().n,
+                          static_cast<double>(track->draw_dist()), static_cast<double>(fps));
+        else std::snprintf(right, sizeof right, "%.0f fps", static_cast<double>(fps));
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 16, area.w - ImGui::CalcTextSize(right).x - 12));
+        ImGui::TextDisabled("%s", right);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+std::string EditorUi::sel_hint(const TrackView& track) const {
+    switch (track.tool()) {
+    case TrackView::Tool::Move: return "Mover: arraste o objeto no chão (Shift sobe e desce) ou uma seta do gizmo";
+    case TrackView::Tool::Rotate: return "Girar: arraste para os lados ou pelo anel do gizmo; Q/E giram 15°";
+    default: return "Clique num objeto para selecionar; arraste para orbitar, botão direito para pan, roda para zoom";
+    }
+}
+
+void EditorUi::help_window() {
+    ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    if (!ImGui::Begin("Atalhos", &show_help_, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    static const char* const keys[][2] = {
+        {"Botão esquerdo", "orbitar (Navegar ou fora de objeto); clique seleciona"},
+        {"Direito / meio / Shift+esquerdo", "pan"},
+        {"Roda", "zoom"},
+        {"W A S D", "andar (Shift = ×3)"},
+        {"1 / 2 / 3", "Navegar / Mover / Girar"},
+        {"Shift ao mover", "sobe e desce"},
+        {"Setas do gizmo", "mover só em X, Y ou Z"},
+        {"Anel do gizmo", "girar em Y em torno do objeto"},
+        {"Q / E (Shift)", "girar −15° / +15° (±90°)"},
+        {"Delete", "apagar"},
+        {"Ctrl+D", "duplicar (objetos e:)"},
+        {"R", "restaurar do arquivo"},
+        {"F", "enquadrar seleção ou rota"},
+        {"Esc", "tirar seleção; fechar janela de confirmação"},
+        {"Ctrl+Q", "sair (pergunta se há edições não gravadas)"},
+        {"Ctrl+Z / Ctrl+Y", "desfazer / refazer"},
+        {"Ctrl+S", "gravar edits.json"},
+        {"Tab / Shift+Tab", "próxima / anterior rota"},
+        {"F1 F2 F3 F4", "terreno, objetos, árvores, terreno distante"},
+        {"G / I", "portões / linha da IA"},
+        {"[ / ]", "distância de desenho"},
+        {"F10 / F11", "painéis / esta janela"},
+    };
+    if (ImGui::BeginTable("##atalhos", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        for (const auto& k : keys) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(kGreen, "%s", k[0]);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(k[1]);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+void EditorUi::modals(TrackView* track) {
+    if (pending_ != Pending::None && !ImGui::IsPopupOpen("Edições não gravadas")) ImGui::OpenPopup("Edições não gravadas");
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Edições não gravadas", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+    const bool quit = pending_ == Pending::Quit;
+    ImGui::TextUnformatted(quit ? "Há edições que não estão no edits.json." : "Abrir outra pista descarta as edições desta.");
+    if (track) ImGui::TextDisabled("%s", track->out_path().c_str());
+    ImGui::Spacing();
+    auto done = [&](bool go) {
+        if (go) {
+            if (quit) quit_request = true;
+            else open_request = pending_dir_;
+        }
+        pending_ = Pending::None;
+        ImGui::CloseCurrentPopup();
+    };
+    if (ImGui::Button(quit ? "Gravar e sair" : "Gravar e abrir")) {
+        if (track && track->save()) done(true);
+        else done(false);  // a falha fica na barra de status; nada se perde
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(quit ? "Sair sem gravar" : "Abrir sem gravar")) done(true);
+    ImGui::SameLine();
+    if (ImGui::Button("Cancelar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) done(false);
+    ImGui::EndPopup();
+}
+
+int EditorUi::gizmo_hit(float x, float y) const {
+    if (!gizmo_.visible || !vp_.contains(x, y)) return -1;
+    const glm::vec2 p(x, y);
+    int hit = -1;
+    float best = 9.0f;
+    if (!gizmo_.ring.empty()) {
+        for (std::size_t k = 0; k < gizmo_.ring.size(); ++k) {
+            const float d = seg_dist(p, gizmo_.ring[k], gizmo_.ring[(k + 1) % gizmo_.ring.size()]);
+            if (d < best) best = d, hit = 3;
+        }
+        return hit;
+    }
+    for (int a = 0; a < 3; ++a) {
+        if (glm::length(gizmo_.tip[a] - gizmo_.origin) <= 6.0f) continue;  // eixo de ponta para a câmera
+        const float d = seg_dist(p, gizmo_.origin, gizmo_.tip[a]);
+        if (d < best) best = d, hit = a;
+    }
+    return hit;
+}
+
+bool EditorUi::gizmo_press(TrackView& track, const render::OrbitCamera& cam, float x, float y) {
+    // acerto pela posição do clique (o realce do quadro anterior pode ser de outra posição)
+    gizmo_.hover = gizmo_hit(x, y);
+    if (gizmo_.hover < 0) return false;
+    const int sel = track.selected();
+    if (sel < 0 || !track.begin_change(static_cast<std::uint32_t>(sel))) return false;
+    gizmo_.axis = gizmo_.hover;
+    gizmo_.press = {x, y};
+    const float* m = track.instances().matrix(static_cast<std::size_t>(sel));
+    std::copy(m, m + kInstFloats, gizmo_.base);
+    if (gizmo_.axis == 3) {
+        glm::vec3 p;
+        const auto ray = render::mouse_ray(cam, x - vp_.x, y - vp_.y, vp_.w, vp_.h);
+        gizmo_ang0_ = render::ground(ray, m[10], p) ? std::atan2(-(p.z - m[11]), p.x - m[9]) : 0.0f;
+    }
+    return true;
+}
+
+void EditorUi::gizmo_drag(TrackView& track, const render::OrbitCamera& cam, float x, float y) {
+    if (gizmo_.axis < 0) return;
+    float next[kInstFloats];
+    std::copy(gizmo_.base, gizmo_.base + kInstFloats, next);
+    if (gizmo_.axis < 3) {
+        const glm::vec2 d = gizmo_.tip[gizmo_.axis] - gizmo_.origin;
+        const float len = std::max(4.0f, glm::length(d));
+        const float t = glm::dot(glm::vec2(x, y) - gizmo_.press, d / len) / len * gizmo_.world_len;
+        next[9 + gizmo_.axis] = snapped(gizmo_.base[9 + gizmo_.axis] + t, track.snap_move);
+    } else {
+        glm::vec3 p;
+        const auto ray = render::mouse_ray(cam, x - vp_.x, y - vp_.y, vp_.w, vp_.h);
+        if (!render::ground(ray, gizmo_.base[10], p)) return;
+        float th = std::atan2(-(p.z - gizmo_.base[11]), p.x - gizmo_.base[9]) - gizmo_ang0_;
+        if (track.snap_turn > 0) th = snapped(th, track.snap_turn * kPi / 180.0f);
+        edit::spin(next, gizmo_.base, th);
+    }
+    track.set_matrix(next);
+}
+
+void EditorUi::gizmo_release(TrackView& track) {
+    if (gizmo_.axis < 0) return;
+    static const char* const labels[] = {"Mover X", "Mover Y", "Mover Z", "Girar"};
+    track.end_change(labels[gizmo_.axis]);
+    gizmo_.axis = -1;
+}
+
+void EditorUi::render(TrackView* track, const render::OrbitCamera& cam, const glm::mat4& view_proj, const Rect& vp) {
+    gizmo_.visible = false;
+    const int sel = track ? track->selected() : -1;
+    if (track && sel >= 0) {
+        // caixa local do tipo, transformada, em todas as ferramentas: a seleção se vê mesmo de longe
+        const auto i = static_cast<std::size_t>(sel);
+        const auto& ty = track->objects().types()[track->instances().type[i]];
+        const float* m = track->instances().matrix(i);
+        const glm::vec3 lo = ty.empty ? glm::vec3(-1.0f) : ty.lo, hi = ty.empty ? glm::vec3(1.0f) : ty.hi;
+        glm::vec2 corner[8];
+        bool all = true;
+        for (int k = 0; k < 8; ++k) {
+            const glm::vec3 p((k & 1) ? hi.x : lo.x, (k & 2) ? hi.y : lo.y, (k & 4) ? hi.z : lo.z);
+            const glm::vec3 w = p.x * glm::vec3(m[0], m[1], m[2]) + p.y * glm::vec3(m[3], m[4], m[5]) + p.z * glm::vec3(m[6], m[7], m[8]) +
+                                glm::vec3(m[9], m[10], m[11]);
+            all = project(view_proj, vp, w, corner[k]) && all;
+        }
+        if (all) {
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            dl->PushClipRect(ImVec2(vp.x, vp.y), ImVec2(vp.x + vp.w, vp.y + vp.h), true);
+            const ImU32 col = track->instances().hidden[i] ? IM_COL32(160, 160, 160, 200) : IM_COL32(255, 200, 60, 230);
+            static const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+            for (const auto& e : edges)
+                dl->AddLine(ImVec2(corner[e[0]].x, corner[e[0]].y), ImVec2(corner[e[1]].x, corner[e[1]].y), col, 1.5f);
+            dl->PopClipRect();
+        }
+    }
+    if (track && sel >= 0 && track->tool() != TrackView::Tool::Navigate && !track->instances().hidden[static_cast<std::size_t>(sel)]) {
+        const float* m = track->instances().matrix(static_cast<std::size_t>(sel));
+        const glm::vec3 c(m[9], m[10], m[11]);
+        // tamanho constante na tela: proporcional à distância do olho
+        gizmo_.world_len = std::max(0.5f, glm::length(cam.eye() - c) * 0.14f);
+        glm::vec2 o;
+        if (project(view_proj, vp, c, o)) {
+            gizmo_.visible = true;
+            gizmo_.origin = o;
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            dl->PushClipRect(ImVec2(vp.x, vp.y), ImVec2(vp.x + vp.w, vp.y + vp.h), true);
+            const ImVec2 mouse = ImGui::GetMousePos();
+            gizmo_.ring.clear();
+            if (track->tool() == TrackView::Tool::Move) {
+                static const ImU32 cols[] = {IM_COL32(230, 70, 60, 255), IM_COL32(90, 200, 80, 255), IM_COL32(70, 130, 240, 255)};
+                for (int a = 0; a < 3; ++a) {
+                    glm::vec3 tip = c;
+                    tip[a] += gizmo_.world_len;
+                    if (!project(view_proj, vp, tip, gizmo_.tip[a])) gizmo_.tip[a] = o;
+                }
+                if (gizmo_.axis < 0) gizmo_.hover = gizmo_hit(mouse.x, mouse.y);
+                for (int a = 0; a < 3; ++a) {
+                    const bool hot = gizmo_.axis == a || (gizmo_.axis < 0 && gizmo_.hover == a);
+                    const ImU32 col = hot ? IM_COL32(255, 230, 90, 255) : cols[a];
+                    const ImVec2 p0(o.x, o.y), p1(gizmo_.tip[a].x, gizmo_.tip[a].y);
+                    dl->AddLine(p0, p1, col, hot ? 4.0f : 3.0f);
+                    dl->AddCircleFilled(p1, hot ? 7.0f : 5.5f, col);
+                    static const char* const names[] = {"X", "Y", "Z"};
+                    dl->AddText(ImVec2(p1.x + 7, p1.y - 7), col, names[a]);
+                }
+            } else {
+                // anel no plano horizontal do objeto
+                ImVec2 pts[48];
+                int n = 0;
+                for (int k = 0; k < 48; ++k) {
+                    const float a = 2.0f * kPi * static_cast<float>(k) / 48.0f;
+                    glm::vec2 s;
+                    if (!project(view_proj, vp, c + gizmo_.world_len * glm::vec3(std::cos(a), 0.0f, std::sin(a)), s)) continue;
+                    pts[n++] = ImVec2(s.x, s.y);
+                    gizmo_.ring.push_back(s);
+                }
+                if (gizmo_.axis < 0) gizmo_.hover = gizmo_hit(mouse.x, mouse.y);
+                const bool hot = gizmo_.axis == 3 || (gizmo_.axis < 0 && gizmo_.hover == 3);
+                if (n > 2) dl->AddPolyline(pts, n, hot ? IM_COL32(255, 230, 90, 255) : IM_COL32(90, 200, 80, 255), ImDrawFlags_Closed, hot ? 4.0f : 2.5f);
+            }
+            dl->AddCircleFilled(ImVec2(o.x, o.y), 4.0f, IM_COL32(255, 255, 255, 230));
+            dl->PopClipRect();
+        }
+    }
+    if (!gizmo_.visible) {
+        gizmo_.hover = -1;
+        gizmo_.ring.clear();
+    }
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+}  // namespace dr2::app

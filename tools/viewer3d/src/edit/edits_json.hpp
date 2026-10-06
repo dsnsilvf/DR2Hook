@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/dr2i.hpp"
+#include "core/json.hpp"
 #include "core/track.hpp"
 
 #include <string>
@@ -22,6 +23,21 @@ std::string edits_json(const Track& track, const std::vector<RouteEdits>& routes
 inline std::string edits_json(const Track& track, const Route& route, const Instances& inst, std::size_t* count = nullptr) {
     return edits_json(track, std::vector<RouteEdits>{{&route, &inst}}, count);
 }
+
+// Leitura de um edits.json (de volta para a sessão): o que aplicou e o que ficou de fora, com o motivo.
+struct ApplyReport {
+    std::size_t applied = 0;
+    std::vector<std::string> skipped;
+};
+
+// Entradas do edits.json `doc` para a rota `route`, aplicadas em `inst`: movidas e apagadas pelo idnum
+// (o "index") e pelo tipo; cópias (added) recriadas no fim a partir do `src`. Uma entrada cujo m0 não
+// bate com o arquivo (a pista foi exportada de novo) fica de fora. Lança std::runtime_error se `doc`
+// não é um "dr2-track-edits" v1 desta pista.
+void apply_edits(const json::Value& doc, const Track& track, const Route& route, Instances& inst, ApplyReport& report);
+
+// Rotas com alguma entrada no edits.json.
+std::vector<std::string> routes_in_edits(const json::Value& doc);
 
 // Caminho dentro da pasta de instalação do jogo? (".../steamapps/common/DiRT Rally 2.0/..."); a
 // comparação ignora maiúsculas e aceita barra invertida.
