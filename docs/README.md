@@ -9,7 +9,7 @@
 | [`plans/`](plans/README.md) | Planos de execução para outra IA ou pessoa: refatorar o Python em camadas, modularizar o web, documentar cada ferramenta e construir o [viewer 3D nativo](plans/viewer3d/README.md) em 7 etapas |
 | [`demands/`](demands/README.md) | Ideias ainda não iniciadas (multiplayer com fantasmas, editores). Tudo ali é especulação |
 
-Fora desta pasta: o [`README.md`](../README.md) da raiz (visão geral e roadmap) e o [`SSOT.md`](../SSOT.md) (especificação e estado das fases).
+Fora desta pasta: o [`README.md`](../README.md) da raiz (visão geral e roadmap), o [`SSOT.md`](../SSOT.md) (especificação e estado das fases) e [`examples/`](../examples/README.md) (a pista sintética pronta para abrir nos viewers).
 
 ## Convenções
 

@@ -40,3 +40,6 @@ __pycache__/
 # Opcoes de mods gravadas pelo DR2 Hook
 mods/*/settings.ini
 mods/*/settings.ini.tmp
+
+# Índice que `python -m tools.synthtrack -o examples` grava junto (só serve ao web viewer em build/uiview)
+examples/data/

@@ -20,7 +20,7 @@ cmake --build build/viewer3d
 ./build/viewer3d/viewer3d --track build/uiview/tracks/portugal__montalegre_rallycross
 ```
 
-Sem o jogo, use a pista sintética: `python -m tools.synthtrack` grava `build/uiview/tracks/synthetic__dr2hook_ring` ([docs](../../docs/tools/synthtrack.md)).
+Sem o jogo, use a pista sintética que vem no repositório: `--track examples/tracks/synthetic__dr2hook_ring` ([exemplos](../../examples/README.md)). Para gerar outra cópia, `python -m tools.synthtrack` grava `build/uiview/tracks/synthetic__dr2hook_ring` ([docs](../../docs/tools/synthtrack.md)).
 
 Para usar a NVIDIA num notebook híbrido:
 

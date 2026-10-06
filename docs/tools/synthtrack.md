@@ -12,6 +12,8 @@ Usos: dado de teste dos viewers sem o jogo instalado (os testes do viewer nativo
 python -m tools.synthtrack [-o build/uiview] [--seed 7]
 ```
 
+Uma cópia gerada com a semente 7 já vem em [`examples/tracks/synthetic__dr2hook_ring/`](../../examples/README.md); um teste confere que ela continua igual à saída do gerador (regere com `-o examples`).
+
 Leva ~2 s e ~6 MB. Grava `build/uiview/tracks/synthetic__dr2hook_ring/` e atualiza `build/uiview/data/tracks.js`, então a pista aparece na aba **Pistas** junto das exportadas do jogo. A mesma semente dá os mesmos bytes. Precisa de Pillow (`pip install .[view]`).
 
 ## O que tem

@@ -116,6 +116,20 @@ class SynthTrackTest(unittest.TestCase):
                 with open(os.path.join(other, "tracks", synth.TRACK_ID, name), "rb") as fh:
                     self.assertEqual(fh.read(), self.read(name), name)
 
+    def test_example_matches_generator(self):
+        """A cópia versionada em examples/ é a saída atual do gerador (regere com `python -m tools.synthtrack -o examples`)."""
+        example = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "tracks", synth.TRACK_ID)
+        if not os.path.isdir(example):
+            self.skipTest("examples/ ausente")
+        for root, _, files in os.walk(self.dest):
+            for name in files:
+                rel = os.path.relpath(os.path.join(root, name), self.dest)
+                with open(os.path.join(example, rel), "rb") as fh:
+                    self.assertEqual(fh.read(), self.read(rel), f"examples/ desatualizado: {rel}")
+        generated = {os.path.relpath(os.path.join(r, f), self.dest) for r, _, fs in os.walk(self.dest) for f in fs}
+        versioned = {os.path.relpath(os.path.join(r, f), example) for r, _, fs in os.walk(example) for f in fs}
+        self.assertEqual(versioned, generated)
+
 
 if __name__ == "__main__":
     unittest.main()
