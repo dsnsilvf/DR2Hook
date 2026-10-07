@@ -195,11 +195,15 @@ sol e a névoa em magenta, e o cenário inteiro ficou magenta.
 
 ## 8. Em aberto
 
-- Formato do `base.ctpk`.
-- Decodificador do BXML (`\x01BXML`/`\0BXML`; o `bxml.py` do repo é outro formato).
+- Formato do `base.ctpk` (resolvido na §10.1).
+- Decodificador do BXML. O `bxml.py` do repo lê os XML de rota (`progress_track.xml`), mas não o
+  `surface_materials.xml` do `game_1.dat` (variante `\0BXML`; lido por `strings`).
 - Quem liga o bit 8 do pedido de montagem e o que é o "Patching from disc".
-- Se o cache de dataset guarda os arquivos da camada entre corridas. Passam pela camada (medido): `tracksplit.pssg`, `route_0/objects.ens`, `trees.bin`, `ornaments.bin`, `track.vis`, `progress_track.xml`, `ai_track.xml`, `*.cqtc`, `landscape.heightfield`, `grass.grs`, `drivable_entities.jpk`. O `track.jpk` (colisão) não apareceu.
-- Formato do `track.vis` e quem o lê (ver §9.6).
+- Se o cache de dataset guarda os arquivos da camada entre corridas. Passam pela camada (medido): `tracksplit.pssg`, `route_0/objects.ens`, `trees.bin`, `ornaments.bin`, `track.vis`, `progress_track.xml`, `ai_track.xml`, `*.cqtc`, `landscape.heightfield`, `grass.grs`, `drivable_entities.jpk` e, na pista nova, também o
+  `route_0/track.jpk` (§10.4).
+- Formato do `track.vis` (resolvido na §9.9) e da colisão (§9.11).
+- O u32 de bits do vértice da colisão (metade dos originais é 0; a metade alta vai até 4096).
+- Se o DR2 aceita a falta de `resetlines.cqtc` / `boundarylines.cqtc`, como o DR3.
 - Uso do UAV nos VB do terreno.
 
 ## 9. Geometria nova no `tracksplit.pssg` (DR2Hook Ring pela overlay, 2026-10-06)
@@ -358,7 +362,7 @@ locais):
 - Nó interno: u16 a, u16 b, u16 c.
   - Filho do lado baixo: `a & 0x1fff`. Filho do lado alto: esse índice − 1.
   - Eixo: `(a >> 13) & 3` (0 = x, 1 = y, 2 = z).
-  - Corte: `((b >> 12) << 16 | c) / 2^20`, como fração da caixa do nó.
+  - Corte: `((b >> 12) << 16 | c) / 2^20`, como fração da caixa da **raiz** (corrigido em 2026-10-06 com o DiRTbench; a seção de depuração confere com erro < 0,002 m).
   - O bit 15 de `a` só aparece nas pistas grandes e o uso é desconhecido.
 - As folhas sob o chão (y de 0,5 a ~1420 na Montalegre) têm o bloco "tudo 1" de 16 bytes. São 132
   das 247.
@@ -496,6 +500,33 @@ célula no bitset.
 u32 índice` e `n` pontos vec4 (w = 0x10fa10fa). Só as 115 folhas reais (as que não são "tudo 1")
 têm pontos.
 
+**Nomes e correções pela pesquisa do Ssor (2026-10-06).** O repositório
+[ssor0/ego-visibility-system](https://github.com/ssor0/ego-visibility-system) lê o mesmo formato nos
+jogos Ego anteriores (DiRT 2/3, Showdown, Grid). Ele não tem licença, então só usamos os fatos. Tudo
+abaixo foi conferido nos 172 `track.vis` do DR2:
+
+- Os "grupos" são **camadas estáticas**: 0 `track_block` (células do terreno), 1 `ground_cover`,
+  2 `ornaments`, 3 `trees`, 4 `crowd`, 6 água interativa, 7 entulho do chão e 8 luzes. O índice do
+  registro é a posição do item na lista do gerenciador da camada. Montalegre route_0: 470 / 472 /
+  1644 / 974 / 125 e 62 luzes.
+- Nó interno do PVS: o bit 15 que parecia uma "flag" é o 13º bit do índice do filho de trás
+  (`(a>>15)<<12 | b&0xfff`). Nos 622 657 nós ele é sempre o filho da frente menos 1.
+- O u8 da folha é o esquema de compressão. Só aparece o 1 (`RLEBit8`).
+- A "seção de caixas" é `DebugViewCellInfo`, que o jogo não usa. Cada ponto é `f32 xyz` mais dois
+  u16 (nós e itens visíveis). Nas 384 amostras, os dois valem o total de bits (0x10fa = 4346).
+- A consulta do motor (`QueryParams`) tem `returnAllItems` e máscaras de camada estática e dinâmica.
+  Isso serve de ponto de depuração para desligar o PVS ou camadas em tempo de execução.
+
+`track_vis.py cells ... --layers 2,3` mantém só as camadas pedidas, além da 0. Com `--layers ""`
+fica só o terreno: os itens das outras camadas saem da kd e não entram no conjunto visível
+(`build/re/track_ring_l0.vis`).
+
+**Resultado no jogo (2026-10-06, run `l0`, pista `dr2hook_ring`).** O `track_ring_l0.vis` foi servido
+pela overlay (o trace mostra o `open` em `dr2hook_ring\route_0\track.vis`) e a corrida largou
+normalmente. Todos os objetos da Montalegre sumiram: guard-rails, placas, árvores, prédios e decalques
+do chão. Só o terreno do Ring aparece. Isso confirma que a kd do `track.vis` decide o que cada
+gerenciador desenha. A colisão dos objetos é outro sistema e não foi testada.
+
 Na carga, o jogo copia o arquivo inteiro para a memória e reescreve só os campos de ligação, como o
 offset do próximo nó e a flag de filhos. As caixas de alguns objetos são atualizadas ao vivo.
 
@@ -521,3 +552,334 @@ Ainda falta:
 - os objetos da Montalegre (grupos 1 em diante) seguem nas posições antigas, e a maioria fica
   enterrada sob o Ring;
 - `LOW_` para longe, decalques, rota e AI.
+
+### 9.10 O que o DiRTbench (DiRT 3, MIT) ensina para o DR2 (2026-10-06)
+
+O [DiRTbench](https://github.com/ItsNotPaths/DiRTbench) cria estágios novos para o DiRT 3: estradas,
+terreno, colisão, `track.vis`, arquivos de rota e linhas do banco. O que vale para o DR2, já
+conferido nos arquivos da Montalegre:
+
+- **Colisão (`track.jpk`):** é o mesmo JPAK. Os blocos se chamam `qt_XZ_XZ_..._XZ.vcqtc` (dois bits por
+  nível), ficam em profundidade, e o `qt.info` (2 × vec3) vai no fim. No DR3 a raiz precisa se dividir
+  ao menos uma vez: com um bloco só, o carro cai. Os blocos respeitam um limite medido dos originais
+  (DR3: 1565 triângulos / 929 vértices; Montalegre: no máximo 1084 / 591), e passar dele derruba a carga
+  longe da colisão. O triângulo entra em cada célula que toca (teste SAT em XZ). O formato interno do
+  bloco é outro no DR2 (vértice vec4, 8 materiais, bloco `VCQT`), então o particionador serve, mas o
+  codificador é o nosso.
+- **`track.vis`:** o corte do PVS é uma fração da caixa da raiz (corrigido na §9.9). A lista de
+  folhas termina num byte 0, e o jogo decodifica até achá-lo. Um gerador de verdade divide as células
+  só perto da superfície da rota (até 8191 nós / 4096 folhas) e usa um alcance de cerca de 200 a 400 m
+  para objetos.
+- **Arquivos de rota velhos:** `resetlines.cqtc` é o teste de fora da pista. Uma cópia da pista de
+  origem pode pôr o carro de volta num chão que não existe mais. O DR3 aceita a falta de
+  `resetlines.cqtc` e `boundarylines.cqtc`. O Ring ainda leva o `resetlines.cqtc` da Montalegre.
+- **Rota e IA:** `progress_track`, `ai_track` e as linhas de freada saem da linha central (portões a
+  cerca de 17 m, raio das curvas).
+- **Banco:** além de `location`, `track` e `track_model`, o DR3 clona `track_model_surface`,
+  `track_model_conditions` e `net_race_tracks`. As duas últimas não existem no `base.ctpk` do DR2. Em
+  troca, a rota 537 aparece em `ai_virtual_times` (6 linhas) e em tabelas ainda sem nome.
+
+### 9.11 Colisão (`route_N/track.jpk`) e gerador (2026-10-06)
+
+O `track.jpk` é um dataset `RaceSetup` no pool `ENTITY_SYSTEM`. O leitor e gravador fica em
+`scripts/research/track_jpk.py`. Ele regrava a Montalegre byte a byte e recodifica todos os 480 blocos
+com os mesmos triângulos, materiais e bits de aresta.
+
+- **JPAK:** `"JPAK"`, 0, n, 16, 0, 32 + 32n, 8 bytes zero. Depois vêm n entradas de 32 bytes (offset do
+  nome, tamanho, offset dos dados, tamanho, 16 bytes zero). Os nomes começam em 32 + 32n + 1. Os dados
+  ficam alinhados a 16 e o arquivo é completado até 16.
+- **Nomes:** `qt_XZ_XZ_..._XZ.vcqtc`. É um bit de X e um de Z por nível, do nível mais alto para o mais
+  baixo, relativos à caixa do `qt.info`. As entradas ficam em ordem de nome (profundidade). O `qt.info`
+  (min xyz, max xyz) é a última.
+- **Bloco `vcqtc` do DR2:**
+
+  | Offset | Conteúdo |
+  |---|---|
+  | 0x00 | `bmin` xyz, `bmax` xyz (folga de 0,1) |
+  | 0x18 | i32 número de triângulos, número de vértices, 8 |
+  | 0x24 | u32 offset dos vértices (0x90), dos nós, dos triângulos, das refs |
+  | 0x34 | 8 códigos de superfície de 4 letras (as vagas repetem o último) |
+  | 0x60 | `"VCQT"`, 1, 0, 0 |
+  | 0x70 | vec4 (bmin.x, 0, bmin.z, 1) |
+  | 0x80 | vec4 (largura x, 1, largura z, 1) |
+- **Vértice:** f32 x normalizado, y absoluto, z normalizado e um u32 de bits. Metade dos originais tem
+  esse u32 em 0; gravamos 0.
+- **Nós:** 2 bytes BE. O bit 15 marca folha e o resto é o offset nas refs. `8000` é um bloco de uma
+  folha só (35 dos 480 originais).
+- **Triângulo:** codificação do Showdown.
+  - byte0 = v0 >> 2.
+  - byte1 = (v0 & 3) << 6 | bits de aresta << 3 | material.
+  - byte2 = v1 − v0.
+  - byte3 = v2 − v0.
+
+  O bit de aresta k vale 1 quando a aresta tem vizinho com ângulo diedro menor que cerca de 55°. Na
+  borda da malha vale 0; o recálculo bate com 97% dos originais. A normal fica para cima.
+- **Refs:** u16 BE do primeiro índice, depois deltas de 1 byte (254 = pula), terminando em 0xFF.
+- **Superfícies** (`surface_materials.xml` em `game_1.dat`):
+
+  | Código | Superfície |
+  |---|---|
+  | `TS0+` | SMOOTHDRYTAR_RX |
+  | `RRM+` | RUMBLESTRIP_RIDGED_MED |
+  | `DB2+` | GRAV_RX |
+  | `DR2+` | DIRT_RX |
+  | `GR1+` | GRASS_RX |
+- **Gerador:** `track_jpk.py ring <saída>`.
+  1. Quadtree em XZ (teste SAT por célula), dividindo enquanto passar de 1000 triângulos, 580 vértices ou
+     8 materiais.
+  2. Vértices soldados a 1 mm e numerados por Cuthill-McKee reverso, para os deltas caberem num byte.
+  3. Um nó folha único por bloco.
+
+  Do fundo do Ring, só fica o que está a até 200 m do primeiro plano. Assim são 502 blocos e 3,46 MB,
+  perto da Montalegre.
+
+**Travamento do `col1` (causa achada):** com a colisão do Ring, a carga parou em `submit entity`. A
+thread principal ficou presa em `0x1404628a0`. Essa função é um comb sort (fator 0,8017) chamado por
+`0x1404b4690`. A `0x1404b4690` espalha sondas IBL (`core_ibl_large`) pela spline da rota e as ordena
+pela distância até `[[corrida+0x2050]+0x17c0]+0xd0`, a posição do carro. O comparador
+`0x140498ac0` é `comiss` + `setb`, que dá verdadeiro com NaN nos dois sentidos, então uma distância NaN
+faz a ordenação trocar para sempre.
+
+O NaN vem do carro. Ele nasce no grid da Montalegre, e ali o chão do Ring (deslocamento antigo
+`8,1334,-290`, sem giro) era grama 4,6 m acima. Em quase todo o traçado da Montalegre, o Ring ficava 2 a
+16 m acima. Com a colisão da Montalegre isso não aparecia, porque o carro nascia no chão dela, invisível
+sob o Ring.
+
+Correção: `ring_tracksplit.start_transform()` gira o Ring em torno de Y (47,7°) e o move para que a
+reta de largada do layout (s = 0) caia sobre os portões 0 a 2 da Montalegre, com o asfalto em 1432,68.
+O tracksplit, o `track.vis` e a colisão usam a mesma transformação. Regra para pistas novas: o asfalto
+tem de estar no grid de largada que o jogo usa, enquanto o grid vier da pista de origem.
+
+## 10. Pista nova com nome próprio (sem trocar uma pista existente, 2026-10-06)
+
+Objetivo: uma rota `portugal / dr2hook_ring / route_0` que existe ao lado da Montalegre, em vez de
+servir o Ring no lugar dela.
+
+### 10.1 Catálogo (`catalogues/base.ctpk`)
+
+Formato completo em `scripts/research/ctpk.py`; a regravação sai idêntica byte a byte.
+
+- O cabeçalho tem 0x18 bytes: `"CTPK"`, u32 versão 2, u32 checksum, u32 0x18 e u32 fim absoluto
+  das strings.
+- Depois vêm as strings (u32 n, depois u32 tamanho + bytes).
+- O diretório tem u32 n e pares (djb2 do nome da tabela, offset absoluto). Offset `0xffffffff`
+  marca tabela vazia; o diretório não é ordenado por hash.
+- O corpo de cada tabela é u32 n_linhas seguido de (u32 id, u32 tamanho, protobuf). As linhas
+  ficam ordenadas por id, porque a busca é binária.
+- Strings dentro das linhas são guardadas como djb2 da string da tabela.
+- Os nomes das tabelas são o djb2 dos nomes do `schemaDirtRally.xml` do EgoDatabaseEditor.
+- `packages.xml` lista os pacotes, e o carregador `0x14026bf00` carrega cada um como dataset do
+  `CatalogueManager`.
+- A busca por id (`0x1400e7780`) só olha o **primeiro** pacote que tem a seção. Um segundo pacote
+  não acrescenta linhas, então o caminho é servir um `base.ctpk` inteiro gerado.
+
+Rota = `track_model` (`0xb8e12aaa`). Na Montalegre `route_0`, a linha 537 tem estes campos:
+
+| campo | valor |
+|---|---|
+| 1 | id |
+| 2 | pista (`%track%`) |
+| 4 / 5 | country / location (ids) |
+| 6 | location (`%location%`) |
+| 9 | disciplina |
+| 12 | id na tabela `track` |
+| 13 | rota (`%route%`) |
+| 17 / 18 | nomes `lng_` |
+| 48 | `montalegre_rallycross_01` |
+| 74 / 75 | `<pista>_route_0` / `_spline` |
+
+Outras tabelas ligadas à rota:
+
+- `track` (`0x1072479a`, linha 153): o nome da pista está nos campos 3 e 9.
+- `track_model_surface` (`0x29199252`, linhas 24/25): o campo 3 é a rota.
+- `ai_virtual_times` e as definições de etapa `0xf4122b6a` também citam a rota (campo 3 = 537).
+
+**Como o jogo acha a rota pelo nome.** É o que o benchmark e o AutoStage usam (`0x140590fa0`):
+
+1. Lista todas as linhas de `track_model` (`0x1403463a0`).
+2. Filtra pelo djb2 da pista (getter `0x1400fef60`, campo em `+0x10`).
+3. Compara location (`+0x30`) e rota (`+0x60`) com `_stricmp`.
+
+O descritor que vai para `race+0x32a0` aponta para essa linha. É dele que saem os tokens
+`%track%`, `%location%` e `%route%` (§6). Sem linha, o ponteiro fica nulo, e esse é o crash do
+`twin_peaks/free_roam`.
+
+### 10.2 Pacote da location
+
+`0x14050d700` monta `locations/<location>__<pista>.nefs`:
+
+1. `0x1405df3c0` responde se o pacote está pronto.
+2. `0x1405dcea0` monta o nome `'%s__%s.nefs'` (sem pista, `tiles`).
+3. `0x1405dd2d0` busca o descritor.
+
+As duas buscas usam o hash `h = (h*33) ^ tolower(c)`, com semente 5381, sobre uma lista **fixa no
+exe** (`.rdata 0x1410b44f6`, 124 entradas = 40 locations + 84 carros). Cada entrada tem:
+
+- o hash do nome;
+- o pedaço de instalação (u16);
+- uma marca de DLC (1 nas pistas e carros pagos);
+- o SHA-256 do arquivo (32 bytes).
+
+O jogo espera o pacote ficar pronto num laço com `Sleep(10)` (`0x14050d850`). Um nome fora da
+lista nunca fica pronto, então **a carga trava**.
+
+Na montagem (`0x140505ae0`):
+
+- falha ao abrir o pacote → erro 6;
+- SHA-256 diferente → o jogo só grava `0x03b5d037166c2af5` num objeto, provavelmente uma marca
+  de arquivo alterado.
+
+O `.nefs` da Montalegre só tem `tracks/locations/portugal/montalegre_rallycross/*` (68 arquivos,
+1,55 GB) e o marcador `locations/mounted/portugal__montalegre_rallycross`. Uma pista com outro
+nome não usa nada dele.
+
+`info_*.nefs` (`0x14026c3a0`): logo depois dos catálogos, o jogo procura esses pacotes na raiz de
+cada dispositivo e os monta. No PC não há nenhum (provavelmente sobra de console ou DLC).
+
+### 10.3 Implementação de teste (LoadProbe)
+
+- `overlay_early = 1`: hook em `0x14026bf00`, que monta a overlay antes do `packages.xml` para
+  servir `catalogues/base.ctpk`. `overlay_early = 2` monta já no primeiro pedido de arquivo
+  (`system/boot_data.xml`, ~2 s), antes das bases persistentes do frontend (§11). A montagem no `track_loader.xml` continua, para ficar na frente
+  do `.nefs` da location.
+- `track_alias = dr2hook_ring=montalegre_rallycross`: hooks em `0x1405df3c0` e `0x1405dcea0` que
+  trocam só a pista usada no nome do `.nefs`. O pacote montado é o da Montalegre, mas os arquivos
+  da pista nova vêm da overlay, em `tracks/locations/portugal/dr2hook_ring/`.
+- `scripts/research/custom_track.py`:
+  - clona a rota, a `track` e as `track_model_surface` com ids novos (669, 181, 1995/1996);
+  - grava o catálogo na overlay;
+  - copia os arquivos da pista de origem para a pasta nova, trocando `tracksplit.pssg` e
+    `route_0/track.vis` pelos do Ring.
+
+### 10.4 Resultado no jogo (run `custom1`, 2026-10-06 14:46)
+
+O AutoStage com `portugal / dr2hook_ring / route_0` carregou e largou sem travar.
+
+- **Catálogo:** o trace mostra `packages.xml` e `base.ctpk` lidos da overlay.
+- **Rota:** ao vivo, `race+0x32a0` aponta para a linha 669, com pista `dr2hook_ring`, location
+  `portugal` e rota `route_0`.
+- **Pacote da location:** o alias montou o da Montalegre.
+- **Arquivos:** todos os 58 arquivos da pista lidos na corrida vieram de
+  `tracks/locations/portugal/dr2hook_ring/` na overlay, inclusive o `route_0/track.jpk` (colisão).
+- **Visual:** o Ring aparece igual ao run `ringvis`. O carro fica sob a grama, porque a colisão
+  ainda é a da Montalegre.
+- **Nome do evento:** o `RaceEvent` informa `montalegre_rallycross`, o nome do pacote montado.
+
+Os campos 74/75 da rota (`montalegre_rallycross_route_0` / `_spline`) ficaram iguais aos da
+origem.
+
+### 10.5 Colisão própria (runs `col1` e `col2`, 2026-10-06)
+
+- **`col1` (17:12):** a colisão gerada (`track_jpk.py ring`, Ring com o deslocamento antigo e sem giro)
+  foi lida da overlay, e a carga travou depois de `submit entity`. A causa foi o carro nascer dentro do
+  chão (§9.11).
+- **`col2` (17:24):** o Ring foi girado e movido para a largada da Montalegre
+  (`start_transform`: giro 47,702°, deslocamento −132,382 / 1331,692 / −330,405). O tracksplit, o
+  `track.vis` só com terreno e a colisão com o fundo a 200 m (502 blocos) estão em
+  `build/re/ring_aligned/`.
+  - **Carga e largada:** carregou e largou às 17:24:10.
+  - **Chão:** o carro roda sobre o terreno do Ring e levanta poeira de grama (`GR1+`), então o
+    material da colisão vale.
+  - **Rumo:** no modo automático ele sai do asfalto, porque segue a linha da IA da Montalegre.
+  - **Vigia de threads:** o aviso `GhostLab[espera]` às 17:24:27 apareceu depois da largada e não
+    era travamento. A thread principal estava em espera normal (`0x1404b2609`).
+
+Próximos passos:
+
+1. Gerar `progress_track.xml`, `ai_track.xml`, `ai_vehicle_track.xml` e
+   `vehicle_track_progress_data.xml` a partir da linha central do Ring (`layout.json`), com a mesma
+   transformação.
+2. Trocar ou tirar `resetlines.cqtc` e `cameralines.cqtc`, que ainda são da Montalegre.
+3. Depois, nomes no menu e um pacote próprio no lugar do `track_alias`.
+
+## 11. Tela de carregamento (foto aérea e traçado)
+
+Não é vídeo. A tela é a cena `fe/screens/loading/map_stats_loading` de
+`game_1.dat:frontend/databases/loadingScreen.pssg`.
+
+### 11.1 Cena
+
+- **`map_switch`:** um UINODESWITCH com escala 0,45 e um filho por rota. O filho é escolhido pelo nome
+  `<pista>_<rota>` (campos 2 e 13 da rota no catálogo). Sem filho com o nome da pista, a tela fica
+  preta, que era o caso do Ring.
+- **Filho:** cada um aponta, por USERDATA, para um UINODEANIMATED cujo xr é
+  `fe/component/loading/<rota>`.
+- **Componente:** tem a FENODECOUNT, a FEANIMDATA compartilhada (`#femad374`), os `markers`, o
+  `spline` e o `bg_image`.
+  - **`markers`:** os `sector_marker_NN`, cada um um xr para `start_marker`, `finish_marker`,
+    `joker_marker` ou `sector_marker`. A posição é o pixel do `_spline` dividido por 100, com y
+    negativo.
+  - **`spline`:** um quad de (0, 0) a (13,44, −9,84), ou seja 1344×992 px a 0,01 unidade por pixel.
+    O shader é `ui_spline_reveal`.
+  - **`bg_image`:** um quad de ±11,52×±6,48 com escala 2,5 em (9,6, −5,4). A animação de entrada
+    (`Anim!12`) leva a escala para ~1 e tira o blur radial.
+- **Eventos:** `reveal_spline` toca `open` no `spline`, espera `loading_spline_reveal_time` e toca
+  `place_marker` em `sector_marker_00`…`_15`. Os glyphs são pedidos pelo nome e os que faltam são
+  ignorados.
+
+### 11.2 Texturas
+
+Ficam em `frontend/streamed_textures/loading/`.
+
+- **`<rota>.tpk`:** foto aérea, BC1, 2304×1296.
+- **`<rota>_spline.tpk`:** BC1, 1344×992.
+  - R: linha fina;
+  - G: progresso, de 1 na largada a ~0,05 na chegada, num traço grosso;
+  - B: joker.
+
+  O `RevealMaskValue` vai de 1,019 a −0,012 e revela os pixels de G acima do limiar, e é isso que
+  "desenha" a pista.
+- **`splines/<rota>_sa.tpk`:** BC7, 368×176. É o mapinha do menu; o Ring ainda não tem.
+
+### 11.3 Foto e traçado alinhados
+
+- **Mapeamento:** foto e `_spline` ficam no mesmo componente. O zoom lento da cena vale para os
+  dois, então o mapeamento entre eles é fixo.
+  - **Medição:** registro das linhas da pista e da linha branca nos prints da carga do Ring (run
+    `load2`, três quadros com o mesmo resultado): foto = 0,9975 · spline + (194, 104,5) px.
+  - **Pela cena:** dá + (192, 108) com escala 1.
+- **Jogo original:** nas pistas do jogo o traçado não fica alinhado com a foto.
+- **Ring:** `scripts/research/loading_screen.py --track-dir`
+  1. calcula uma câmera quase a pino (pitch 1,5) que põe a pista dentro de `SPLINE_BOX`;
+  2. renderiza a foto no viewer3d (`--hide lines --shot-size 4608x2592`, reduzida para 2304×1296);
+  3. desenha o `_spline` e os marcadores com a mesma projeção (`glm::lookAt` + `perspective`,
+     fovy 0,9).
+
+  No jogo (run `load3`), o risco é desenhado em cima do asfalto.
+
+### 11.4 Carga cedo
+
+- **Problema:** `loadingScreen.pssg` é uma base persistente e carrega aos ~6 s do boot (pilha
+  `ee247bf|ee256b9|e84ffff`), antes dos catálogos. Com `overlay_early = 1`, o jogo usava o original:
+  o som de desenho tocava, mas a tela ficava preta.
+- **Solução:** com `overlay_early = 2`, a overlay entra no primeiro `0x140c5ff80` (`boot_data.xml`)
+  e o arquivo sai de `dr2hook_overlay\frontend\databases\loadingscreen.pssg`. Na contagem de
+  classes aparecem 189 FENODECOUNT, contra 188 no original.
+
+## 12. Do editor ao jogo (o Ring inteiro, 2026-10-06)
+
+O `tools/synthtrack` é a fonte. Depois de mudar a pista ou a decoração, regere tudo nesta ordem:
+
+```bash
+python3 -m tools.synthtrack -o examples
+python3 scripts/research/ring_tracksplit.py build/re/ring_pad3/tracksplit.pssg --host build/re/montalegre/tracksplit.pssg
+python3 scripts/research/track_jpk.py ring build/re/ring_pad3/track.jpk --bg-margin 200
+python3 scripts/research/ring_objects.py build/re/ring_objects4 --tracksplit build/re/ring_pad3/tracksplit.pssg --kinds eot
+python3 scripts/research/loading_screen.py --overlay captures/overlay --name dr2hook_ring \
+    --layout examples/tracks/synthetic__dr2hook_ring/source/layout.json --track-dir examples/tracks/synthetic__dr2hook_ring
+```
+
+- **Pastas de saída:** crie antes a pasta de saída do `ring_tracksplit.py`, porque ele não a cria.
+- **Colisão:** regere a colisão sempre junto com o terreno. Os platôs e o piso do paddock mudam o chão.
+- **O que vai para `captures/overlay/tracks/locations/portugal/dr2hook_ring/`:**
+  - `tracksplit.pssg` e `route_0/track.jpk`, da pasta do terreno;
+  - `objects.pssg`, `objectstextures.pssg`, `ornaments_references.xml`, `route_0/ornaments.bin` e
+    `route_0/track.vis`, da pasta dos objetos.
+- **Tela de carregamento:** o `loading_screen.py` grava direto na overlay (`frontend/...`). A tela
+  só troca depois de reiniciar o jogo (§11.4).
+- **Ornamentos:** o `ring_objects.py` porta os tipos `e`, `o` e `t` do editor que têm instâncias na rota.
+  O `e:synth_spawn_marker` fica de fora.
+- **Resultado em 2026-10-06:** 59 tipos, 2318 instâncias e 22 materiais.
+  - A decoração completa (rodadas 1–3) foi vista no jogo pela câmera livre (F9).
+  - As eólicas a ~900 m da pista continuam visíveis.
+  - O load `dec3` largou sem crash, já com a foto aérea nova.

@@ -5,9 +5,13 @@
 Uma pista **inventada**, sem nada lido do jogo, gerada por [`tools/synthtrack`](../docs/tools/synthtrack.md) com a semente padrão (7). Fica versionada para abrir os viewers e rodar os testes sem o jogo e sem gerar nada antes.
 
 - Circuito fechado de ~2,1 km com relevo, zebras e brita.
-- Barreiras, muros de pneus, alambrado, pórtico de largada, arquibancadas, cones, placas e ~420 árvores.
-- Duas rotas: `route_0`, com 1011 instâncias, e `route_1`, sem pórtico e arquibancadas e com uma chicane de cones (995 instâncias).
-- Terreno com 164 malhas e 151 989 vértices; 16 texturas; ~6,4 MB no total.
+- Barreiras, muros de pneus, alambrado, pórtico de largada, arquibancadas, cones e placas.
+- Decoração: placas de publicidade nas retas, paddock com tendas, caminhões, contêineres e banheiros, torre de controle, fardos de feno e pilhas de pneus nas curvas.
+- Natureza: 16 bosques de pinheiros ou bétulas (árvores 3D), árvores soltas, arbustos e pedras.
+- Público em barrancos por fora das três curvas mais longas, com alambrado e guarda-sóis.
+- Mastros com bandeiras e postes de luz na reta dos boxes, estacionamento com ~110 carros, dois sítios (casas, celeiro, caixa d'água) e um parque eólico de 10 torres nos morros.
+- Duas rotas: `route_0`, com 2320 instâncias, e `route_1`, sem pórtico e arquibancadas e com uma chicane de cones (2253 instâncias).
+- Terreno com 165 malhas e 152 249 vértices; 26 texturas; ~8,8 MB no total.
 
 Abrir no editor nativo:
 

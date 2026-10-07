@@ -1,24 +1,30 @@
 """Lê o `track.vis` (PVS da rota, pool VISIBILITY_SYSTEM) e gera versões novas: "tudo visível" ou com as células
 de outro `tracksplit.pssg`. Ver docs/reverse_engineering/track_loading.md §9.7–9.9.
 
-Formato (versão 4, little-endian; medido em 172 arquivos de 40 locais, 2026-10-06):
-- 0x00: u32 versão (4), nós do PVS, folhas (nós = 2*folhas - 1), nós da kd-tree de itens, bytes do bitset por folha,
-  offset dos nós (0x80), offset dos blocos das folhas, offset da kd-tree.
-- 0x20: caixa da árvore do PVS: f32 mín xyz, u32 offset da seção de caixas do PVS, f32 máx xyz, u32 0.
-- 0x40: itens por grupo (u32 x 16). Grupo 0 = células do `tracksplit.pssg` (Montalegre 470), na ordem do vetor
-  de células do jogo, que é a ordem reversa do arquivo.
-- Nós do PVS (6 bytes): folha = u16 0, u24 offset do bloco, u8 1. Interno = u16 a, u16 b, u16 c: filho do lado
-  baixo a&0x1fff, do lado alto a-1, eixo (a>>13)&3 (0 x, 1 y, 2 z), bit 15 de a = flag (só nas pistas grandes),
-  corte = ((b>>12)<<16 | c) / 2^20 dentro da caixa do nó.
+Formato (versão 4, little-endian; medido em 172 arquivos de 40 locais, 2026-10-06). Nomes entre parênteses vêm da
+pesquisa do Ssor (https://github.com/ssor0/ego-visibility-system, jogos Ego mais antigos) e batem com o DR2:
+- 0x00: u32 versão (4), nós do PVS (numViewCells), folhas (numLeafViewCells; nós = 2*folhas - 1), nós da kd-tree de
+  itens (numObjectTreeNodes), bytes do bitset por folha (pvsBytesPerViewCell), offset dos nós (0x80), offset dos
+  blocos das folhas (pvsListStart), offset da kd-tree (objectListStart).
+- 0x20: caixa da árvore do PVS (viewCellBounds): f32 mín xyz, u32 offset da seção de depuração, f32 máx xyz, u32 0
+  (debugPVSBlockersStart, sempre 0).
+- 0x40: itens por camada estática (u32 x 16, numObjectsInStaticLayer); nomes em `LAYERS`. Camada 0 = células do
+  `tracksplit.pssg` (Montalegre 470), na ordem do vetor de células do jogo, que é a ordem reversa do arquivo.
+- Nós do PVS (6 bytes): folha = u16 0, u24 offset do bloco, u8 esquema de compressão (sempre 1 = RLEBit8).
+  Interno = u16 a, u16 b, u16 c: filho da frente a&0x1fff, eixo (a>>13)&3 (0 x, 1 y, 2 z), filho de trás
+  (a>>15)<<12 | b&0xfff (sempre o da frente - 1 nos 622 657 nós), corte = ((b>>12)<<16 | c) / 2^20 da caixa
+  da raiz (não da do nó; confere com a seção de depuração com erro < 0,002 m).
 - Bloco da folha (alinhado a 16, com pelo menos um byte 0 depois): bitset em PackBits (c >= 0x80: repete o próximo byte c-0x80 vezes; c < 0x80: copia
   c bytes), bits em ordem little-endian. Tamanho = ceil(bits/8) arredondado a 16; bits = nós da kd + itens.
   Folhas sob o chão têm o bloco "tudo 1".
-- kd-tree de itens, em pré-ordem, nó = 48 bytes + 32 por registro:
-  f32 mín xyz, u32 bit do nó (byte | bit<<16); f32 máx xyz, u16 índice do nó, u16 registros;
-  u32 offset do próximo nó (0 no último), u32 profundidade<<16 | tamanho do próximo nó, u32 0, u32 2 (interno) / 0.
-  Registro: f32 mín xyz, u32 grupo; f32 máx xyz, u32 índice no grupo. O item fica no nó mais fundo que contém a
-  caixa inteira. Bits do PVS em largura (BFS): o nó, depois um bit por registro dele.
-- Seção de caixas do PVS: por nó do PVS, em ordem, f32 mín xyz, f32 máx xyz, u32 n, u32 índice, n pontos vec4.
+- kd-tree de itens (ObjectNode), em pré-ordem, nó = 48 bytes + 32 por registro:
+  f32 mín xyz, u32 bit do nó (u16 byte | u16 bit); f32 máx xyz, u16 índice do nó, u16 registros;
+  u32 offset do próximo nó (0 no último), u16 tamanho do próximo nó, u16 profundidade, u32 0, u32 2 (interno) / 0.
+  Registro (StaticItem): f32 mín xyz, u32 camada; f32 máx xyz, u32 índice na lista do gerenciador da camada. O item
+  fica no nó mais fundo que contém a caixa inteira. Bits do PVS em largura (BFS): o nó, depois um bit por registro.
+- Seção de depuração (DebugViewCellInfo, o jogo não usa): por nó do PVS, em ordem, f32 mín xyz, f32 máx xyz, u32 n
+  amostras, u32 índice; cada amostra = f32 xyz, u16 nós visíveis, u16 itens visíveis (nos arquivos, os dois são o
+  total de bits).
 
 O jogo monta por quadro a lista de células com essa kd-tree (job de `0x140c11b00`) e só avalia e desenha as células
 dela (`0x140a7f700` -> `0x140bcb2d0`); uma pista nova precisa da kd-tree com as próprias células.
@@ -37,6 +43,10 @@ from collections import deque
 from dataclasses import dataclass, field
 
 Box = tuple[tuple[float, float, float], tuple[float, float, float]]
+
+# Camadas estáticas (nomes da pesquisa do Ssor; 5 e 9..15 sem uso conhecido)
+LAYERS = ["track_block", "ground_cover", "ornaments", "trees", "crowd", "layer5", "interactive_water",
+          "ground_clutter", "lights"] + [f"layer{i}" for i in range(9, 16)]
 
 
 def unpack_rle(data: bytes, pos: int, size: int) -> tuple[bytes, int]:
@@ -113,8 +123,8 @@ class TrackVis:
                 v = b | c << 16
                 self.leaves[i] = v & 0xFFFFFF
             else:
-                kid = a & 0x1FFF
-                self.inner[i] = (kid, kid - 1, (a >> 13) & 3, ((b >> 12) << 16 | c) / float(1 << 20))
+                front, back = a & 0x1FFF, (a >> 15) << 12 | b & 0xFFF
+                self.inner[i] = (front, back, (a >> 13) & 3, ((b >> 12) << 16 | c) / float(1 << 20))
 
     def leaf_bits(self, node: int) -> bytes:
         return unpack_rle(self.data, self.leaves[node], self.leaf_bytes)[0]
@@ -128,7 +138,7 @@ class TrackVis:
                 out[i] = (lo, hi)
                 continue
             a, b, axis, f = self.inner[i]
-            cut = lo[axis] + f * (hi[axis] - lo[axis])
+            cut = self.box_min[axis] + f * (self.box_max[axis] - self.box_min[axis])  # fração da caixa da raiz
             lo2, hi1 = list(lo), list(hi)
             hi1[axis] = cut
             lo2[axis] = cut
@@ -232,21 +242,29 @@ class TrackVis:
         struct.pack_into("<16I", out, 0x40, *groups)
         return bytes(out)
 
-    def with_cells(self, cells: list[Box]) -> bytes:
-        """Troca o grupo 0 (células) pelas caixas dadas, na ordem do vetor de células do jogo (reversa do arquivo)."""
+    def with_cells(self, cells: list[Box], keep_layers: set[int] | None = None,
+                   extra: dict[int, list[Box]] | None = None) -> bytes:
+        """Troca a camada 0 (células) pelas caixas dadas, na ordem do vetor de células do jogo (reversa do arquivo).
+        Com `keep_layers`, as outras camadas fora do conjunto saem da kd (o jogo deixa de desenhar esses itens).
+        `extra` troca camadas inteiras por caixas novas (camada 2 = ornamentos: índice = instanceId do ornaments.bin)."""
         kd = self.kd_nodes()
-        for n in kd:
-            n.recs = [r for r in n.recs if r[2] != 0]
-        for k, box in enumerate(cells):
-            i = 0
-            while True:
-                kid = next((j for j in kd[i].kids if kd[j].contains(box)), None)
-                if kid is None:
-                    break
-                i = kid
-            kd[i].recs.append((box[0], box[1], 0, k))
         groups = list(self.groups)
-        groups[0] = len(cells)
+        layers = {0: cells, **(extra or {})}
+        for g in range(1, 16):
+            if keep_layers is not None and g not in keep_layers and g not in layers:
+                groups[g] = 0
+        for n in kd:
+            n.recs = [r for r in n.recs if r[2] not in layers and groups[r[2]]]
+        for g, boxes in layers.items():
+            for k, box in enumerate(boxes):
+                i = 0
+                while True:
+                    kid = next((j for j in kd[i].kids if kd[j].contains(box)), None)
+                    if kid is None:
+                        break
+                    i = kid
+                kd[i].recs.append((box[0], box[1], g, k))
+            groups[g] = len(boxes)
         return self.build(kd, groups)
 
 
@@ -306,13 +324,14 @@ def main() -> None:
     p.add_argument("vis")
     p.add_argument("tracksplit")
     p.add_argument("out")
+    p.add_argument("--layers", help="camadas a manter além da 0, ex. 2,3 (padrão: todas)")
     a = ap.parse_args()
     vis = TrackVis(open(a.vis, "rb").read())
     if a.cmd == "info":
         print(f"versão {vis.version}: {vis.n_nodes} nós, {vis.n_leaves} folhas, bitset de {vis.n_bits} bits "
               f"({vis.leaf_bytes} bytes), u3 {vis.u3}")
         print(f"caixa {tuple(round(v, 1) for v in vis.box_min)} .. {tuple(round(v, 1) for v in vis.box_max)}")
-        print(f"grupos: {[g for g in vis.groups if g]} (1º = células do tracksplit)")
+        print("camadas: " + ", ".join(f"{i} {LAYERS[i]} {g}" for i, g in enumerate(vis.groups) if g))
         full = sum(1 for n in vis.leaves if all(x == 0xFF for x in vis.leaf_bits(n)[:vis.n_bits // 8]))
         print(f"folhas \"tudo 1\": {full}")
         kd = vis.kd_nodes()
@@ -322,13 +341,14 @@ def main() -> None:
         print(f"remontagem idêntica: {same}")
     elif a.cmd == "cells":
         cells = tracksplit_cells(a.tracksplit)
-        out = vis.with_cells(cells)
+        keep = None if a.layers is None else {int(x) for x in a.layers.split(",") if x}
+        out = vis.with_cells(cells, keep)
         check = TrackVis(out)
         kd = check.kd_nodes()
         got = sorted(r[3] for n in kd for r in n.recs if r[2] == 0)
         assert got == list(range(len(cells))), "células faltando na kd"
         open(a.out, "wb").write(out)
-        print(f"gravado {a.out} ({len(out)} bytes): {len(cells)} células no grupo 0, bitset de {check.n_bits} bits "
+        print(f"gravado {a.out} ({len(out)} bytes): {len(cells)} células na camada 0, camadas {[g for g in check.groups]}, bitset de {check.n_bits} bits "
               f"({check.leaf_bytes} bytes), kd em {check.kd_off:#x}")
     else:
         out = vis.all_visible()

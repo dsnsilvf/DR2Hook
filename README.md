@@ -7,10 +7,11 @@ The project is built in four layers, each one resting on the one before it:
 1. **Reverse engineering** — the goal. Map the game's memory, physics, tick order, UI, ghost cars, save files, and asset formats, with every finding graded by evidence.
 2. **Mod loader** — the consequence. What the RE work makes possible: a DLL that loads into the game, runs Lua mods, and adds an overlay and native menus.
 3. **Example mod** — the demonstration. `mods/practice_mode/` shows a mod built on the loader: checkpoints, race-start modes, and ghost-car tools.
-4. **Asset tools** — the same reverse engineering applied to the game's files, outside the game: a browser-based **Car Model Explorer** and **Track Explorer / editor** (`tools/uiview/`).
+4. **Asset tools** — the same reverse engineering applied to the game's files, outside the game: a browser-based **Car Model Explorer** and **Track Explorer / editor** (`tools/uiview/`), plus a **map editor** (`tools/synthtrack/` + the native `tools/viewer3d/`) whose tracks **load in the game as a new, custom track**.
 
 ### What is new since v0.1.0
 
+- **Map editor and custom track loading: ready.** The map editor builds a track from scratch, and the game loads it as a **new track with its own name**: the **DR2 Hook Ring**. No original track is replaced and no `.nefs` is modified. The Ring brings its own terrain, collision, objects, trees, decoration, and loading screen with an aerial photo. See [section 5](#5-map-editor-and-custom-tracks).
 - **Ghost cars.** Save format (`GHST`) and cipher decoded, a live gap to the ghost, extra ghost copies, a solid (opaque) ghost, ghost collision research, and **up to 15 ghost cars plus the player** on one stage (the 16-car render limit was measured). See [ghosts.md](docs/reverse_engineering/ghosts.md).
 - **Stage lifecycle events in Lua.** `onStageLoad`, `onCountdown`, and `onStageStart` now fire from gameplay, plus `Race.setStartMode` (normal, no countdown, automatic, on throttle).
 - **Main-menu tab and richer native menu.** A **DR2 Hook** tab in the main menu, a right-hand panel per option, rich text, and per-mod saved settings (`settings.ini`).
@@ -163,7 +164,43 @@ python -m tools.uiview.track --tracks montalegre -o build/uiview   # export one 
 python -m tools.uiview.serve                                       # serve build/uiview and enable Save .nefs
 ```
 
-**Limits.** A modified `.nefs` has **not been tested in the game yet**. Stage collision (`track.jpk`) is not decoded and does not change, so a deleted object can still be solid. Only the Montalegre rallycross was exported and viewed; the rally stages (millions of vertices) are exported but not rendered in the test environment. Duplicating works only for objects in `objects.ens`.
+**Limits.** A modified `.nefs` has **not been tested in the game yet**. The Track Explorer does not rewrite stage collision (`track.jpk`), so a deleted object can still be solid. The format itself is now decoded and generated for custom tracks; see section 5. Only the Montalegre rallycross was exported and viewed. The rally stages (millions of vertices) are exported but not rendered in the test environment. Duplicating works only for objects in `objects.ens`.
+
+## 5. Map editor and custom tracks
+
+**Status: ready.** You build a track in the map editor, and the game loads it as a new track with its own name. The first one is the **DR2 Hook Ring**: a ~2.1 km circuit set in Portugal, with route `route_0`. In the game it has the following:
+- terrain and asphalt, plus its own collision;
+- barriers, grandstands, and a start arch;
+- paddock and parking;
+- crowd banks, forests, and two farms;
+- a wind farm;
+- a loading screen with an aerial photo and the track line drawn over it.
+
+| Piece | What it does |
+| --- | --- |
+| **`tools/synthtrack/`** ([docs](docs/tools/synthtrack.md), in Portuguese) | The editor's source of truth. It generates the track layout, terrain, textures, objects, decoration, AI line, and gates in the explorer format. It also writes the game's own instance formats. |
+| **`tools/viewer3d/`** ([README](tools/viewer3d/README.md), in Portuguese) | Native 3D viewer and editor (SDL3 + OpenGL). It shows the track with textures, lets you select, move, rotate, delete, and drop objects to the ground, and takes screenshots. |
+| **Port scripts** (`scripts/research/`) | These scripts turn the editor output into game files. `ring_tracksplit.py` writes the visible terrain, `track_jpk.py` the collision, and `ring_objects.py` the objects, textures, `ornaments.bin`, and `track.vis`. `custom_track.py` writes the catalogue entry, and `loading_screen.py` the loading screen. |
+
+**How the game finds the track:**
+- The core's LoadProbe mounts a folder overlay (`captures/overlay/`) over the game data.
+- It serves a generated catalogue (`base.ctpk`) from the first file the game reads at boot (`overlay_early = 2`).
+- It maps the location package name with `track_alias = dr2hook_ring=montalegre_rallycross`.
+- The track names come from `dr2hook_texts.ini`.
+
+The full pipeline, from the editor to the game, is in [track_loading.md §12](docs/reverse_engineering/track_loading.md), in Portuguese.
+
+**Start the game directly on the Ring** (AutoStage, run once per launch). Run this in the game folder, with `dr2hook_loadprobe.ini` set up as above:
+
+```bash
+sed -i 's/^enabled = .*/enabled = 1/; s/^once = .*/once = 1/; s/^location = .*/location = portugal/; s/^track = .*/track = dr2hook_ring/; s/^route = .*/route = route_0/' dr2hook_autostage.ini && steam steam://rungameid/690790
+```
+
+**Limits:**
+- The track opens through AutoStage. Picking it from the game's own event menus has not been tested.
+- The location package name is still borrowed from Montalegre (`track_alias`), because the exe keeps a fixed list of package names.
+- The menu minimap (`splines/<route>_sa.tpk`) and the reset and camera lines (`.cqtc`) still come from Montalegre.
+- The setup was tested only on Linux/Proton.
 
 ## Install
 
@@ -259,6 +296,7 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 | Free camera / insta crash | F9 free camera; F11 terminal damage with pause and restart |
 | Remote testing | `dr2hook_cmd.txt` command channel (status, pause, link, key, opt) |
 | Asset tools | Car Model Explorer and Track Explorer, with edits written to a **new** `.nefs` (tested by re-reading the package; 27 + 16 Python tests pass) |
+| Map editor and custom tracks | `synthtrack` + `viewer3d` build a track. The **DR2 Hook Ring** loads in the game with its own name, terrain, collision, objects, decoration, and loading screen, and the race starts and drives normally. |
 
 ### ⚠️ Not working yet
 
@@ -271,7 +309,8 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 | Ghost cars | More than 15 ghosts crash the stage load (17th car render object reads garbage). F8 while the pause menu is open freezes the game (cause unknown). |
 | Terminal damage | Repairing sound and steering after a restart has not been tested. |
 | Track editor | A modified `.nefs` has **not been tried in the game**. Collision is not edited. Duplicated objects get new `instanceID` values; whether the game accepts them is unknown. Rally stages (millions of vertices) are not rendered in the test environment. |
-| Track formats | Collision tiles (`.vcqtc`), `track.vis`, `grass.grs`, and the texture of the dense road blocks are not decoded. |
+| Track formats | `grass.grs` and the texture of the dense road blocks are not decoded. (Collision tiles and `track.vis` are now decoded and generated.) |
+| Custom tracks | The track opens through AutoStage. Picking it from the event menus is untested. The location package name is borrowed from Montalegre (`track_alias`). The menu minimap and the reset and camera lines still come from Montalegre. |
 | Compatibility | Only one game build and only Linux/Proton were tested. |
 
 ## Roadmap
@@ -279,14 +318,14 @@ Developed and validated on Linux with Proton, against one `dirtrally2.exe` build
 ### Near term (concrete work)
 
 - Test one small, safe edited `.nefs` in the game (only with the owner's go-ahead) to validate the save path of the track editor.
-- Decode stage collision (`.vcqtc`) and the remaining track formats, then export and render the rally stages on a real GPU.
+- Decode the remaining track formats (`grass.grs`), then export and render the rally stages on a real GPU.
+- Custom tracks: their own menu minimap, reset and camera lines, a selectable entry in the event menus, and a location package that does not borrow Montalegre's name.
 - Re-validate **With Momentum** on the origin block.
 - Enforce `SafetyGuard` with a real offline/online signal (proposed INV-02).
-- Native desktop viewer for the asset tools (SDL3 + OpenGL), reading the files the Python exporter already writes, so large stages do not depend on the browser.
 
 ### Planned, with a written plan
 
-A native (SDL3 + OpenGL) 3D viewer/editor for stages, in 7 small stages that read what the Python exporters already write: [docs/plans/viewer3d](docs/plans/viewer3d/README.md). Not started. The same folder has the plans for splitting the Python tools into layers and the web viewer into modules ([docs/plans](docs/plans/README.md)).
+A native (SDL3 + OpenGL) 3D viewer/editor for stages, in 7 small stages that read what the Python exporters already write: [docs/plans/viewer3d](docs/plans/viewer3d/README.md). **Built:** `tools/viewer3d/`, now part of the map editor (section 5). The same folder has the plans for splitting the Python tools into layers and the web viewer into modules ([docs/plans](docs/plans/README.md)).
 
 ### Ideas under study (speculation, no promises)
 
@@ -295,11 +334,18 @@ These are ambitions. Nobody knows yet whether they are possible. They live in [d
 | Idea | What it would mean | Status | Document |
 | --- | --- | --- | --- |
 | **Multiplayer through live ghosts** | Other players' cars drawn as ghosts, updated over the network, and maybe made solid up close. | Ghost cars, copies, solid ghost, and the 15-car limit are now understood; networking is not started. | [live-ghosts-multiplayer.md](docs/demands/live-ghosts-multiplayer.md) |
-| **Map editor** | Create or change stages. | **Started:** the Track Explorer reads and edits object placement offline. Game acceptance untested. | [map-editor.md](docs/demands/map-editor.md) |
+| **Map editor** | Create or change stages. | **Ready for new tracks:** the DR2 Hook Ring is built in the editor and loads in the game (section 5). Editing *existing* stages through a modified `.nefs` is still untested. | [map-editor.md](docs/demands/map-editor.md) |
 | **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | Car Model Explorer reads car models; custom cars not started. | [vehicle-editor.md](docs/demands/vehicle-editor.md) |
 | **Level editor and modeling** | Build level content and make 3D models. Scope not decided yet. | Not started. | [level-editor-and-modeling.md](docs/demands/level-editor-and-modeling.md) |
 
 `NetworkGuard` blocks the network by design, so any multiplayer would need a separate, narrow exception that never reaches RaceNet or the official leaderboards.
+
+## Special thanks
+
+- **filipe411**, for the tip that changing the paths in `raceload` overrides the `.nefs` packages. That tip led to the folder overlay.
+- **Ssor**, for the research on the Ego visibility system and `track.vis` ([ego-visibility-system](https://github.com/ssor0/ego-visibility-system)), which named the layers and fields of our `track.vis` reader.
+- **Paths** ([ItsNotPaths](https://github.com/ItsNotPaths)), for [DiRTbench](https://github.com/ItsNotPaths/DiRTbench) (MIT), the DiRT 3 stage creator. Its notes corrected our `track.vis` split planes and show how collision, route files, and database rows are built for a new stage.
+- The [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding) project (MIT), whose file templates and database schema were a reference for the catalogue and collision formats.
 
 ## License
 

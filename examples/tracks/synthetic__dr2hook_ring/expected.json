@@ -1,23 +1,23 @@
 {
  "terrain": {
-  "meshes": 164,
-  "verts": 151989,
-  "tris": 263862,
+  "meshes": 165,
+  "verts": 152249,
+  "tris": 264312,
   "wide": 1,
   "colored": 0
  },
  "objects": {
-  "meshes": 16,
-  "verts": 463,
-  "tris": 221
+  "meshes": 77,
+  "verts": 20509,
+  "tris": 8229
  },
- "instances": 1011,
+ "instances": 2320,
  "instances_by_route": {
-  "route_0": 1011,
-  "route_1": 995
+  "route_0": 2320,
+  "route_1": 2253
  },
- "types": 12,
- "materials": 15,
+ "types": 60,
+ "materials": 26,
  "first_mesh": {
   "name": "terrain_0_0",
   "material": "g|synth_grass",

@@ -115,18 +115,84 @@ class RoadIndex:
         return math.sqrt(best), bi
 
 
-def terrain_height(x: float, z: float, road: RoadIndex) -> float:
-    """Relevo achatado até a altura da pista perto dela (abaixo do asfalto 5 cm), misturando até 35 m."""
+@dataclass(frozen=True)
+class Pad:
+    """Retângulo aplainado (paddock, base de prédio): plano y = y0 + gx·x + gz·z dentro de (x0, z0)–(x1, z1),
+    voltando ao relevo numa rampa de `edge` metros em volta. Não mexe na faixa achatada ao lado da pista."""
+
+    x0: float
+    z0: float
+    x1: float
+    z1: float
+    y0: float
+    gx: float = 0.0
+    gz: float = 0.0
+    edge: float = 15.0
+
+    def height(self, x: float, z: float) -> float:
+        return self.y0 + self.gx * x + self.gz * z
+
+    def weight(self, x: float, z: float) -> float:
+        """0 dentro do retângulo, 1 a partir de `edge` metros fora dele (suave no meio)."""
+        out = math.hypot(max(self.x0 - x, 0.0, x - self.x1), max(self.z0 - z, 0.0, z - self.z1))
+        if out >= self.edge:
+            return 1.0
+        f = out / self.edge
+        return f * f * (3 - 2 * f)
+
+
+@dataclass(frozen=True)
+class Berm:
+    """Barranco de público por fora de uma curva: um morro de terra ao longo das amostras `pts` ((x, z, nx, nz)
+    da pista), do lado `side` (+1 = esquerda, +n), entre `d0` e `d0 + width` metros do centro. Perfil sen²
+    na largura, pontas suavizadas no primeiro e no último quarto das amostras."""
+
+    pts: tuple[tuple[float, float, float, float], ...]
+    side: float
+    d0: float = 26.0
+    width: float = 16.0
+    height: float = 3.0
+
+    def box(self) -> tuple[float, float, float, float]:
+        r = self.d0 + self.width + 2.0
+        return (min(p[0] for p in self.pts) - r, min(p[1] for p in self.pts) - r,
+                max(p[0] for p in self.pts) + r, max(p[1] for p in self.pts) + r)
+
+    def rise(self, x: float, z: float) -> float:
+        bx0, bz0, bx1, bz1 = self.box()
+        if not (bx0 <= x <= bx1 and bz0 <= z <= bz1):
+            return 0.0
+        k = min(range(len(self.pts)), key=lambda i: (self.pts[i][0] - x) ** 2 + (self.pts[i][1] - z) ** 2)
+        px, pz, nx, nz = self.pts[k]
+        u = (((x - px) * nx + (z - pz) * nz) * self.side - self.d0) / self.width
+        if not 0.0 < u < 1.0:
+            return 0.0
+        t = min(k, len(self.pts) - 1 - k) / (0.25 * (len(self.pts) - 1))
+        t = min(1.0, t)
+        return self.height * math.sin(math.pi * u) ** 2 * t * t * (3 - 2 * t)
+
+
+def terrain_height(x: float, z: float, road: RoadIndex, pads: tuple[Pad, ...] = (),
+                   berms: tuple[Berm, ...] = ()) -> float:
+    """Relevo achatado até a altura da pista perto dela (abaixo do asfalto 5 cm), misturando até 35 m;
+    os `pads` aplainam áreas mais longe (paddock, torre); os `berms` sobem barrancos por fora das curvas
+    (somem a menos de 6 m da faixa achatada de outro trecho)."""
     d, i = road.nearest(x, z)
-    h = hills(x, z)
-    if i < 0:
-        return h
-    ry = road.pts[i].p[1] - 0.05
     flat, blend = ROAD_HALF + 9.0, 35.0
-    if d <= flat:
-        return ry
-    if d >= flat + blend:
-        return h
-    f = (d - flat) / blend
-    f = f * f * (3 - 2 * f)
-    return ry + (h - ry) * f
+    if i >= 0 and d <= flat:
+        return road.pts[i].p[1] - 0.05
+    y = hills(x, z)
+    if i >= 0 and d < flat + blend:
+        ry = road.pts[i].p[1] - 0.05
+        f = (d - flat) / blend
+        y = ry + (y - ry) * f * f * (3 - 2 * f)
+    for pad in pads:
+        w = pad.weight(x, z)
+        if w < 1.0:
+            py = pad.height(x, z)
+            y = py + (y - py) * w
+    if berms and i >= 0:
+        f = min(1.0, max(0.0, (d - flat) / 6.0))
+        if f > 0.0:
+            y += f * sum(b.rise(x, z) for b in berms)
+    return y
