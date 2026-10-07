@@ -33,6 +33,33 @@ constexpr uint8_t kBenchmarkInitPrologue[] = {
 // "-benchmark" no argv; quando forcamos o modo, chamamos nos mesmos.
 constexpr uintptr_t kBenchmarkMakeDirRva = 0x1409d0340 - kImageBase;
 
+// Tela de carregamento: o filler 0x14022ded0 lê distância e elevação de
+// [jogo + 0x34c8/+0x34cc] (jogo = 0x140559f10()), copiadas do evento
+// (+0xb040/+0xb044) em 0x14043853d. Pelo caminho do benchmark elas ficam 0 e a
+// tela mostra "0.00km"; aí completamos com a linha da rota no catálogo
+// (track_model: campo 15 = extensão em +0x68, campo 19 = elevação em +0x80; +0x70
+// é a chave do nome, conferida antes de ler).
+constexpr uintptr_t kLoadingFillRva = 0x14022ded0 - kImageBase;
+constexpr uint8_t kLoadingFillPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x20, 0x55, 0x56, 0x57,
+                                            0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+constexpr uintptr_t kGameRva = 0x140559f10 - kImageBase;
+constexpr uintptr_t kCatalogueRowRva = 0x1400e89a0 - kImageBase;
+constexpr uintptr_t kCatalogueRva = 0x141695160 - kImageBase;
+constexpr uint64_t kTrackModelTable = 0xb8e12aaaull << 32;
+constexpr uintptr_t kGameRouteSource = 0x32a0;
+constexpr uintptr_t kGameDistance = 0x34c8;
+constexpr uintptr_t kGameElevation = 0x34cc;
+constexpr uintptr_t kRouteLength = 0x68;
+constexpr uintptr_t kRouteName = 0x70;
+constexpr uintptr_t kRouteElevation = 0x80;
+
+using LoadingFillFn = void (*)(void *screen);
+using GameFn = uint8_t *(*)();
+using CatalogueRowFn = uint8_t **(*)(void *catalogue, uint64_t key, void *out);
+
+LoadingFillFn g_originalLoadingFill = nullptr;
+uintptr_t g_gameBase = 0;
+
 using BenchmarkInitFn = void *(*)(void *thisPtr, void *arg2, void *arg3,
                                   void *arg4);
 using BenchmarkMakeDirFn = void (*)(void *thisPtr);
@@ -278,6 +305,46 @@ bool LoadAutoStageConfig(AutoStageConfig *outConfig) {
   return cfg.enabled;
 }
 
+static void DetourLoadingFill(void *screen) {
+  uint8_t *game = reinterpret_cast<GameFn>(g_gameBase + kGameRva)();
+  auto *distance = game != nullptr ? reinterpret_cast<float *>(game + kGameDistance) : nullptr;
+  void *source = game != nullptr ? *reinterpret_cast<void **>(game + kGameRouteSource) : nullptr;
+  void *catalogue = *reinterpret_cast<void **>(g_gameBase + kCatalogueRva);
+  if (distance != nullptr && *distance == 0.0f && source != nullptr && catalogue != nullptr) {
+    using RouteIdFn = uint32_t (*)(void *, int);
+    const uint32_t routeId = (*reinterpret_cast<RouteIdFn **>(source))[2](source, 0);
+    uint8_t **row = reinterpret_cast<CatalogueRowFn>(g_gameBase + kCatalogueRowRva)(
+        catalogue, kTrackModelTable | routeId, nullptr);
+    const uint8_t *fields = row != nullptr ? *row : nullptr;
+    const char *nameKey = fields != nullptr ? *reinterpret_cast<const char *const *>(fields + kRouteName) : nullptr;
+    if (nameKey != nullptr && std::strncmp(nameKey, "lng_", 4) == 0) {
+      *distance = *reinterpret_cast<const float *>(fields + kRouteLength);
+      auto *elevation = reinterpret_cast<float *>(game + kGameElevation);
+      if (*elevation == 0.0f) {
+        *elevation = *reinterpret_cast<const float *>(fields + kRouteElevation);
+      }
+      Logger::Info("AutoStage: tela de carregamento da rota " + std::to_string(routeId) +
+                   " completada (" + nameKey + "): " + std::to_string(*distance) + " m, elevacao " +
+                   std::to_string(*elevation) + ".");
+    }
+  }
+  g_originalLoadingFill(screen);
+}
+
+static void InstallLoadingFillHook(uintptr_t gameBase) {
+  void *target = reinterpret_cast<void *>(gameBase + kLoadingFillRva);
+  if (std::memcmp(target, kLoadingFillPrologue, sizeof(kLoadingFillPrologue)) != 0) {
+    Logger::Warn("AutoStage: filler da tela de carregamento diferente do esperado; distancia fica como o jogo deixar.");
+    return;
+  }
+  g_gameBase = gameBase;
+  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourLoadingFill),
+                    reinterpret_cast<void **>(&g_originalLoadingFill)) != MH_OK ||
+      MH_EnableHook(target) != MH_OK) {
+    Logger::Warn("AutoStage: falha no hook da tela de carregamento.");
+  }
+}
+
 AutoStageConfig GetAutoStageConfig() {
   {
     std::lock_guard<std::mutex> lock(g_configMutex);
@@ -336,6 +403,7 @@ bool InstallAutoStageHook() {
 
   g_benchmarkMakeDir =
       reinterpret_cast<BenchmarkMakeDirFn>(gameBase + kBenchmarkMakeDirRva);
+  InstallLoadingFillHook(gameBase);
   g_benchmarkInitTarget = target;
   g_hookInstalled = true;
   return true;

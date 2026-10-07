@@ -720,17 +720,62 @@ bool MenuText(const std::string &key, std::string &text) {
   return true;
 }
 
+// Textos fixos de dr2hook_texts.ini (`chave = texto`, uma por linha), para
+// pistas próprias: o catálogo gerado aponta nome da location e da rota para
+// chaves lng_dr2hook_*. Lido uma vez, na primeira busca.
+const std::unordered_map<std::string, std::string> &FileTexts() {
+  static const auto texts = [] {
+    std::unordered_map<std::string, std::string> out;
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring path(exe);
+    path.resize(path.find_last_of(L"\\/") + 1);
+    FILE *f = _wfopen((path + L"dr2hook_texts.ini").c_str(), L"rb");
+    if (f == nullptr) {
+      return out;
+    }
+    auto trim = [](std::string s) {
+      const size_t a = s.find_first_not_of(" \t\r\n");
+      return a == std::string::npos ? std::string()
+                                    : s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
+    };
+    char line[1024];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+      const std::string text = line;
+      const size_t eq = text.find('=');
+      if (text[0] == ';' || text[0] == '#' || eq == std::string::npos) {
+        continue;
+      }
+      out[trim(text.substr(0, eq))] = trim(text.substr(eq + 1));
+    }
+    std::fclose(f);
+    HostLog(("NativeScreen: " + std::to_string(out.size()) + " textos de dr2hook_texts.ini.").c_str());
+    return out;
+  }();
+  return texts;
+}
+
 const char *DetourLookup(void *handler, const char *key) {
   if (key != nullptr && key[0] == 'l' && StartsWith(key, up::kKeyPrefix)) {
     std::string name = key;
     constexpr size_t kSuffix = sizeof(kCapsSuffix) - 1;
-    if (name.size() > kSuffix &&
-        name.compare(name.size() - kSuffix, kSuffix, kCapsSuffix) == 0) {
+    const bool caps = name.size() > kSuffix &&
+                      name.compare(name.size() - kSuffix, kSuffix, kCapsSuffix) == 0;
+    if (caps) {
       name.resize(name.size() - kSuffix);
     }
     // O jogo copia o texto antes de voltar a chamar a busca nesta thread.
     thread_local std::string text;
     if (MenuText(name, text)) {
+      return text.c_str();
+    }
+    // Do arquivo: a chave exata, ou a sem _caps em maiúsculas.
+    const auto &texts = FileTexts();
+    if (auto it = texts.find(key); it != texts.end()) {
+      return it->second.c_str();
+    }
+    if (auto it = texts.find(name); it != texts.end()) {
+      text = caps ? Upper(it->second) : it->second;
       return text.c_str();
     }
   }

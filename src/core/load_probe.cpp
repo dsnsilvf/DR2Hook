@@ -8,6 +8,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cctype>
 #include <cwctype>
@@ -44,6 +45,19 @@ struct Config {
   // Modo de PVS forçado em toda cena (campo cena+0x1734: 0 = "No PVS", 1 = "Per Node PVS",
   // 2 = "Per Item PVS", o padrão do construtor 0x140393ab0). -1 não mexe.
   int pvsMode = -1;
+  // Monta a overlay também antes da carga da pista. 1: na entrada do carregador de catálogos
+  // (0x14026bf00), antes do packages.xml, para servir um catalogues/base.ctpk gerado. 2: no
+  // primeiro pedido de arquivo (system/boot_data.xml), antes das bases persistentes do frontend
+  // (loadingScreen.pssg sai aos ~6 s, antes dos catálogos).
+  int overlayEarly = 0;
+  // Pista nova -> pista cujo locations/<loc>__<pista>.nefs é montado no lugar. A lista desses
+  // pacotes é fixa no exe (hash, pedaço de instalação, DLC, SHA-256); nome fora dela trava a carga
+  // no laço de espera de 0x14050d850. Formato no ini: track_alias = nova=existente
+  std::vector<std::pair<std::string, std::string>> trackAlias;
+  // Segura a carga: dorme hold_ms na thread que abre um arquivo cujo caminho contém hold_file
+  // (ex.: track.jpk), para dar tempo de ver a tela de carregamento. Vazio ou 0 desliga.
+  std::wstring holdFile;
+  int holdMs = 0;
 };
 
 Config g_cfg;
@@ -183,6 +197,16 @@ bool ReadConfig() {
     } else if (key == "overlay_mount") g_cfg.overlayMount = val;
     else if (key == "overlay_flag") g_cfg.overlayFlag = std::atoi(val.c_str());
     else if (key == "pvs_mode") g_cfg.pvsMode = std::atoi(val.c_str());
+    else if (key == "overlay_early") g_cfg.overlayEarly = std::atoi(val.c_str());
+    else if (key == "hold_file") {
+      wchar_t w[MAX_PATH] = {};
+      MultiByteToWideChar(CP_UTF8, 0, val.c_str(), -1, w, MAX_PATH);
+      g_cfg.holdFile = w;
+    } else if (key == "hold_ms") g_cfg.holdMs = std::atoi(val.c_str());
+    else if (key == "track_alias") {
+      const size_t sep = val.find('=');
+      if (sep != std::string::npos) g_cfg.trackAlias.emplace_back(Trim(val.substr(0, sep)), Trim(val.substr(sep + 1)));
+    }
   }
   if (!g_cfg.overlayDir.empty() && g_cfg.overlayDir.back() != L'\\' && g_cfg.overlayDir.back() != L'/')
     g_cfg.overlayDir += L'\\';
@@ -490,7 +514,7 @@ PssgLoadFn g_origPssgLoad = nullptr;
 CreateObjFn g_origCreateObj = nullptr;
 SceneFrameFn g_origSceneFrame = nullptr;
 std::atomic<int> g_pvsLogged{0};
-void *g_exeTargets[7] = {};
+void *g_exeTargets[10] = {};
 
 // Preparo da cena por quadro (0x1403c7aa0, rcx = cena): copia o modo de PVS de cena+0x1734 para
 // a vista. Gravar o campo antes força o modo em todas as cenas.
@@ -622,6 +646,7 @@ uint64_t DetourSubmit(void *mgr, const void *data, int size, const char *name, i
 
 std::wstring g_overlayVirt; // "<jogo>\dr2hook_overlay\" em minúsculas; vazio = overlay desligado
 std::atomic<bool> g_overlayMounted{false};
+std::atomic<bool> g_overlayEarlyMounted{false};
 
 bool BytesAt(uintptr_t rva, const char *hex) {
   const auto *fn = reinterpret_cast<const uint8_t *>(g_exeBase + rva);
@@ -675,6 +700,7 @@ void MountOverlay() {
 // (ex.: `tracks/track_loader.xml`, que mora no raceload.jpk do game_1.dat) e r9 é a tabela de
 // tokens (%location%, %track%, %route%...) montada em 0x140487480.
 uint64_t DetourSubmitFile(void *mgr, const char *file, int flags, void *tokens, void *a5, uint8_t a6) {
+  if (!g_overlayVirt.empty() && g_cfg.overlayEarly >= 2 && !g_overlayEarlyMounted.exchange(true)) MountOverlay();
   // O .nefs da pista já está montado quando o track_loader é pedido; montando depois, a pasta
   // fica na frente dele na lista.
   if (!g_overlayVirt.empty() && file != nullptr && std::strcmp(file, "tracks/track_loader.xml") == 0 &&
@@ -701,6 +727,44 @@ uint64_t DetourSubmitFile(void *mgr, const char *file, int flags, void *tokens, 
     }
   }
   return g_origSubmitFile(mgr, file, flags, tokens, a5, a6);
+}
+
+// Carregador de catálogos (0x14026bf00, virtual): lê catalogues/packages.xml e cada pacote.
+using CatalogueLoadFn = void (*)(void *);
+CatalogueLoadFn g_origCatalogueLoad = nullptr;
+
+void DetourCatalogueLoad(void *self) {
+  if (!g_overlayEarlyMounted.exchange(true)) MountOverlay();
+  g_origCatalogueLoad(self);
+}
+
+const char *AliasTrack(const char *track) {
+  if (track == nullptr || !Readable(track, 1)) return track;
+  for (const auto &a : g_cfg.trackAlias)
+    if (_stricmp(track, a.first.c_str()) == 0) return a.second.c_str();
+  return track;
+}
+
+// Pacote da location pronto? (0x1405df3c0: gerenciador, location, pista ou nulo = "tiles")
+using LocReadyFn = bool (*)(void *, const char *, const char *);
+LocReadyFn g_origLocReady = nullptr;
+
+bool DetourLocReady(void *mgr, const char *location, const char *track) {
+  return g_origLocReady(mgr, location, AliasTrack(track));
+}
+
+// Nome e descritor do pacote da location (0x1405dcea0): "%s__%s.nefs" com location e pista nas
+// posições 5 e 6.
+using LocNameFn = int (*)(void *, void *, void *, void *, const char *, const char *);
+LocNameFn g_origLocName = nullptr;
+
+int DetourLocName(void *mgr, void *name, void *desc, void *flag, const char *location, const char *track) {
+  const char *alias = AliasTrack(track);
+  if (alias != track) {
+    Logger::Info(std::string("LoadProbe: pacote da location ") + SafeStr(location, 32) + "__" + SafeStr(track, 48) +
+                 " -> " + alias);
+  }
+  return g_origLocName(mgr, name, desc, flag, location, alias);
 }
 
 bool HookExe(uintptr_t rva, const char *prologue, void *detour, void **original, void **target) {
@@ -735,6 +799,18 @@ int InstallExeHooks() {
   if (g_cfg.pvsMode >= 0)
     ok += HookExe(0x3c7aa0, "48 89 5c 24 08 57 48 81 ec 30 01 00 00 48 8b f9", reinterpret_cast<void *>(&DetourSceneFrame),
                   reinterpret_cast<void **>(&g_origSceneFrame), &g_exeTargets[6]);
+  // A instalação da sonda roda antes do WinMain, então o carregador ainda não rodou.
+  if (g_cfg.overlayEarly && !g_overlayVirt.empty())
+    ok += HookExe(0x26bf00, "48 8b c4 55 48 8d a8 08 fd ff ff 48 81 ec f0 03 00 00",
+                  reinterpret_cast<void *>(&DetourCatalogueLoad), reinterpret_cast<void **>(&g_origCatalogueLoad),
+                  &g_exeTargets[7]);
+  if (!g_cfg.trackAlias.empty()) {
+    ok += HookExe(0x5df3c0, "48 8b c4 56 48 81 ec 50 01 00 00", reinterpret_cast<void *>(&DetourLocReady),
+                  reinterpret_cast<void **>(&g_origLocReady), &g_exeTargets[8]);
+    ok += HookExe(0x5dcea0, "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57",
+                  reinterpret_cast<void *>(&DetourLocName), reinterpret_cast<void **>(&g_origLocName),
+                  &g_exeTargets[9]);
+  }
   return ok;
 }
 
@@ -808,6 +884,16 @@ bool LoadProbeRewritePath(const wchar_t *path, std::wstring *out) {
 
 void LoadProbeOnOpen(void *handle, const wchar_t *path, unsigned long access) {
   if (!g_on.load(std::memory_order_relaxed) || t_busy || path == nullptr) return;
+  if (g_cfg.holdMs > 0 && !g_cfg.holdFile.empty() && handle != INVALID_HANDLE_VALUE &&
+      std::wcsstr(path, g_cfg.holdFile.c_str()) != nullptr) {
+    // Uma vez por carga: o mesmo arquivo pode abrir várias vezes seguidas.
+    static std::atomic<double> lastHold{-1e9};
+    const double now = NowMs();
+    if (now - lastHold.load() > 30000.0) {
+      lastHold.store(now);
+      Sleep(static_cast<DWORD>(g_cfg.holdMs));
+    }
+  }
   Busy busy;
   uint32_t fid = 0;
   const bool failed = handle == INVALID_HANDLE_VALUE;
