@@ -37,8 +37,8 @@ add_library(dr2core STATIC
 )
 target_include_directories(dr2core PUBLIC src)
 
-# edit: histórico e edits.json. Só dr2core: nada de GL.
-add_library(dr2edit STATIC src/edit/history.cpp src/edit/edits_json.cpp)
+# edit: histórico, edits.json e alinhar ao terreno. Só dr2core: nada de GL.
+add_library(dr2edit STATIC src/edit/history.cpp src/edit/edits_json.cpp src/edit/ground_fit.cpp)
 target_include_directories(dr2edit PUBLIC src)
 target_link_libraries(dr2edit PUBLIC dr2core)
 

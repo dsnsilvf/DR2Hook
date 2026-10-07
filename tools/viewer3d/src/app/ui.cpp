@@ -262,6 +262,8 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
         if (ImGui::MenuItem("Apagar", "Delete", false, alive)) track->delete_selected();
         if (ImGui::MenuItem("Restaurar do arquivo", "R", false, sel >= 0)) track->restore_selected();
         if (ImGui::MenuItem("Pôr no chão", "T", false, alive)) track->settle_selected();
+        if (ImGui::MenuItem("Alinhar ao terreno", "Shift+T", false, alive)) track->align_selected();
+        if (ImGui::MenuItem("Alinhar todos deste tipo", nullptr, false, alive)) track->align_type();
         if (ImGui::MenuItem("Girar +15°", "E", false, alive)) track->turn_selected(15.0f);
         if (ImGui::MenuItem("Girar −15°", "Q", false, alive)) track->turn_selected(-15.0f);
         ImGui::Separator();
@@ -624,6 +626,15 @@ void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&
         if (ImGui::Button("Apagar (Del)")) track.delete_selected();
         if (ImGui::Button("Pôr no chão (T)")) track.settle_selected();
         tooltip("Baixa (ou sobe) o objeto até o terreno que está sob ele, só na altura");
+        if (ImGui::Button("Alinhar ao terreno (Shift+T)")) track.align_selected();
+        tooltip("Inclina o objeto junto com o chão sob a base e desce o que ficaria no ar (até 25°). "
+                "Árvores ficam em pé");
+        ImGui::SameLine();
+        if (ImGui::Button("Todos deste tipo")) track.align_type();
+        tooltip("Alinha ao terreno todas as instâncias à mostra deste tipo, num passo só (Ctrl+Z desfaz tudo)");
+        ImGui::Checkbox("Manter em pé", &track.align_upright);
+        tooltip("Para prédios, tendas e placas: não inclina, só desce até o ponto mais baixo do chão sob a base "
+                "(nada fica no ar)");
     }
 
     if (ImGui::CollapsingHeader("Matriz (atual | arquivo)")) {
@@ -756,6 +767,7 @@ void EditorUi::help_window() {
         {"Ctrl+D", "duplicar (objetos e:)"},
         {"R", "restaurar do arquivo"},
         {"T", "pôr no chão (altura do terreno sob o objeto)"},
+        {"Shift+T", "alinhar ao terreno (inclina com o chão)"},
         {"F", "enquadrar seleção ou rota"},
         {"Esc", "tirar seleção; fechar janela de confirmação"},
         {"Ctrl+Q", "sair (pergunta se há edições não gravadas)"},

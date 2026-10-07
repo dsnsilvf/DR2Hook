@@ -2,6 +2,7 @@
 #undef NDEBUG
 #include "core/json.hpp"
 #include "edit/edits_json.hpp"
+#include "edit/ground_fit.hpp"
 #include "edit/history.hpp"
 
 #include <cmath>
@@ -330,6 +331,83 @@ void test_big() {
     check(rep.applied == n && s < 2.0, "retomar 50 mil edições em menos de 2 s");
 }
 
+// ponto local (lx, 0, lz) da matriz no mundo
+void world(const float* m, float lx, float lz, float& x, float& y, float& z) {
+    x = lx * m[0] + lz * m[6] + m[9];
+    y = lx * m[1] + lz * m[7] + m[10];
+    z = lx * m[2] + lz * m[8] + m[11];
+}
+
+void test_ground_fit() {
+    const auto plane = [](float x, float z, float& y) {
+        y = 100.0f + 0.1f * x + 0.05f * z;
+        return true;
+    };
+    const float c = std::cos(0.3f), s = std::sin(0.3f), k = 2.0f;  // giro de 0,3 rad e escala 2
+    const float m[12] = {c * k, 0, -s * k, 0, k, 0, s * k, 0, c * k, 10, 50, 5};
+    const edit::Footprint foot{-2, 2, -1, 1};
+    float out[12];
+    check(edit::fit_to_ground(m, foot, edit::FitMode::Tilt, plane, out), "alinha num plano");
+    float worst = 0;
+    for (float lx : {-2.0f, 0.0f, 2.0f})
+        for (float lz : {-1.0f, 1.0f}) {
+            float x, y, z, g;
+            world(out, lx, lz, x, y, z);
+            plane(x, z, g);
+            worst = std::max(worst, std::fabs(y - g));
+        }
+    check(worst < 1e-3f, "base inclinada fica em cima do plano");
+    check(std::fabs(std::hypot(out[0], out[1], out[2]) - k) < 1e-4f && std::fabs(std::hypot(out[3], out[4], out[5]) - k) < 1e-4f,
+          "mantém a escala");
+    check(std::fabs(std::atan2(-out[2], out[0]) - 0.3f) < 1e-4f, "mantém o rumo");
+    const float nx = out[3] / k, ny = out[4] / k, nz = out[5] / k;  // Y local = normal do plano
+    const float n = std::sqrt(0.01f + 1.0f + 0.0025f);
+    check(std::fabs(nx + 0.1f / n) < 1e-4f && std::fabs(ny - 1.0f / n) < 1e-4f && std::fabs(nz + 0.05f / n) < 1e-4f,
+          "para cima = normal do plano");
+
+    check(edit::fit_to_ground(m, foot, edit::FitMode::Upright, plane, out), "em pé num plano");
+    check(out[1] == 0 && out[3] == 0 && out[5] == 0 && out[4] == k, "em pé não inclina");
+    float lowest = 1e9f;
+    for (float lx : {-4.0f, 4.0f})  // cantos com escala 2
+        for (float lz : {-2.0f, 2.0f}) {
+            float g;
+            plane(10 + lx * c + lz * s, 5 - lx * s + lz * c, g);
+            lowest = std::min(lowest, g);
+        }
+    check(std::fabs(out[10] - lowest) < 1e-3f, "em pé desce até o canto mais baixo");
+
+    // barranco de 63°: inclina no máximo 25° e desce para nenhum ponto ficar no ar
+    const auto steep = [](float x, float, float& y) {
+        y = 2.0f * x;
+        return true;
+    };
+    const float id[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    check(edit::fit_to_ground(id, foot, edit::FitMode::Tilt, steep, out), "alinha no barranco");
+    check(std::fabs(std::acos(out[4]) - 25.0f * 3.14159265f / 180.0f) < 1e-3f, "inclinação limitada a 25°");
+    for (float lx : {-2.0f, 0.0f, 2.0f}) {
+        float x, y, z, g;
+        world(out, lx, 0, x, y, z);
+        steep(x, z, g);
+        check(y <= g + 1e-3f, "nada da base fica no ar");
+    }
+
+    // sem terreno num ponto: não mexe
+    const auto hole = [](float x, float, float& y) {
+        y = 0;
+        return x < 1.0f;
+    };
+    float keep[12];
+    std::copy(m, m + 12, keep);
+    check(!edit::fit_to_ground(m, foot, edit::FitMode::Tilt, hole, keep) && keep[10] == 50, "sem terreno: falha e não mexe");
+
+    // espelhada (det < 0) continua espelhada
+    const float mir[12] = {1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0};
+    check(edit::fit_to_ground(mir, foot, edit::FitMode::Tilt, plane, out), "alinha espelhada");
+    const float det = out[0] * (out[4] * out[8] - out[5] * out[7]) - out[1] * (out[3] * out[8] - out[5] * out[6]) +
+                      out[2] * (out[3] * out[7] - out[4] * out[6]);
+    check(det < 0, "mantém o espelho");
+}
+
 }  // namespace
 
 int main() {
@@ -342,6 +420,7 @@ int main() {
     test_write_backup();
     test_apply_edits();
     test_big();
+    test_ground_fit();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;
 }

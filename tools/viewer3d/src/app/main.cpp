@@ -44,10 +44,12 @@ struct Options {
     float terrain_dist = 0.0f;
     float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
     dr2::render::TextureCache::Options tex;
-    const char* hide = nullptr;         // camadas escondidas, separadas por vírgula: terrain, obj, tree, dist
+    const char* hide = nullptr;         // camadas escondidas, separadas por vírgula: terrain, obj, tree, dist, lines
+    int shot_w = 0, shot_h = 0;         // --shot-size: a captura sai de um framebuffer fora da tela, só com o 3D
     const char* touch_test = nullptr;   // "IDX,dx,dy,dz[,commit]": desloca a instância em 8 quadros só pelo reenvio parcial (ou, com commit, fecha o passo e força o corte completo)
     const char* settle_list = nullptr;  // arquivo com índices de instância: assenta todas antes de seguir (teste do reenvio parcial)
     bool settle_redo = false;           // depois de assentar, desfaz e refaz tudo (reenvio completo): a imagem tem de ser a mesma
+    const char* align_check = nullptr;  // arquivo com índices: sobe cada uma 3 m, alinha ao terreno e imprime a base e a matriz
     const char* ground_check = nullptr;  // arquivo com índices de instância: assenta cada uma, testa o picking de cima e de baixo do terreno e sai
     const char* probe_rays = nullptr;  // arquivo com raios (ox oy oz dx dy dz por linha): imprime a distância até o terreno e sai
     bool wait_textures = false;  // só conta quadros com a fila de texturas vazia (capturas iguais entre execuções)
@@ -110,6 +112,12 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.tex.threads = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--probe-rays") == 0 && i + 1 < argc) {
             opt.probe_rays = argv[++i];
+        } else if (std::strcmp(argv[i], "--shot-size") == 0 && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%dx%d", &opt.shot_w, &opt.shot_h) != 2 || opt.shot_w < 16 || opt.shot_h < 16 ||
+                opt.shot_w > 16384 || opt.shot_h > 16384) {
+                std::fprintf(stderr, "--shot-size precisa de LxA, de 16 a 16384 (ex.: 4608x2592)\n");
+                return false;
+            }
         } else if (std::strcmp(argv[i], "--hide") == 0 && i + 1 < argc) {
             opt.hide = argv[++i];
         } else if (std::strcmp(argv[i], "--touch-test") == 0 && i + 1 < argc) {
@@ -118,6 +126,8 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.settle_list = argv[++i];
         } else if (std::strcmp(argv[i], "--settle-redo") == 0) {
             opt.settle_redo = true;
+        } else if (std::strcmp(argv[i], "--align-check") == 0 && i + 1 < argc) {
+            opt.align_check = argv[++i];
         } else if (std::strcmp(argv[i], "--ground-check") == 0 && i + 1 < argc) {
             opt.ground_check = argv[++i];
         } else if (std::strcmp(argv[i], "--wait-textures") == 0) {
@@ -135,9 +145,13 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist] [--probe-rays arq] [--ground-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
+    }
+    if (opt.shot_w > 0 && !opt.screenshot) {
+        std::fprintf(stderr, "--shot-size precisa de --screenshot\n");
+        return false;
     }
     if (opt.screenshot && opt.frames < 1) {
         std::fprintf(stderr, "--screenshot precisa de --frames\n");
@@ -492,6 +506,7 @@ int run(const Options& opt) {
             if (h.find(",obj,") != std::string::npos) track->layers().obj = false;
             if (h.find(",tree,") != std::string::npos) track->layers().tree = false;
             if (h.find(",dist,") != std::string::npos) track->layers().dist = false;
+            if (h.find(",lines,") != std::string::npos) track->show_gates() = track->show_ai() = false;
         }
         track->frame_route(cam);
     } else {
@@ -520,6 +535,49 @@ int run(const Options& opt) {
             float t = 0;
             if (track->terrain_hit({{v[0], v[1], v[2]}, d}, t)) std::printf("%.5f\n", static_cast<double>(t));
             else std::printf("none\n");
+        }
+        std::fclose(f);
+        return 0;
+    }
+    if (opt.align_check) {
+        // teste do alinhar: por instância, sobe 3 m (o alinhar tem de trazer de volta), alinha e imprime
+        // "i em_pé x0 x1 z0 z1 m0..m11 tipo"; "i skip tipo" se o tipo não alinha ou não há terreno
+        if (!track) {
+            std::fprintf(stderr, "--align-check precisa de --track\n");
+            return 1;
+        }
+        std::FILE* f = std::fopen(opt.align_check, "r");
+        if (!f) {
+            std::fprintf(stderr, "não abriu %s\n", opt.align_check);
+            return 1;
+        }
+        unsigned idx;
+        while (std::fscanf(f, "%u", &idx) == 1) {
+            if (idx >= track->instances().n) continue;
+            float x0, x1, z0, z1;
+            bool upright = false;
+            if (!track->fit_footprint(idx, x0, x1, z0, z1, upright)) {
+                std::printf("%u skip %s\n", idx, track->track().types[track->instances().type[idx]].name.c_str());
+                continue;
+            }
+            track->select(static_cast<int>(idx));
+            float up[12];
+            std::copy(track->instances().matrix(idx), track->instances().matrix(idx) + 12, up);
+            up[10] += 3.0f;
+            if (track->begin_change(idx)) {
+                track->set_matrix(idx, up);
+                track->end_change("subir 3 m");
+            }
+            track->align_selected();  // (o histórico tem teto de 300 passos: a prova é a matriz mudar)
+            if (std::equal(up, up + 12, track->instances().matrix(idx))) {
+                std::printf("%u skip %s (%s)\n", idx, track->track().types[track->instances().type[idx]].name.c_str(), track->status().c_str());
+                continue;
+            }
+            const float* m = track->instances().matrix(idx);
+            std::printf("%u %d %.4f %.4f %.4f %.4f", idx, upright ? 1 : 0, static_cast<double>(x0), static_cast<double>(x1),
+                        static_cast<double>(z0), static_cast<double>(z1));
+            for (int k = 0; k < 12; ++k) std::printf(" %.6f", static_cast<double>(m[k]));
+            std::printf(" %s\n", track->track().types[track->instances().type[idx]].name.c_str());
         }
         std::fclose(f);
         return 0;
@@ -658,7 +716,33 @@ int run(const Options& opt) {
         const bool settling = opt.wait_textures && track && track->textures().busy() && ++waited < 5000;
         if (!settling) ++frames;
         const bool last = opt.frames > 0 && frames >= opt.frames;
-        if (last && opt.screenshot) dr2::gl::save_ppm(opt.screenshot, w, h);  // antes do swap: lê o back buffer
+        if (last && opt.screenshot && opt.shot_w > 0) {
+            // mesma câmera, só a cena, no tamanho pedido (pode passar do tamanho da tela)
+            GLuint fbo = 0, rb[2] = {};
+            glGenFramebuffers(1, &fbo);
+            glGenRenderbuffers(2, rb);
+            glBindRenderbuffer(GL_RENDERBUFFER, rb[0]);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, opt.shot_w, opt.shot_h);
+            glBindRenderbuffer(GL_RENDERBUFFER, rb[1]);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, opt.shot_w, opt.shot_h);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb[0]);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                throw std::runtime_error("--shot-size: framebuffer incompleto");
+            glViewport(0, 0, opt.shot_w, opt.shot_h);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            const glm::mat4 shot_vp = cam.proj(static_cast<float>(opt.shot_w) / static_cast<float>(opt.shot_h)) * cam.view();
+            if (track) track->draw(shot_vp, cam);
+            else scene->draw(shot_vp);
+            dr2::gl::save_ppm(opt.screenshot, opt.shot_w, opt.shot_h, GL_COLOR_ATTACHMENT0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteRenderbuffers(2, rb);
+            glDeleteFramebuffers(1, &fbo);
+            glViewport(0, 0, w, h);
+        } else if (last && opt.screenshot) {
+            dr2::gl::save_ppm(opt.screenshot, w, h);  // antes do swap: lê o back buffer
+        }
         SDL_GL_SwapWindow(window);
 
         if (!ui.open_request.empty()) {

@@ -86,6 +86,7 @@ A câmera é a do Track Explorer web (`tvCam`, `tvVp`, `tvKeys` em `tools/uiview
 | Gravar | **Ctrl+S** grava o `edits.json` com as edições de todas as rotas abertas (o plano diz **S**, mas **S** já é andar para trás). Se o arquivo já existia ao abrir, o primeiro Ctrl+S guarda uma cópia em `<arquivo>.<n>.bak`. A gravação é atômica (`.tmp` e renomeia); se falhar, o editor avisa na barra de status e continua aberto |
 | Enquadrar | **F**: o selecionado, ou a rota sem seleção (na cena de teste, volta ao início) |
 | Pôr no chão | **T** (ou o botão do Inspector, ou Editar): a altura do selecionado vira a do terreno sob ele, um passo de histórico. A barra tem **Grudar no chão**: ao arrastar, a altura segue o terreno |
+| Alinhar ao terreno | **Shift+T** (ou o botão do Inspector, ou Editar): o selecionado assenta no terreno sob a base, inclinado com o chão (até 25°) e baixado até nenhum canto ficar no ar; mantém o rumo e a escala. Árvores e **Manter em pé** (Inspector) só descem até o canto mais baixo, sem inclinar. **Todos deste tipo** alinha de uma vez todas as cópias visíveis do tipo, um passo de histórico |
 | Camadas | **F1** terreno, **F2** objetos, **F3** árvores, **F4** terreno distante, **G** portões, **I** linha da IA |
 | Distância de desenho | **[** e **]** (100 a 4000 m, padrão 700 m) |
 | Sair | **Ctrl+Q** ou fechar a janela; com edições não gravadas, pergunta (Gravar e sair / Sair sem gravar / Cancelar). **Esc** não sai |
@@ -113,7 +114,8 @@ Se uma rota não abre no **Tab** (arquivo truncado ou ausente), a rota atual fic
 | `--tex-max-side PX` | maior lado de textura na GPU (padrão 2048; 0 = sem limite) |
 | `--tex-threads N` | threads de decodificação de WebP (padrão 2) |
 | `--wait-textures` | só conta quadro com a fila de texturas vazia (capturas repetíveis) |
-| `--hide terrain,obj,tree,dist` | começa com essas camadas escondidas |
+| `--hide terrain,obj,tree,dist,lines` | começa com essas camadas escondidas (`lines`: portões e linha da IA) |
+| `--shot-size LxA` | com `--screenshot`, grava o último quadro num framebuffer fora da tela desse tamanho, só o 3D (sem painéis); pode passar do tamanho da tela |
 | `--probe-rays arq` | testes: cada linha `ox oy oz dx dy dz`, imprime a distância até o terreno (ou `none`) e sai; `tests/probe_check.py` confere contra a força bruta |
 | `--ground-check arq` | testes: cada linha é um índice de instância; assenta, testa o picking de cima e de baixo e sai; `tests/ground_check.py` confere |
 | `--settle-list arq [--settle-redo]` | testes: assenta as instâncias da lista e segue (com `--settle-redo`, desfaz e refaz tudo, para comparar capturas) |

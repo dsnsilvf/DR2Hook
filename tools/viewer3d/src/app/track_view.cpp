@@ -4,6 +4,7 @@
 #include "core/io.hpp"
 #include "core/json.hpp"
 #include "edit/edits_json.hpp"
+#include "edit/ground_fit.hpp"
 #include "render/pick.hpp"
 
 #include <algorithm>
@@ -324,7 +325,10 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_DELETE: delete_selected(); return true;
     case SDLK_TAB: switch_route((mod & SDL_KMOD_SHIFT) ? -1 : 1); return true;
     case SDLK_R: restore_selected(); return true;
-    case SDLK_T: settle_selected(); return true;
+    case SDLK_T:
+        if (mod & SDL_KMOD_SHIFT) align_selected();
+        else settle_selected();
+        return true;
     case SDLK_Q:
     case SDLK_E: turn_selected(((mod & SDL_KMOD_SHIFT) ? 90.0f : 15.0f) * (key == SDLK_E ? 1.0f : -1.0f)); return true;
     case SDLK_F1: show_terrain_ = !show_terrain_; return true;
@@ -569,6 +573,80 @@ void TrackView::settle_selected() {
     m[10] = y;
     set_matrix(i, m);
     end_change("Assentar no terreno");
+}
+
+bool TrackView::fit_footprint(std::uint32_t i, float& x0, float& x1, float& z0, float& z1, bool& upright) const {
+    const auto& ty = objects_->types()[inst_.type[i]];
+    if (ty.empty || ty.layer == render::Layer::Dist) return false;
+    const bool tree = ty.layer == render::Layer::Tree;
+    // árvore: só o tronco conta (a copa larga enterraria a árvore inteira no barranco)
+    if (tree) x0 = z0 = -0.4f, x1 = z1 = 0.4f;
+    else x0 = ty.lo.x, x1 = ty.hi.x, z0 = ty.lo.z, z1 = ty.hi.z;
+    upright = tree || align_upright;
+    return true;
+}
+
+bool TrackView::fit_instance(std::uint32_t i, float* out) {
+    edit::Footprint foot;
+    bool upright = false;
+    if (!fit_footprint(i, foot.x0, foot.x1, foot.z0, foot.z1, upright)) return false;
+    const float* m = inst_.matrix(i);
+    const float scale = std::max({std::hypot(m[0], m[1], m[2]), std::hypot(m[6], m[7], m[8]), 1e-3f});
+    // procura o chão de um pouco acima da base: o lado de cima de uma rampa de até 45° ainda conta, ponte não
+    const float y_from = m[10] + 1.0f + 0.5f * scale * std::hypot(foot.x1 - foot.x0, foot.z1 - foot.z0);
+    const auto height = [&](float x, float z, float& y) { return terrain_height(x, z, y_from, y); };
+    return edit::fit_to_ground(m, foot, upright ? edit::FitMode::Upright : edit::FitMode::Tilt, height, out);
+}
+
+void TrackView::align_selected() {
+    if (sel_ < 0 || drag_.active || inst_.hidden[static_cast<std::size_t>(sel_)]) return;
+    const auto i = static_cast<std::uint32_t>(sel_);
+    float m[kInstFloats];
+    if (!fit_instance(i, m)) {
+        set_status("sem terreno sob a base (ou tipo sem malha)");
+        return;
+    }
+    const float* cur = inst_.matrix(i);
+    if (std::equal(m, m + kInstFloats, cur, [](float a, float b) { return std::fabs(a - b) < 1e-4f; })) {
+        set_status("já está alinhado ao terreno");
+        return;
+    }
+    if (!begin_change(i)) return;
+    set_matrix(i, m);
+    end_change("Alinhar ao terreno");
+}
+
+void TrackView::align_type() {
+    if (sel_ < 0 || drag_.active) return;
+    const std::uint16_t type = inst_.type[static_cast<std::size_t>(sel_)];
+    std::vector<std::uint32_t> idx;
+    std::vector<float> fitted;
+    std::size_t missing = 0;
+    for (std::uint32_t i = 0; i < inst_.n; ++i) {
+        if (inst_.type[i] != type || inst_.hidden[i]) continue;
+        float m[kInstFloats];
+        if (!fit_instance(i, m)) {
+            ++missing;
+            continue;
+        }
+        const float* cur = inst_.matrix(i);
+        if (std::equal(m, m + kInstFloats, cur, [](float a, float b) { return std::fabs(a - b) < 1e-4f; })) continue;
+        idx.push_back(i);
+        fitted.insert(fitted.end(), m, m + kInstFloats);
+    }
+    const std::string& name = track_.types[type].name;
+    if (idx.empty()) {
+        set_status(name + ": nada a alinhar" + (missing ? " (" + std::to_string(missing) + " sem terreno)" : ""));
+        return;
+    }
+    auto before = edit::snapshot(inst_, idx);
+    for (std::size_t k = 0; k < idx.size(); ++k) {
+        std::copy(&fitted[k * kInstFloats], &fitted[(k + 1) * kInstFloats], inst_.matrix(idx[k]));
+        edit::snap_to_file(inst_, idx[k]);
+    }
+    commit("Alinhar tipo ao terreno", std::move(before));
+    set_status(name + ": " + std::to_string(idx.size()) + " alinhadas ao terreno" +
+               (missing ? "; " + std::to_string(missing) + " sem terreno" : ""));
 }
 
 bool TrackView::save() {

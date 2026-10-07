@@ -133,6 +133,15 @@ public:
     bool terrain_height(float x, float z, float y_from, float& y);
     // Põe a instância selecionada no chão (y = altura do terreno em x, z), num passo de histórico.
     void settle_selected();
+    // Alinhar ao terreno (Shift+T): a selecionada acompanha o chão sob a base do tipo (edit::fit_to_ground),
+    // num passo de histórico. Objetos inclinam junto e descem o que ficaria no ar; árvores, e tudo quando
+    // `align_upright` está ligado, ficam em pé e descem até o ponto mais baixo do chão sob a base.
+    void align_selected();
+    // O mesmo para todas as instâncias à mostra do tipo da selecionada, num passo só.
+    void align_type();
+    bool align_upright = false;
+    // Base usada pelo alinhar (caixa local do tipo; tronco nas árvores) e se o tipo fica em pé. Falso se o tipo não alinha.
+    bool fit_footprint(std::uint32_t i, float& x0, float& x1, float& z0, float& z1, bool& upright) const;
     // Mover grudado no terreno: a altura acompanha o chão durante o arraste (guarda a folga que o objeto tinha).
     bool follow_ground = false;
     // Corta pela câmera atual e desenha.
@@ -196,6 +205,7 @@ private:
     } drag_;
     static constexpr float kTerrainSlack = 0.25f;  // folga (m) entre a caixa do objeto e o terreno no teste de oclusão
     float visible_terrain_t(const render::Ray& ray);
+    bool fit_instance(std::uint32_t i, float* out);
     void commit(const char* label, std::vector<edit::Snap> before);
     float snapped(float v, float step) const { return step > 0 ? std::round(v / step) * step : v; }
     bool show_terrain_ = true, show_gates_ = true, show_ai_ = true;

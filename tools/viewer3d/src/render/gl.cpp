@@ -108,11 +108,11 @@ bool vram_kb(std::size_t& total, std::size_t& free) {
     return false;
 }
 
-void save_ppm(const char* path, int width, int height) {
+void save_ppm(const char* path, int width, int height, GLenum read_buffer) {
     if (width <= 0 || height <= 0) throw std::runtime_error("save_ppm: tamanho inválido");
     const std::size_t row = static_cast<std::size_t>(width) * 3;
     std::vector<unsigned char> pixels(row * static_cast<std::size_t>(height));
-    glReadBuffer(GL_BACK);
+    glReadBuffer(read_buffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
     check("glReadPixels");

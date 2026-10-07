@@ -23,8 +23,8 @@ int warned_errors();
 bool vram_kb(std::size_t& total, std::size_t& free);
 
 // Lê o back buffer (RGB) e grava PPM P6, com a primeira linha do arquivo no topo da imagem.
-// Chame antes do SDL_GL_SwapWindow do quadro que quer gravar.
-void save_ppm(const char* path, int width, int height);
+// Chame antes do SDL_GL_SwapWindow do quadro que quer gravar. Com um framebuffer vinculado, passe o anexo.
+void save_ppm(const char* path, int width, int height, GLenum read_buffer = GL_BACK);
 
 class Buffer {
 public:
