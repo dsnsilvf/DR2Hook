@@ -1,6 +1,8 @@
 # Synthetic track in the game
 
-> **Speculation.** A synthetic track exists offline (`tools/synthtrack`, see [docs/tools/synthtrack.md](../tools/synthtrack.md)). Nothing has been tried in the game. Every step below that writes a `.nefs` needs the owner's go-ahead before the result is loaded by the game.
+> **Update (2026-10-06/07): the Ring runs in the game.** It loads as `portugal / dr2hook_ring / route_0` through a folder overlay and AutoStage, without changing any `.nefs`. It has its own terrain, collision, objects, replay cameras, start grids and loading screen, and was driven by the benchmark bot and flown over with the free camera (F9). The editor's **Testar no jogo** (F5) ports it and opens the game on it. Details and runs: [track_loading.md](../reverse_engineering/track_loading.md) §9–§12 (Portuguese).
+>
+> Still missing: an entry of its own in the game menus (it borrows the Montalegre package through `track_alias`) and a mode where the player drives (the benchmark car drives itself). The analysis below is the original plan from before those runs; the "out of reach" items were solved by the overlay route instead.
 
 > **Analysis of 2026-10-06:** the order of experiments, the open unknowns and the host-track choice are in [../plans/mapa_no_jogo.md](../plans/mapa_no_jogo.md) (Portuguese).
 
