@@ -1,10 +1,13 @@
 #include "app/launch.hpp"
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <string_view>
 
 #ifndef _WIN32
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
@@ -17,6 +20,9 @@ extern char** environ;
 namespace dr2::app {
 
 #ifdef _WIN32
+
+GameWatch::GameWatch() = default;
+GameWatch::~GameWatch() = default;
 
 ChildProcess::~ChildProcess() = default;
 bool ChildProcess::start(const std::vector<std::string>&, std::string& error) {
@@ -127,6 +133,53 @@ void ChildProcess::poll(Progress& progress) {
 
 void ChildProcess::terminate() {
     if (pid_ > 0) ::kill(-pid_, SIGTERM);
+}
+
+namespace {
+
+// Algum processo com o comm "dirtrally2.exe" em /proc.
+bool game_process() {
+    DIR* proc = ::opendir("/proc");
+    if (!proc) return false;
+    bool found = false;
+    while (const dirent* e = ::readdir(proc)) {
+        if (e->d_name[0] < '1' || e->d_name[0] > '9') continue;
+        char path[64], comm[32];
+        std::snprintf(path, sizeof path, "/proc/%s/comm", e->d_name);
+        const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        const ssize_t n = ::read(fd, comm, sizeof comm - 1);
+        ::close(fd);
+        if (n > 0 && std::string_view(comm, static_cast<std::size_t>(n)) == "dirtrally2.exe\n") {
+            found = true;
+            break;
+        }
+    }
+    ::closedir(proc);
+    return found;
+}
+
+}  // namespace
+
+GameWatch::GameWatch() {
+    thread_ = std::thread([this] {
+        std::unique_lock lock(mutex_);
+        while (!stop_) {
+            lock.unlock();
+            running_.store(game_process(), std::memory_order_relaxed);
+            lock.lock();
+            wake_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_; });
+        }
+    });
+}
+
+GameWatch::~GameWatch() {
+    {
+        std::lock_guard lock(mutex_);
+        stop_ = true;
+    }
+    wake_.notify_all();
+    thread_.join();
 }
 
 #endif

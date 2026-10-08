@@ -74,6 +74,12 @@ TrackView::TrackView(const std::string& dir, std::string out, bool resume, rende
                  objects_->types().size(), with_mesh, seconds_since(t0));
     load_route(0);
     saved_text_ = current_edits();  // nada editado ainda
+    try {
+        game_ = load_game_transform(dir);
+    } catch (const std::exception& e) {
+        live_error_ = std::string("game_transform.json: ") + e.what();
+    }
+    if (std::string err; !live_.open(err) && live_error_.empty()) live_error_ = err;
     probe_ = std::make_unique<render::TerrainProbe>();
     if (!can_write(out_)) set_status("não vai dar para gravar em " + out_ + " (pasta sem permissão ou caminho impossível); use --out");
     if (std::filesystem::exists(out_)) {
@@ -349,6 +355,9 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
             show_replay_ = !show_replay_;
         }
         return true;
+    case SDLK_V:  // vista: livre → seguir o carro do jogo → pela câmera do jogo
+        set_live_view(static_cast<LiveView>((static_cast<int>(live_view_) + 1) % 3));
+        return true;
     case SDLK_L:
         if (mod & SDL_KMOD_SHIFT) {  // próxima vaga de largada, vista do banco do piloto
             const int n = route_->slot_count();
@@ -362,6 +371,7 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
 }
 
 void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam) {
+    if (car_) car_->begin_frame();
     textures_.begin_frame();  // envia o que as threads decodificaram, dentro do orçamento do quadro
     objects_->cull(inst_, cam.target, cam.dist, draw_dist_, layers_, edit_rev_);
     shader_.use();
@@ -370,7 +380,7 @@ void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam)
     objects_->draw(shader_, textures_);
     if (sel_ >= 0 && !inst_.hidden[static_cast<std::size_t>(sel_)])
         objects_->draw_one(shader_, textures_, inst_, static_cast<std::size_t>(sel_), 1.0f);
-    int inside = -1;  // vendo pela câmera em destaque: a pirâmide dela tamparia a vista
+    int inside = -1;  // vendo pela câmera em destaque: o ícone e o cone dela tampariam a vista
     if (replay_sel_ >= 0) {
         const Vec3& p = route_->replay.cameras[static_cast<std::size_t>(replay_sel_)].pos;
         if (glm::distance(cam.eye(), glm::vec3(p[0], p[1], p[2])) < 1.0f) inside = replay_sel_;
@@ -386,6 +396,23 @@ void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam)
     if (const GridSlot* s = route_->slot(slot_sel_))  // no banco do piloto: a caixa da vaga tamparia a vista
         if (glm::distance(cam.eye(), glm::vec3(s->pos[0], s->pos[1], s->pos[2])) < 3.0f) show.inside_slot = show.sel_slot;
     lines_->draw(shader_, show);
+    draw_live();
+}
+
+void TrackView::set_live_view(LiveView v) {
+    live_view_ = v;
+    static const char* const names[] = {"vista livre", "seguindo o carro do jogo", "vendo pela câmera do jogo"};
+    set_status(names[static_cast<int>(v)] + (live_connected() ? std::string() : std::string(" (jogo sem sinal: abra pelo F5)")));
+}
+
+std::string TrackView::live_status() const {
+    if (!live_.is_open()) return "jogo: " + live_error_;
+    if (!live_connected()) return live_.received() ? "jogo: sem sinal" : "jogo: esperando";
+    const LiveSample& s = live_.last();
+    char buf[96];
+    if (s.car) std::snprintf(buf, sizeof buf, "jogo ao vivo · %.0f km/h%s", static_cast<double>(s.speed_kmh), s.paused ? " · pausado" : "");
+    else std::snprintf(buf, sizeof buf, "jogo ao vivo · %s", s.view ? "sem carro" : "fora da especial");
+    return std::string(buf) + (game_.loaded ? "" : " · sem game_transform.json");
 }
 
 namespace {
@@ -425,6 +452,73 @@ bool TrackView::frame_slot(SlotRef r, render::OrbitCamera& cam) {
     const glm::vec3 f = slot_forward(*s), c(s->pos[0], s->pos[1], s->pos[2]);
     aim_orbit(cam, c - f * 12.0f + glm::vec3(0.0f, 6.0f, 0.0f), c + f * 4.0f);
     return true;
+}
+
+void TrackView::live_tick(render::OrbitCamera& cam) {
+    live_.poll();
+    if (!live_connected() || live_view_ == LiveView::Free) return;
+    const LiveSample& s = live_.last();
+    if (live_view_ == LiveView::FollowCar && s.car) {
+        const Vec3 p = game_.point_to_track(s.car_pos);
+        cam.target = {p[0], p[1], p[2]};
+    } else if (live_view_ == LiveView::GameCamera && s.view) {
+        const Vec3 e = game_.point_to_track(s.eye), f = game_.dir_to_track(s.forward);
+        const glm::vec3 eye(e[0], e[1], e[2]), fwd = glm::normalize(glm::vec3(f[0], f[1], f[2]));
+        aim_orbit(cam, eye, eye + fwd * render::OrbitCamera::kDistMin);
+    }
+}
+
+void TrackView::draw_live() {
+    if (!show_live_ || !live_connected()) return;
+    const LiveSample& s = live_.last();
+    std::vector<render::DynamicLines::Group> groups;
+    auto v = [](const Vec3& a) { return glm::vec3(a[0], a[1], a[2]); };
+    if (s.car) {
+        // linhas da rotação do jogo: 0 = direita, 1 = cima, 2 = frente
+        const glm::vec3 c = v(game_.point_to_track(s.car_pos));
+        const glm::vec3 r = v(game_.dir_to_track({s.car_rot[0], s.car_rot[1], s.car_rot[2]}));
+        const glm::vec3 u = v(game_.dir_to_track({s.car_rot[3], s.car_rot[4], s.car_rot[5]}));
+        const glm::vec3 f = v(game_.dir_to_track({s.car_rot[6], s.car_rot[7], s.car_rot[8]}));
+        if (car_) {
+            // a origem do jogo é o chão sob o carro, a mesma do modelo (rodas em y = 0)
+            const float rows[12] = {r.x, r.y, r.z, u.x, u.y, u.z, f.x, f.y, f.z, c.x, c.y, c.z};
+            shader_.use();
+            car_->draw(shader_, rows);
+        } else {
+            groups.push_back({render::car_box(c, r, u, f, 1.8f, 4.1f, 0.45f, 0.85f), {1.0f, 0.15f, 0.6f}, true});
+        }
+        // mastro: acha o carro de longe (sai de cima do teto quando há modelo)
+        const glm::vec3 m0 = car_ ? c + u * 1.6f : c;
+        groups.push_back({{m0, m0 + u * 3.0f}, {1.0f, 0.15f, 0.6f}, true});
+    }
+    if (s.view && live_view_ != LiveView::GameCamera) {
+        const glm::vec3 e = v(game_.point_to_track(s.eye)), f = v(game_.dir_to_track(s.forward)), u = v(game_.dir_to_track(s.up));
+        const glm::vec3 r = glm::normalize(glm::cross(f, u));
+        const glm::vec3 c = e + f * 2.0f;
+        std::vector<glm::vec3> pts;
+        const glm::vec3 k[4] = {c + r * 1.0f + u * 0.6f, c - r * 1.0f + u * 0.6f, c - r * 1.0f - u * 0.6f, c + r * 1.0f - u * 0.6f};
+        for (int i = 0; i < 4; ++i) {
+            pts.push_back(e);
+            pts.push_back(k[i]);
+            pts.push_back(k[i]);
+            pts.push_back(k[(i + 1) % 4]);
+        }
+        groups.push_back({pts, {1.0f, 1.0f, 0.3f}, true});
+    }
+    shader_.use();
+    live_lines_.draw(shader_, groups);
+}
+
+void TrackView::set_car(const std::string& dir) {
+    car_.reset();
+    if (dir.empty()) return;
+    try {
+        car_ = std::make_unique<render::CarRenderer>(dir);
+        std::fprintf(stderr, "viewer3d: carro %s de %s (%zu malhas, %zu vértices)\n", car_->id().c_str(), dir.c_str(),
+                     car_->meshes(), car_->verts());
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "viewer3d: carro em %s não abriu (%s); fica a caixa\n", dir.c_str(), e.what());
+    }
 }
 
 bool TrackView::slot_clearance(const GridSlot& s, float& center, float& wheels) {
@@ -578,6 +672,8 @@ bool TrackView::begin_edit(float x, float y, float w, float h, const render::Orb
     close_change();
     if (tool_ == Tool::Navigate || drag_.active) return false;
     const auto ray = render::mouse_ray(cam, x, y, w, h);
+    HelperHit helper;
+    if (pick_helper(ray, 2.0f * std::tan(render::OrbitCamera::kFovY / 2.0f) / h, helper)) return false;  // o clique seleciona
     const int hit = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_, visible_terrain_t(ray));
     if (hit < 0) return false;
     sel_ = hit;
@@ -640,7 +736,54 @@ void TrackView::click(float x, float y, float w, float h, const render::OrbitCam
     close_change();
     if (drag_.active) return;
     const auto ray = render::mouse_ray(cam, x, y, w, h);
+    HelperHit helper;
+    if (pick_helper(ray, 2.0f * std::tan(render::OrbitCamera::kFovY / 2.0f) / h, helper)) {
+        sel_ = -1;
+        replay_sel_ = helper.camera;
+        slot_sel_ = helper.slot;
+        return;
+    }
     sel_ = render::pick(ray, inst_, *objects_, cam.target, draw_dist_, layers_, visible_terrain_t(ray));
+    replay_sel_ = -1;
+    slot_sel_ = SlotRef{};
+}
+
+bool TrackView::pick_helper(const render::Ray& ray, float pixel, HelperHit& hit) const {
+    if (!route_) return false;
+    float best = std::numeric_limits<float>::infinity();
+    // esfera em volta do desenho, nunca menor que uns 10 pixels na tela; devolve a distância ao longo do raio
+    auto test = [&](const glm::vec3& c, float radius) {
+        const float t = glm::dot(c - ray.o, ray.d);
+        if (t <= 0.0f) return false;
+        if (glm::length(ray.o + ray.d * t - c) > std::max(radius, t * pixel * 10.0f) || t >= best) return false;
+        best = t;
+        return true;
+    };
+    if (show_replay_) {
+        const auto& cams = route_->replay.cameras;
+        for (std::size_t i = 0; i < cams.size(); ++i) {
+            const glm::vec3 p(cams[i].pos[0], cams[i].pos[1], cams[i].pos[2]);
+            if (glm::distance(ray.o, p) < 1.0f) continue;  // vendo por ela: o desenho dela não está na tela
+            glm::vec3 f = glm::vec3(cams[i].aim[0], cams[i].aim[1], cams[i].aim[2]) - p;
+            f = glm::length(f) > 1e-3f ? glm::normalize(f) : glm::vec3(0.0f, 0.0f, 1.0f);
+            // o ícone vai da lente (em pos) 2,4 m para trás, com os rolos em cima
+            if (test(p - f * 1.2f + glm::vec3(0.0f, 0.4f, 0.0f), 1.5f)) hit = HelperHit{static_cast<int>(i), SlotRef{}};
+        }
+    }
+    if (show_grids_) {
+        const glm::vec3 eye = ray.o;
+        for (std::size_t g = 0; g < route_->grids.size(); ++g) {
+            const auto& slots = route_->grids[g].slots;
+            for (std::size_t k = 0; k < slots.size(); ++k) {
+                const GridSlot& s = slots[k];
+                const glm::vec3 c(s.pos[0], s.pos[1] + 0.2f, s.pos[2]);
+                if (glm::distance(eye, c) < 3.0f) continue;  // no banco do piloto dela
+                if (test(c, 0.45f * std::max(s.width, s.length)))
+                    hit = HelperHit{-1, SlotRef{static_cast<int>(g), static_cast<int>(k)}};
+            }
+        }
+    }
+    return hit.camera >= 0 || static_cast<bool>(hit.slot);
 }
 
 int TrackView::pick_ray(const render::Ray& ray, const glm::vec3& target) {

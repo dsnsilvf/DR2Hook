@@ -4,7 +4,9 @@
 
 #include "core/track.hpp"
 #include "core/dr2i.hpp"
+#include "core/live.hpp"
 #include "render/camera.hpp"
+#include "render/car.hpp"
 #include "edit/edits_json.hpp"
 #include "edit/history.hpp"
 #include "render/instances.hpp"
@@ -49,7 +51,8 @@ public:
     bool begin_edit(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift);
     void edit_drag(float x, float y, float w, float h, const render::OrbitCamera& cam, bool shift);
     void end_edit();
-    // Clique sem arraste: seleciona o objeto sob o mouse ou desseleciona.
+    // Clique sem arraste: seleciona o que está sob o mouse (câmera do replay ou vaga de largada primeiro, que são
+    // desenhadas por cima de tudo; senão um objeto) e tira o resto da seleção; no vazio, tira tudo.
     void click(float x, float y, float w, float h, const render::OrbitCamera& cam);
     bool has_selection() const { return sel_ >= 0; }
     void deselect() { sel_ = -1; }
@@ -144,6 +147,13 @@ public:
     static const char* source_file(const std::string& type_name);
     // Instância sob o raio (a mesma do clique, com o terreno na frente tapando o que fica atrás); -1 se nenhuma.
     int pick_ray(const render::Ray& ray, const glm::vec3& target);
+    // Câmera do replay ou vaga de largada à mostra sob o raio (a mais perto do olho). `pixel`: tamanho de um pixel a
+    // 1 m do olho, para que as de longe ainda peguem num raio de alguns pixels. false se nenhuma.
+    struct HelperHit {
+        int camera = -1;
+        SlotRef slot;
+    };
+    bool pick_helper(const render::Ray& ray, float pixel, HelperHit& hit) const;
     // Distância do olho até o terreno ao longo do raio (a mesma que o picking usa); false sem terreno.
     bool terrain_hit(const render::Ray& ray, float& t);
     // Altura do terreno em (x, z), contando só o que fica abaixo de `y_from` (e, se não achar, de cima).
@@ -166,6 +176,22 @@ public:
     std::string title() const;
 
     const Track& track() const { return track_; }
+
+    // Jogo ao vivo (core/live.hpp): o carro do jogador e a câmera da especial, quando o jogo está aberto com
+    // o mod. Vista livre (a de sempre), seguir o carro (a órbita gira em volta dele) ou pela câmera do jogo.
+    enum class LiveView { Free, FollowCar, GameCamera };
+    // Lê o que chegou e, conforme a vista, leva a câmera ao carro ou à câmera do jogo. Uma vez por quadro.
+    void live_tick(render::OrbitCamera& cam);
+    LiveView live_view() const { return live_view_; }
+    void set_live_view(LiveView v);
+    bool& show_live() { return show_live_; }
+    // Malha do carro do jogo (pasta do viewer_car.py) no lugar da caixa; vazio = sem modelo. Precisa do GL.
+    void set_car(const std::string& dir);
+    const render::CarRenderer* car() const { return car_.get(); }
+    bool live_connected() const { return live_.age() < 2.0; }
+    // O pacote mais novo (vale só com live_connected): carro na especial, pausa, velocidade.
+    const LiveSample& live_sample() const { return live_.last(); }
+    std::string live_status() const;
 
 private:
     Track track_;
@@ -228,6 +254,14 @@ private:
     bool show_terrain_ = true, show_gates_ = true, show_ai_ = true, show_replay_ = true, show_grids_ = true;
     int replay_sel_ = -1;
     SlotRef slot_sel_;
+    LiveReceiver live_;
+    GameTransform game_;
+    std::string live_error_;
+    LiveView live_view_ = LiveView::Free;
+    bool show_live_ = true;
+    render::DynamicLines live_lines_;
+    std::unique_ptr<render::CarRenderer> car_;  // sem ele, a caixa
+    void draw_live();
 };
 
 }  // namespace dr2::app

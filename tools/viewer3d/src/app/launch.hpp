@@ -6,8 +6,12 @@
 
 #include "core/progress.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace dr2::app {
@@ -37,6 +41,24 @@ private:
     int exit_code_pending_ = -1;  // o filho saiu antes de a saída acabar de chegar
     std::string partial_;
     std::chrono::steady_clock::time_point start_{};
+};
+
+// O jogo aberto: procura o processo dirtrally2.exe (o nome que o Proton dá) a cada segundo numa thread, para
+// o botão Parar saber se há o que fechar sem pesar no quadro. No Windows, sempre falso por enquanto.
+class GameWatch {
+public:
+    GameWatch();
+    ~GameWatch();
+    GameWatch(const GameWatch&) = delete;
+    GameWatch& operator=(const GameWatch&) = delete;
+    bool running() const { return running_.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<bool> running_{false};
+    bool stop_ = false;
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    std::thread thread_;
 };
 
 // Raiz do repositório (onde fica scripts/research/ring_deploy.py): a pasta atual ou uma acima da pista aberta.

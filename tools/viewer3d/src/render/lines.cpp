@@ -35,15 +35,62 @@ std::vector<Vec3> bezier(const std::vector<Vec3>& ctl) {
     return out;
 }
 
+// Eixos da câmera que olha de `pos` para `aim`: frente, direita e cima (cima perto do +Y do mundo).
+void camera_axes(const Vec3& pos, const Vec3& aim, glm::vec3& f, glm::vec3& r, glm::vec3& u) {
+    f = v(aim) - v(pos);
+    if (glm::length(f) < 1e-3f) f = {0.0f, 0.0f, 1.0f};
+    f = glm::normalize(f);
+    r = glm::cross(f, glm::vec3(0.0f, 1.0f, 0.0f));
+    r = glm::length(r) < 1e-3f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::normalize(r);
+    u = glm::cross(r, f);
+}
+
+// Ícone de câmera em arame, como os dos editores (Unity, Godot): corpo, lente que abre para a frente com a
+// boca em `pos`, e dois rolos de filme em cima (dizem onde é o alto). Uns 2,4 m de comprimento, em pares de
+// GL_LINES.
+std::vector<Vec3> camera_icon(const Vec3& pos, const Vec3& aim) {
+    glm::vec3 f, r, u;
+    camera_axes(pos, aim, f, r, u);
+    const glm::vec3 o = v(pos);
+    std::vector<Vec3> out;
+    auto line = [&](const glm::vec3& p, const glm::vec3& q) {
+        out.push_back(a(p));
+        out.push_back(a(q));
+    };
+    // um quadro w × h perpendicular à frente, a `d` de `pos` (negativo = para trás), e o ponto k (0..3) dele
+    auto corner = [&](float d, float w, float h, int k) {
+        const float sr = (k == 0 || k == 3) ? -0.5f : 0.5f, su = k < 2 ? -0.5f : 0.5f;
+        return o + f * d + r * (w * sr) + u * (h * su);
+    };
+    auto prism = [&](float d0, float w0, float h0, float d1, float w1, float h1) {
+        for (int k = 0; k < 4; ++k) {
+            line(corner(d0, w0, h0, k), corner(d0, w0, h0, (k + 1) % 4));
+            line(corner(d1, w1, h1, k), corner(d1, w1, h1, (k + 1) % 4));
+            line(corner(d0, w0, h0, k), corner(d1, w1, h1, k));
+        }
+    };
+    prism(-2.4f, 0.9f, 1.1f, -0.7f, 0.9f, 1.1f);  // corpo
+    prism(-0.7f, 0.45f, 0.45f, 0.0f, 0.9f, 0.7f);  // lente
+    // rolos: círculos no plano frente-cima, apoiados no teto do corpo, com o eixo marcado
+    const float radius = 0.42f;
+    for (const float d : {-1.95f, -1.1f}) {
+        const glm::vec3 c = o + f * d + u * (0.55f + radius);
+        constexpr int n = 20;
+        for (int k = 0; k < n; ++k) {
+            const float t0 = 6.2831853f * static_cast<float>(k) / n, t1 = 6.2831853f * static_cast<float>(k + 1) / n;
+            line(c + (f * std::cos(t0) + u * std::sin(t0)) * radius, c + (f * std::cos(t1) + u * std::sin(t1)) * radius);
+        }
+        line(c - f * (radius * 0.35f), c + f * (radius * 0.35f));
+        line(c - u * (radius * 0.35f), c + u * (radius * 0.35f));
+    }
+    return out;
+}
+
 // Cone de visão (pirâmide de 4 m) de `pos` para `aim`, com um tique em cima, em pares de GL_LINES.
 std::vector<Vec3> frustum(const Vec3& pos, const Vec3& aim) {
     const glm::vec3 o = v(pos);
-    glm::vec3 f = v(aim) - o;
-    if (glm::length(f) < 1e-3f) f = {0.0f, 0.0f, 1.0f};
-    f = glm::normalize(f);
-    glm::vec3 r = glm::cross(f, glm::vec3(0.0f, 1.0f, 0.0f));
-    r = glm::length(r) < 1e-3f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::normalize(r);
-    const glm::vec3 u = glm::cross(r, f);
+    glm::vec3 f, r, u;
+    camera_axes(pos, aim, f, r, u);
     const glm::vec3 c = o + f * 4.0f;
     const glm::vec3 k[4] = {c - r * 2.0f - u * 1.3f, c + r * 2.0f - u * 1.3f, c + r * 2.0f + u * 1.3f, c - r * 2.0f + u * 1.3f};
     std::vector<Vec3> out;
@@ -100,9 +147,11 @@ std::vector<Vec3> marker(const GridSlot& s) {
 
 RouteLines::RouteLines(const Route& route) {
     std::vector<float> data;
-    auto add = [&](const std::vector<Vec3>& pts, glm::vec3 color, GLenum mode, Kind kind, int cam = -1, bool frustum = false) {
+    auto add = [&](const std::vector<Vec3>& pts, glm::vec3 color, GLenum mode, Kind kind, int cam = -1, bool frustum = false,
+                   bool sel_only = false) {
         if (pts.size() < 2) return;
-        strips_.push_back({static_cast<GLint>(data.size() / 3), static_cast<GLsizei>(pts.size()), mode, color, kind, cam, frustum});
+        strips_.push_back({static_cast<GLint>(data.size() / 3), static_cast<GLsizei>(pts.size()), mode, color, kind, cam, frustum,
+                           sel_only});
         for (const Vec3& p : pts) data.insert(data.end(), p.begin(), p.end());
     };
     // as rotas repetem a contagem de distância: um recuo quebra a linha
@@ -137,7 +186,8 @@ RouteLines::RouteLines(const Route& route) {
         const ReplayCamera& c = rep.cameras[i];
         const int ci = static_cast<int>(i);
         const glm::vec3 color = c.kind == "dolly" ? kDolly : c.kind == "static" ? kStatic : kTrackside;
-        add(frustum(c.pos, c.aim), color, GL_LINES, Kind::Replay, ci, true);
+        add(camera_icon(c.pos, c.aim), color, GL_LINES, Kind::Replay, ci, true);
+        add(frustum(c.pos, c.aim), color, GL_LINES, Kind::Replay, ci, true, true);  // o cone só na câmera em destaque
         add({c.pos, c.aim}, color * 0.5f, GL_LINES, Kind::Replay, ci);
         add(bezier(c.path), color, GL_LINE_STRIP, Kind::Replay, ci);
         add(bezier(c.target), kTarget, GL_LINE_STRIP, Kind::Replay, ci);
@@ -198,10 +248,58 @@ void RouteLines::draw(const TrackShader& shader, const LinesShow& show) const {
         if (!(s.kind == Kind::Gate ? show.gates : s.kind == Kind::Ai ? show.ai : grid ? show.grids : show.replay)) continue;
         const int sel = grid ? show.sel_slot : show.sel_cam, inside = grid ? show.inside_slot : show.inside_cam;
         if (s.frustum && inside >= 0 && s.cam == inside) continue;
+        if (s.sel_only && (sel < 0 || s.cam != sel)) continue;
         shader.set_color(sel >= 0 && s.cam == sel ? glm::vec3(1.0f) : s.color);
         glDrawArrays(s.mode, s.first, s.count);
     }
     glEnable(GL_DEPTH_TEST);
+    shader.set_line(false);
+    glBindVertexArray(0);
+}
+
+std::vector<glm::vec3> car_box(const glm::vec3& c, const glm::vec3& right, const glm::vec3& up, const glm::vec3& fwd,
+                               float width, float length, float below, float above) {
+    const float hw = width / 2, hl = length / 2;
+    const glm::vec3 lo = c - up * below, hi = c + up * above;
+    const glm::vec3 k[4] = {right * hw + fwd * hl, -right * hw + fwd * hl, -right * hw - fwd * hl, right * hw - fwd * hl};
+    std::vector<glm::vec3> out;
+    auto line = [&](const glm::vec3& p, const glm::vec3& q) {
+        out.push_back(p);
+        out.push_back(q);
+    };
+    for (int i = 0; i < 4; ++i) {
+        line(lo + k[i], lo + k[(i + 1) % 4]);
+        line(hi + k[i], hi + k[(i + 1) % 4]);
+        line(lo + k[i], hi + k[i]);
+    }
+    // frente marcada: X na grade da frente e seta no teto
+    line(lo + k[0], hi + k[1]);
+    line(lo + k[1], hi + k[0]);
+    const glm::vec3 tip = hi + fwd * hl, back = hi - fwd * (hl - 0.6f);
+    line(back, tip);
+    line(tip, hi + fwd * (hl - 1.4f) + right * hw * 0.8f);
+    line(tip, hi + fwd * (hl - 1.4f) - right * hw * 0.8f);
+    return out;
+}
+
+void DynamicLines::draw(const TrackShader& shader, const std::vector<Group>& groups) {
+    std::vector<glm::vec3> all;
+    for (const Group& g : groups) all.insert(all.end(), g.points.begin(), g.points.end());
+    if (all.empty()) return;
+    vao_.bind();
+    vbo_.upload(GL_ARRAY_BUFFER, all.data(), all.size() * sizeof(glm::vec3), GL_STREAM_DRAW);
+    glEnableVertexAttribArray(kPos);
+    glVertexAttribPointer(kPos, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+    TrackShader::identity_rows();
+    shader.set_line(true);
+    GLint first = 0;
+    for (const Group& g : groups) {
+        if (g.on_top) glDisable(GL_DEPTH_TEST);
+        shader.set_color(g.color);
+        glDrawArrays(GL_LINES, first, static_cast<GLsizei>(g.points.size()));
+        if (g.on_top) glEnable(GL_DEPTH_TEST);
+        first += static_cast<GLint>(g.points.size());
+    }
     shader.set_line(false);
     glBindVertexArray(0);
 }

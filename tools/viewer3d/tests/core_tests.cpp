@@ -12,6 +12,7 @@
 #include "core/grid.hpp"
 #include "core/io.hpp"
 #include "core/json.hpp"
+#include "core/live.hpp"
 #include "core/progress.hpp"
 #include "core/track.hpp"
 
@@ -369,6 +370,41 @@ void test_progress() {
     check(d.state == dr2::Progress::State::Done && d.fraction == 1.0f && d.result == "na pista", "progress: @done");
 }
 
+// Pacote do LiveLink (src/core/live_link.cpp) e o giro do porte ao contrário.
+void test_live() {
+    unsigned char pkt[dr2::kLivePacketSize] = {};
+    std::memcpy(pkt, "DR2L", 4);
+    const std::uint32_t head[3] = {1, 77, 1u | 4u};
+    std::memcpy(pkt + 4, head, sizeof head);
+    float body[26];
+    for (int k = 0; k < 26; ++k) body[k] = static_cast<float>(k) + 0.5f;
+    std::memcpy(pkt + 16, body, sizeof body);
+    const std::uint32_t top = 0x1251500;
+    std::memcpy(pkt + 112, &top, 4);
+    const float kmh = 88.0f;
+    std::memcpy(pkt + 116, &kmh, 4);
+    dr2::LiveSample s;
+    check(dr2::parse_live(pkt, sizeof pkt, s), "live: pacote válido");
+    check(s.seq == 77 && s.car && !s.view && s.paused, "live: número e bits");
+    check(s.car_pos[0] == 0.5f && s.car_rot[0] == 3.5f && s.car_rot[8] == 11.5f && s.car_vel[2] == 14.5f, "live: carro");
+    check(s.eye[0] == 15.5f && s.forward[0] == 18.5f && s.up[2] == 23.5f, "live: câmera");
+    check(s.top == top && s.speed_kmh == 88.0f, "live: topo e km/h");
+    check(!dr2::parse_live(pkt, sizeof pkt - 1, s), "live: tamanho errado");
+    pkt[4] = 2;
+    check(!dr2::parse_live(pkt, sizeof pkt, s), "live: versão errada");
+
+    // o porte faz p_jogo = giro_y(p, yaw) + offset, com giro_y(v, a): x' = cos a·x − sin a·z, z' = sin a·x + cos a·z
+    dr2::GameTransform t;
+    t.yaw_deg = 47.7f;
+    t.offset = {-132.4f, 1331.7f, -330.4f};
+    const dr2::Vec3 p{120.0f, 3.0f, -510.0f};
+    const double a = 47.7 * M_PI / 180.0;
+    const dr2::Vec3 g{static_cast<float>(std::cos(a) * p[0] - std::sin(a) * p[2]) + t.offset[0], p[1] + t.offset[1],
+                      static_cast<float>(std::sin(a) * p[0] + std::cos(a) * p[2]) + t.offset[2]};
+    const dr2::Vec3 back = t.point_to_track(g);
+    for (int k = 0; k < 3; ++k) check(std::fabs(back[static_cast<std::size_t>(k)] - p[static_cast<std::size_t>(k)]) < 1e-3f, "live: jogo → pista");
+}
+
 int main(int argc, char** argv) {
     std::string track_dir;
     for (int i = 1; i < argc; ++i) {
@@ -385,6 +421,7 @@ int main(int argc, char** argv) {
         test_dr2i_synthetic();
         test_grid();
         test_progress();
+        test_live();
         if (!track_dir.empty()) test_track(track_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FALHOU com exceção: %s\n", e.what());

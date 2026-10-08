@@ -9,7 +9,14 @@
 // --look NOME começa vendo pela câmera do replay com esse nome (ex.: camera_r0_spectator_001) ou do banco do
 // piloto da vaga de largada com esse nome (ex.: slot_0 ou grid_start_standing_01/slot_05).
 // --grid-check imprime a folga de cada vaga de largada até o terreno e sai com 1 se alguma está dentro do chão.
+// --car DIR é o carro do jogo ao vivo (saída de tools/uiview/car/viewer_car.py); sem ele, o primeiro de
+// <pasta do viewer3d>/cars/ que tiver car.bin, e sem nenhum, a caixa.
 // --launch abre a janela do Testar no jogo (F5) ao começar (para capturas; o teste só começa com Enter).
+// --select IDX começa com a instância IDX selecionada e enquadrada; --tool select|move|rotate escolhe a ferramenta;
+// --ui exibicao|atalhos|sobre abre essa janela ao começar (capturas); --drag X0,Y0,X1,Y1 arrasta com o botão esquerdo de
+// um ponto a outro (eventos do SDL, como o mouse de verdade: testa o gizmo) e escreve o que entrou no histórico;
+// --click X,Y clica (sem arrastar) nesse ponto
+// da janela no 10º quadro (testes da seleção).
 // Sem --track, mostra a cena de teste (cubo e grade). Com --track, abre a pista exportada em DIR
 // (track.json, terrain_<n>.bin, ...). Com --frames, roda N quadros, imprime
 // "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
@@ -42,6 +49,7 @@ struct Options {
     const char* screenshot = nullptr;
     const char* track = nullptr;
     const char* out = nullptr;  // edits.json
+    const char* car = nullptr;  // pasta do carro (car.bin + car.json)
     int vsync = 1;
     bool panels = true;
     bool fresh = false;  // não retoma o edits.json que já existe
@@ -61,6 +69,11 @@ struct Options {
     const char* look = nullptr;  // nome de câmera do replay ou de vaga de largada: começa vendo por ela
     bool grid_check = false;     // imprime a folga das vagas de largada até o terreno e sai
     bool launch = false;         // abre a janela do Testar no jogo (F5) ao começar
+    long select = -1;            // instância selecionada (e enquadrada) ao começar
+    const char* tool = nullptr;  // ferramenta ao começar: select, move ou rotate
+    const char* ui = nullptr;    // janela aberta ao começar (capturas): exibicao ou atalhos
+    float click[2] = {-1, -1};   // clique sem arraste nesse ponto da janela no 10º quadro (testes da seleção)
+    float drag[4] = {-1, -1, -1, -1};  // arraste do 10º ao 22º quadro (testes do gizmo)
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
 };
@@ -80,6 +93,8 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.track = argv[++i];
         } else if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
             opt.out = argv[++i];
+        } else if (std::strcmp(argv[i], "--car") == 0 && i + 1 < argc) {
+            opt.car = argv[++i];
         } else if (std::strcmp(argv[i], "--camera") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &opt.camera[0], &opt.camera[1], &opt.camera[2], &opt.camera[3],
                             &opt.camera[4], &opt.camera[5]) != 6) {
@@ -143,6 +158,31 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.grid_check = true;
         } else if (std::strcmp(argv[i], "--launch") == 0) {
             opt.launch = true;
+        } else if (std::strcmp(argv[i], "--select") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            opt.select = std::strtol(argv[++i], &end, 10);
+            if (*end != '\0' || opt.select < 0) {
+                std::fprintf(stderr, "--select precisa do índice de uma instância (>= 0)\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--drag") == 0 && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%f,%f,%f,%f", &opt.drag[0], &opt.drag[1], &opt.drag[2], &opt.drag[3]) != 4 || opt.drag[0] < 0) {
+                std::fprintf(stderr, "--drag precisa de x0,y0,x1,y1 (pontos da janela)\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--click") == 0 && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%f,%f", &opt.click[0], &opt.click[1]) != 2 || opt.click[0] < 0 || opt.click[1] < 0) {
+                std::fprintf(stderr, "--click precisa de x,y (pontos da janela)\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--tool") == 0 && i + 1 < argc) {
+            opt.tool = argv[++i];
+            if (std::strcmp(opt.tool, "select") != 0 && std::strcmp(opt.tool, "move") != 0 && std::strcmp(opt.tool, "rotate") != 0) {
+                std::fprintf(stderr, "--tool precisa de select, move ou rotate\n");
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--ui") == 0 && i + 1 < argc) {
+            opt.ui = argv[++i];
         } else if (std::strcmp(argv[i], "--wait-textures") == 0) {
             opt.wait_textures = true;
         } else if (std::strcmp(argv[i], "--walk") == 0 && i + 1 < argc) {
@@ -158,7 +198,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines,replay,grids] [--look CÂMERA|VAGA] [--grid-check] [--launch] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines,replay,grids] [--look CÂMERA|VAGA] [--grid-check] [--launch] [--select IDX] [--click X,Y] [--drag X0,Y0,X1,Y1] [--tool select|move|rotate] [--ui exibicao|atalhos|sobre] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--car DIR] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -191,7 +231,7 @@ public:
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-        window_ = SDL_CreateWindow("DR2 Viewer3D", 1440, 810, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        window_ = SDL_CreateWindow("DR2Hook Editor de Pistas", 1440, 810, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!window_) {
             auto err = sdl_error("SDL_CreateWindow");
             release();
@@ -354,7 +394,6 @@ struct Drag {
     bool active = false;
     bool pan = false;
     bool edit = false;
-    bool gizmo = false;
     Uint8 button = 0;
     float moved = 0;
 };
@@ -393,12 +432,21 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
             break;
         }
         if (event.key.key == SDLK_F5 && !event.key.repeat) {
-            ui.open_launch(track);  // testar no jogo
+            if (event.key.mod & SDL_KMOD_SHIFT) ui.stop_game(track);  // parar o teste e fechar o jogo
+            else ui.open_launch(track);                              // testar no jogo
+            break;
+        }
+        if (event.key.key == SDLK_F6 && !event.key.repeat) {
+            ui.toggle_pause(track);  // pausar ou continuar a especial no jogo
             break;
         }
         if (event.key.key == SDLK_ESCAPE) {
             if (track) track->deselect();  // Esc só tira a seleção; sair é Ctrl+Q ou fechar a janela
             else if (ui.ask_quit(track)) return false;  // cena de teste: nada a perder
+            break;
+        }
+        if (event.key.key == SDLK_X && !(event.key.mod & SDL_KMOD_CTRL)) {
+            ui.toggle_gizmo_axes();  // eixos do gizmo: do mundo ou do objeto
             break;
         }
         if (event.key.key == SDLK_Q && (event.key.mod & SDL_KMOD_CTRL)) {
@@ -416,10 +464,10 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
         drag.button = event.button.button;
         if (event.button.button == SDL_BUTTON_LEFT) {
             drag.active = true;
-            if (track) drag.gizmo = ui.gizmo_press(*track, cam, x, y);
-            // com Mover/Girar sobre um objeto, Shift é subir e descer; fora de objeto, Shift é pan
-            if (track && !drag.gizmo) drag.edit = track->begin_edit(x - vp.x, y - vp.y, vp.w, vp.h, cam, shift);
-            drag.pan = shift && !drag.edit && !drag.gizmo;
+            // com Mover/Girar sobre um objeto, Shift é subir e descer; fora de objeto, Shift é pan (o clique no
+            // gizmo não chega aqui: o ImGui fica com ele)
+            if (track) drag.edit = track->begin_edit(x - vp.x, y - vp.y, vp.w, vp.h, cam, shift);
+            drag.pan = shift && !drag.edit;
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             drag.active = true;
             drag.pan = true;
@@ -428,8 +476,7 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
     }
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (!drag.active || event.button.button != drag.button) break;
-        if (drag.gizmo) ui.gizmo_release(*track);
-        else if (drag.edit) track->end_edit();
+        if (drag.edit) track->end_edit();
         else if (track && drag.button == SDL_BUTTON_LEFT && drag.moved < 5)
             track->click(event.button.x - vp.x, event.button.y - vp.y, vp.w, vp.h, cam);
         drag = Drag{};
@@ -437,8 +484,7 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
     case SDL_EVENT_MOUSE_MOTION:
         if (!drag.active) break;
         drag.moved += std::fabs(event.motion.xrel) + std::fabs(event.motion.yrel);
-        if (drag.gizmo) ui.gizmo_drag(*track, cam, event.motion.x, event.motion.y);
-        else if (drag.edit) track->edit_drag(event.motion.x - vp.x, event.motion.y - vp.y, vp.w, vp.h, cam, shift);
+        if (drag.edit) track->edit_drag(event.motion.x - vp.x, event.motion.y - vp.y, vp.w, vp.h, cam, shift);
         else if (drag.pan) cam.pan(event.motion.xrel, event.motion.yrel);
         else cam.orbit(event.motion.xrel, event.motion.yrel);
         break;
@@ -463,6 +509,11 @@ void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input, cons
     if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
 }
 
+std::string car_dir(const Options& opt) {
+    const char* base = SDL_GetBasePath();
+    return dr2::render::find_car_dir(opt.car ? opt.car : "", base ? base : ".");
+}
+
 // Abre a pista em `dir` no lugar da atual. A atual sai antes (duas pistas grandes juntas dobrariam a
 // memória); se a nova falhar, a anterior é aberta de novo (com o edits.json dela) e a mensagem vai
 // para os painéis. Quem chama já confirmou descartar as edições não gravadas.
@@ -479,6 +530,7 @@ void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2:
     auto open = [&](const std::string& d, const std::string& out) {
         auto next = std::make_unique<dr2::app::TrackView>(d, out, !opt.fresh, opt.tex);
         next->terrain_dist() = opt.terrain_dist;
+        next->set_car(car_dir(opt));
         track = std::move(next);
         scene.reset();
         track->frame_route(cam);
@@ -517,6 +569,7 @@ int run(const Options& opt) {
     if (opt.track) {
         track = std::make_unique<dr2::app::TrackView>(opt.track, opt.out ? opt.out : "", !opt.fresh, opt.tex);
         track->terrain_dist() = opt.terrain_dist;
+        track->set_car(car_dir(opt));
         if (opt.hide) {
             const std::string h = std::string(",") + opt.hide + ",";
             if (h.find(",terrain,") != std::string::npos) track->show_terrain() = false;
@@ -539,6 +592,18 @@ int run(const Options& opt) {
             std::fprintf(stderr, "--look: \"%s\" não é câmera do replay nem vaga de largada desta rota\n", opt.look);
             return 1;
         }
+    }
+    if (opt.select >= 0) {
+        if (!track || static_cast<std::size_t>(opt.select) >= track->instances().n) {
+            std::fprintf(stderr, "--select: %ld não é instância desta rota\n", opt.select);
+            return 1;
+        }
+        track->select(static_cast<int>(opt.select));
+        track->frame_selected(cam);
+    }
+    if (opt.tool && track) {
+        using Tool = dr2::app::TrackView::Tool;
+        track->set_tool(std::strcmp(opt.tool, "move") == 0 ? Tool::Move : std::strcmp(opt.tool, "rotate") == 0 ? Tool::Rotate : Tool::Navigate);
     }
     if (opt.has_camera) {
         cam.yaw = opt.camera[0];
@@ -683,9 +748,13 @@ int run(const Options& opt) {
             while (track->redo()) {}
         }
     }
-    dr2::app::EditorUi ui(window, platform.context());
+    dr2::app::EditorUi ui(window, platform.context(), opt.frames < 0);  // capturas (--frames) sempre no layout padrão
     ui.panels = opt.panels;
     if (opt.launch) ui.open_launch(track.get());
+    if (opt.ui && !ui.open_on_start(opt.ui)) {
+        std::fprintf(stderr, "--ui: \"%s\" não existe (exibicao ou atalhos)\n", opt.ui);
+        return 1;
+    }
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
@@ -697,6 +766,7 @@ int run(const Options& opt) {
     Uint64 last_t = title_t0;
     const Uint64 start_t = title_t0;
     long title_frames = 0;
+    std::string shown_title;
     long frames = 0;
     float fps = 0.0f;
     double worst_ms = 0.0;
@@ -716,8 +786,47 @@ int run(const Options& opt) {
         if (opt.walk != 0.0f) cam.target.x += opt.walk;
 
         if (track && opt.autosave > 0) track->autosave_tick(opt.autosave);
+        if (track) track->live_tick(cam);
         // painéis primeiro: dizem quanto sobra para o 3D
+        ui.viewport_drag = drag.active;
         vp = ui.frame(track.get(), cam, fps);
+        if (static bool clicked = false; track && opt.click[0] >= 0 && frames >= 10 && !clicked) {
+            clicked = true;
+            if (vp.contains(opt.click[0], opt.click[1])) track->click(opt.click[0] - vp.x, opt.click[1] - vp.y, vp.w, vp.h, cam);
+        }
+        if (track && opt.drag[0] >= 0 && frames >= 10 && frames <= 26) {
+            // um passo por quadro: pousar, apertar, oito movimentos, soltar; os eventos entram no próximo quadro
+            static int step = 0;
+            SDL_Event e{};
+            const float* d = opt.drag;
+            if (step <= 12) {
+                const float k = step <= 2 ? 0.0f : std::min(1.0f, static_cast<float>(step - 2) / 8.0f);
+                const float x = d[0] + (d[2] - d[0]) * k, y = d[1] + (d[3] - d[1]) * k;
+                if (step == 2 || step == 12) {
+                    e.type = step == 2 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+                    e.button.windowID = SDL_GetWindowID(window);
+                    e.button.button = SDL_BUTTON_LEFT;
+                    e.button.down = step == 2;
+                    e.button.clicks = 1;
+                    e.button.x = x;
+                    e.button.y = y;
+                } else {
+                    e.type = SDL_EVENT_MOUSE_MOTION;
+                    e.motion.windowID = SDL_GetWindowID(window);
+                    e.motion.state = step > 2 ? SDL_BUTTON_LMASK : 0;
+                    e.motion.x = x;
+                    e.motion.y = y;
+                }
+                SDL_PushEvent(&e);
+            } else if (step == 15) {
+                const auto& h = track->history();
+                const int sel = track->selected();
+                const float* m = sel >= 0 ? track->instances().matrix(static_cast<std::size_t>(sel)) : nullptr;
+                std::printf("arraste: %s; seleção %d em %.3f %.3f %.3f\n", h.pos() > 0 ? h.entries()[h.pos() - 1].label.c_str() : "(nada)", sel,
+                            m ? static_cast<double>(m[9]) : 0.0, m ? static_cast<double>(m[10]) : 0.0, m ? static_cast<double>(m[11]) : 0.0);
+            }
+            ++step;
+        }
         if (ui.quit_request) running = false;
 
         int w = 0, h = 0, ww = 1, wh = 1;
@@ -808,12 +917,13 @@ int run(const Options& opt) {
         const double elapsed = static_cast<double>(now - title_t0) / static_cast<double>(freq);
         if (elapsed >= 0.5) {
             fps = static_cast<float>(title_frames / elapsed);
-            char tail[32];
-            std::snprintf(tail, sizeof tail, " | %.0f fps", static_cast<double>(fps));
-            const std::string title = "DR2 Viewer3D | " + renderer + " | GL " + version + (track ? " | " + track->title() : "") + tail;
-            SDL_SetWindowTitle(window, title.c_str());
             title_t0 = now;
             title_frames = 0;
+        }
+        // "pista · arquivo *": o * aparece e some junto com as edições não gravadas
+        if (std::string title = dr2::app::EditorUi::window_title(track.get()); title != shown_title) {
+            SDL_SetWindowTitle(window, title.c_str());
+            shown_title = std::move(title);
         }
         if (last) running = false;
     }
