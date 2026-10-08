@@ -1,6 +1,8 @@
+import io
 import json
 import math
 import os
+import re
 import struct
 import tempfile
 import unittest
@@ -9,6 +11,43 @@ from tools.synthtrack import build as synth
 from tools.uiview.mesh import unpack_geom
 from tools.uiview.track import edit as track_edit
 from tools.uiview.track import export as track
+
+
+# Gravado pelo scripts/research/ring_deploy.py (giro e deslocamento do porte para o jogo), não pelo gerador.
+EXAMPLE_EXTRAS = {"game_transform.json"}
+_NUMBER = re.compile(rb"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+
+
+def _close(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-5 + 1e-6 * max(abs(a), abs(b))
+
+
+def same_content(rel: str, a: bytes, b: bytes) -> bool:
+    """Igual, a menos de ruído de float: PNG por pixels; texto número a número; binário palavra a palavra (float32)."""
+    if a == b:
+        return True
+    if rel.endswith(".png"):
+        from PIL import Image
+        with Image.open(io.BytesIO(a)) as ia, Image.open(io.BytesIO(b)) as ib:
+            return ia.mode == ib.mode and ia.size == ib.size and ia.tobytes() == ib.tobytes()
+    if rel.endswith((".json", ".ens", ".xml")):
+        if _NUMBER.sub(b"#", a) != _NUMBER.sub(b"#", b):
+            return False
+        na, nb = _NUMBER.findall(a), _NUMBER.findall(b)
+        return len(na) == len(nb) and all(_close(float(x), float(y)) for x, y in zip(na, nb))
+    if len(a) != len(b):
+        return False
+    words = {i - i % 4 for i in range(len(a)) if a[i] != b[i]}  # floats alinhados em 4 nos .bin do formato
+    for o in words:
+        if o + 4 > len(a):
+            return False
+        x, y = struct.unpack_from("<f", a, o)[0], struct.unpack_from("<f", b, o)[0]
+        # inteiros pequenos (tipo, id) lidos como float viram subnormais: esses precisam bater exatos
+        if any(v != 0.0 and abs(v) < 1.2e-38 for v in (x, y)):
+            return False
+        if not (math.isfinite(x) and math.isfinite(y) and _close(x, y)):
+            return False
+    return True
 
 
 class SynthTrackTest(unittest.TestCase):
@@ -118,18 +157,19 @@ class SynthTrackTest(unittest.TestCase):
                     self.assertEqual(fh.read(), self.read(name), name)
 
     def test_example_matches_generator(self):
-        """A cópia versionada em examples/ é a saída atual do gerador (regere com `python -m tools.synthtrack -o examples`)."""
+        """A cópia versionada em examples/ é a saída atual do gerador (regere com `python -m tools.synthtrack -o examples`).
+
+        Compara o conteúdo, não os bytes: a libm e o zlib de outra máquina mudam o último bit de alguns floats e a
+        compressão dos PNGs, sem mudar a pista."""
         example = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "tracks", synth.TRACK_ID)
         if not os.path.isdir(example):
             self.skipTest("examples/ ausente")
-        for root, _, files in os.walk(self.dest):
-            for name in files:
-                rel = os.path.relpath(os.path.join(root, name), self.dest)
-                with open(os.path.join(example, rel), "rb") as fh:
-                    self.assertEqual(fh.read(), self.read(rel), f"examples/ desatualizado: {rel}")
         generated = {os.path.relpath(os.path.join(r, f), self.dest) for r, _, fs in os.walk(self.dest) for f in fs}
         versioned = {os.path.relpath(os.path.join(r, f), example) for r, _, fs in os.walk(example) for f in fs}
-        self.assertEqual(versioned, generated)
+        self.assertEqual(versioned - EXAMPLE_EXTRAS, generated)
+        for rel in sorted(generated):
+            with open(os.path.join(example, rel), "rb") as fh:
+                self.assertTrue(same_content(rel, self.read(rel), fh.read()), f"examples/ desatualizado: {rel}")
 
     def test_replay_cameras(self):
         rep = self.doc["routes"][0]["replay"]
