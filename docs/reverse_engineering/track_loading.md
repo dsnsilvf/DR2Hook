@@ -789,7 +789,7 @@ Próximos passos:
 1. Gerar `progress_track.xml`, `ai_track.xml`, `ai_vehicle_track.xml` e
    `vehicle_track_progress_data.xml` a partir da linha central do Ring (`layout.json`), com a mesma
    transformação.
-2. Trocar ou tirar `resetlines.cqtc` e `cameralines.cqtc`, que ainda são da Montalegre.
+2. Trocar ou tirar `resetlines.cqtc` e `cameralines.cqtc`, que ainda são da Montalegre (feito: §12.1).
 3. Depois, nomes no menu e um pacote próprio no lugar do `track_alias`.
 
 ## 11. Tela de carregamento (foto aérea e traçado)
@@ -865,6 +865,8 @@ python3 -m tools.synthtrack -o examples
 python3 scripts/research/ring_tracksplit.py build/re/ring_pad3/tracksplit.pssg --host build/re/montalegre/tracksplit.pssg
 python3 scripts/research/track_jpk.py ring build/re/ring_pad3/track.jpk --bg-margin 200
 python3 scripts/research/ring_objects.py build/re/ring_objects4 --tracksplit build/re/ring_pad3/tracksplit.pssg --kinds eot
+python3 scripts/research/ring_cameras.py build/re/ring_cameras
+python3 scripts/research/ring_grids.py build/re/ring_grids
 python3 scripts/research/loading_screen.py --overlay captures/overlay --name dr2hook_ring \
     --layout examples/tracks/synthetic__dr2hook_ring/source/layout.json --track-dir examples/tracks/synthetic__dr2hook_ring
 ```
@@ -874,7 +876,9 @@ python3 scripts/research/loading_screen.py --overlay captures/overlay --name dr2
 - **O que vai para `captures/overlay/tracks/locations/portugal/dr2hook_ring/`:**
   - `tracksplit.pssg` e `route_0/track.jpk`, da pasta do terreno;
   - `objects.pssg`, `objectstextures.pssg`, `ornaments_references.xml`, `route_0/ornaments.bin` e
-    `route_0/track.vis`, da pasta dos objetos.
+    `route_0/track.vis`, da pasta dos objetos;
+  - `route_0/replay_camera_config.xml` e `route_0/cameralines.cqtc`, da pasta das câmeras (§12.1);
+  - `route_0/grids.pssg`, da pasta das vagas (§12.2).
 - **Tela de carregamento:** o `loading_screen.py` grava direto na overlay (`frontend/...`). A tela
   só troca depois de reiniciar o jogo (§11.4).
 - **Ornamentos:** o `ring_objects.py` porta os tipos `e`, `o` e `t` do editor que têm instâncias na rota.
@@ -883,3 +887,369 @@ python3 scripts/research/loading_screen.py --overlay captures/overlay --name dr2
   - A decoração completa (rodadas 1–3) foi vista no jogo pela câmera livre (F9).
   - As eólicas a ~900 m da pista continuam visíveis.
   - O load `dec3` largou sem crash, já com a foto aérea nova.
+
+Um comando só faz tudo isso (§12.3).
+
+### 12.1 Câmeras do replay (2026-10-07)
+
+O editor gera as câmeras (`tools/synthtrack/cameras.py`, `replay` no `track.json`) e o viewer nativo as
+mostra (tecla **C**; **Shift+C** olha pela próxima). O `scripts/research/ring_cameras.py` leva para o jogo.
+
+- **`replay_camera_config.xml`** (XML binário). Cada câmera clona o bloco da Montalegre com o mesmo nome e
+  troca a posição, a orientação e os caminhos.
+  - Orientação: quatérnio (x, y, z, w). A câmera olha em +z local, e o +x local é cima × frente.
+  - `Position` é o 1º ponto do `sourcePath`.
+  - Caminhos (`type="spline"`) são Bézier cúbicos de 4 pontos encadeados, e o último ponto de um trecho repete
+    no próximo. A `percentageCurve` (`bezierPercentage`/`linearPercentage`, `<Value time value/>`) vem da
+    Montalegre.
+  - Zonas (`TriggerZone`, `shapeType="box"`): `size` = (largura através da pista, 10, 0,5), `position` no
+    meio da borda esquerda e direita, 0,5 m acima do asfalto. A orientação é um giro em Y com +x local
+    atravessando a pista.
+  - Cada `ZoneEvent` é uma troca com `probability`.
+    - `switchType="replay"` aponta para uma câmera do arquivo; `"target"` aponta para uma do carro
+      (`onboard_front`, `onboard_rear`, `external_front_R`).
+    - A zona da 1ª volta usa `statementType="lapNumber"` e `lapNumber=1`.
+  - Continuam da Montalegre o `dynamic_camera_rig` (relativo ao carro) e as câmeras de pódio e serviço.
+- **`cameralines.cqtc`**: a Montalegre tem 16 prismas `CBND` de 2×2 m e 100 m de altura em volta das guaritas,
+  4 paredes (8 triângulos) cada, sem tampa, com as normais para fora. O nome sugere "limite de câmera"; o efeito
+  no jogo ainda não foi medido. O Ring leva um prisma por torre, poste de luz e banheiro a até 40 m da pista.
+  Formato, medido nesse arquivo e conferido com a folha vazia do DiRTbench:
+  - Cabeçalho: caixa (6 f32), i32 triângulos, vértices e materiais; u32 offsets dos vértices, dos nós, dos
+    triângulos e das refs; etiquetas de 4 bytes.
+  - Vértice: 8 bytes BE (x 24 bits, y 16, z 24, normalizados na caixa).
+  - Nó: 3 bytes BE. O bit 23 marca folha, e o resto é o offset nas refs; sem esse bit, é o índice dos 4 filhos
+    seguidos. `ffffff` é um nó vazio.
+  - Triângulo: 7 bytes. v0 em 24 bits, depois um byte com os nibbles altos dos deltas de v1 e v2, os bytes
+    baixos dos deltas e o material.
+  - Refs de uma folha: o 1º triângulo em 24 bits BE, depois os outros como u16 BE relativos a ele. O
+    último leva o bit 15. Não tem byte extra antes: a primeira versão do gerador punha um 0 ali, as refs
+    saíam deslocadas e o jogo crashava ao mexer a câmera livre (`exe+0xde22e0`, leitura de vértice com
+    índice lixo numa consulta da árvore). O `decode_cqtc` do `ring_cameras.py` confere um arquivo
+    (Montalegre: 14 folhas cobrem os 128 triângulos).
+  - O gerador grava uma folha só (raiz `800000`).
+- **Resultado:** 29 câmeras do editor (36 com as da Montalegre), 15 zonas e 15 prismas.
+  - A mira bate com o `aim` do editor (erro < 0,1°), e o XML faz ida e volta byte a byte.
+  - A `Grid_Start_Cam_00` caiu a 0,3 m da original. A largada do Ring foi encaixada sobre a da Montalegre e
+    a câmera foi calibrada com ela.
+  - **Falta ver no jogo:** um replay no Ring.
+
+### 12.2 Vagas de largada (2026-10-07)
+
+O carro nasce nas vagas do `route_N/grids.pssg`, carregado logo depois das texturas (ordem no §4). O editor
+gera as vagas (`tools/synthtrack/grids.py`, `grids` no `track.json`). O viewer nativo as mostra: tecla **L**,
+**Shift+L** para olhar do banco do piloto, e `--grid-check` para conferir a altura sobre o chão. O
+`scripts/research/ring_grids.py` leva para o jogo, usando o arquivo da Montalegre como molde (árvore, nomes e
+caixas ficam; só os `TRANSFORM` mudam).
+
+- **Formato** (PSSG big-endian):
+  - `ROOTNODE` "Scene Root" (identidade), depois um `NODE` por grade e um `NODE` por vaga ou nó de apoio.
+  - Cada nó tem `TRANSFORM` (16 f32, linha a linha, translação na linha 3) e `BOUNDINGBOX` (mín xyz, máx xyz,
+    no espaço local). Mundo = local @ mundo do pai.
+  - Linhas da matriz: 0 = frente × cima (esquerda do carro), 1 = cima, 2 = trás. O carro aponta para −linha 2.
+- **Grades da Montalegre** (ao longo / lado a partir da largada, + = esquerda):
+
+  | Grade | Vagas | Onde | Caixa da vaga |
+  | --- | --- | --- | --- |
+  | `grid_time_trial_0` | `slot_0` | −5 m, no meio, 0,40 m acima | ±1,4 × ±2,75 |
+  | `grid_near_reset_01` | `slot_00_nr`…`slot_09_nr` | −6 a −78 m, a cada 8 m | ±1,4 × ±2,75 |
+  | `grid_start_standing_01` | `slot_00`…`slot_09` | fileiras de 5 em −55,5 e −63,5 m, lados ±5,8 m | ±1,25 × ±2,25 |
+  | `grid_start_staggered_01` | `slot_000`…`slot_011` | −57 a −75 m | ±1,25 × ±2,25 |
+  | `grid_compound_5#5` | `slot_00_compound`…`slot_03_compound` | ~(−42, −95), paradas em ângulos variados | ±0,5 × ±1,0 |
+
+  Os nós de apoio `car_grid_spline_time_trial_0` (caixa com z de 0 a 8,24) e `car_near_reset_spline_01`
+  (±30 m) não têm carro. Os grupos têm caixa de ±0,5.
+- **Por que trocar:** o Ring tem 10 m de asfalto (a Montalegre tem 12 m) e desce depois da largada. Com as
+  vagas da Montalegre, as das fileiras de fora ficavam na zebra ou na grama, e as do reset e da largada
+  parada ficavam ~2 m acima do asfalto, porque o Ring faz curva e desce antes da linha. Uma vaga
+  dentro do chão pode deixar a posição do carro em NaN, e isso trava a carga (sort do IBL).
+- **Vagas do Ring:**
+  - mesmos nomes, centro 0,5 m acima do asfalto (0,48 m depois de assentar);
+  - largada parada em fileiras de 3 (±3,3 m), escalonada em zigue-zague (±2,3 m);
+  - paddock entre as tendas, de frente para a pista.
+- **Resultado:** 44 nós trocados. Ao reler, a posição bate com o editor em menos de 0,1 mm.
+  - Instalado na overlay em 2026-10-07 (backup do original em `build/re/montalegre_route0_orig/grids.pssg`).
+  - **Falta ver no jogo:** onde o carro nasce no treino e nas outras largadas. Não se sabe qual grade cada
+    modo usa; o treino deve usar `grid_time_trial_0/slot_0`.
+
+### 12.3 Um comando e o F5 do editor (2026-10-07)
+
+O resumo organizado de tudo o que se sabe da carga e do render (linha do tempo, sistemas, câmeras, passes, chaves da
+LoadView e o que falta) está em [track_render.md](track_render.md); aqui ficam as rodadas em detalhe.
+
+`scripts/research/ring_deploy.py` roda as etapas do §12 e abre o jogo direto na pista:
+
+```bash
+python3 scripts/research/ring_deploy.py [--quick] [--mode bot|freecam] [--edits <edits.json>] [--no-game] [--force]
+```
+
+- **Etapas:** terreno, colisão, objetos, câmeras, vagas, tela de carregamento, cópia para a overlay. Depois, sem
+  `--no-game`: fecha o jogo aberto, abre pela Steam e segue as fases do `dr2hook.log` até a largada.
+- **Cache:** as saídas ficam em `build/re/ring_deploy/` e a assinatura de cada etapa em `cache.json`. A assinatura
+  junta tamanho e data das entradas, o conteúdo do `--edits`, os scripts, os argumentos e as assinaturas das
+  etapas de que ela depende. Uma etapa interrompida perde a assinatura antes de rodar, então não parece válida.
+  `--force` refaz tudo.
+- **Tempos (2026-10-07):** a primeira vez sem tela de carregamento leva ~10 s (o `track_jpk.py` é ~7 s
+  disso). Sem mudanças, as etapas pulam e só a cópia roda. A cópia só regrava os arquivos que mudaram.
+- **`--quick`:** pula a tela de carregamento (a foto aérea renderizada pelo viewer3d e o traçado). Fica a da
+  última vez. E grava `dr2hook_quickload.ini` na pasta do jogo: o core vê o arquivo no boot, apaga e cobre a
+  tela de preto (sem menu nem tela de carga) e muta o som até a largada ("LoadCover" e "SessionAudio" no log).
+  O mute é o da sessão de áudio padrão do processo (`ISimpleAudioVolume`); o som do Wwise sai por XAudio2. Um arquivo com mais de 10 min
+  é ignorado; a tela também volta sozinha depois de 3 min.
+- **Terminal na tela preta:** sobre o preto, o overlay mostra o `dr2hook.log` ao vivo, como um terminal:
+  - uma linha de estado com a fase (iniciando, dados do jogo, pista, largada), o tempo, os arquivos abertos (quantos
+    da overlay) e o IO;
+  - as últimas linhas do log, coloridas: abertura da overlay em verde, marcos em azul, aviso em amarelo, erro em
+    vermelho;
+  - os caminhos ficam relativos à pasta do jogo, e linhas iguais seguidas viram uma com `(xN)`.
+  
+  As linhas vêm de um buffer em memória na proxy (as últimas 4096, `Logger::ReadSince`, export
+  `Dr2Host_LogRead`). Por isso o terminal mostra o boot desde o começo e não relê o arquivo (a LoadTrace engancha a
+  leitura). Ao liberar, o log diz quantos frames o terminal desenhou e o maior intervalo entre eles.
+- **O jogo desenha durante a carga (2026-10-07):** 361 frames em ~7 s de tela preta (~50 fps). Só há uma parada
+  grande, de ~1,8 s, ao ler o `persistentDB.pssg` (a LoadTrace loga "frame travado"). Na pista, o Present segue,
+  então dá para pôr coisas na tela durante a carga.
+  - O `patchup_ot.pssg` da overlay é aberto ~1.300 vezes seguidas (um open por leitura, ~1,3 s).
+  - O `objects.pssg` é aberto ~90 vezes, o `treetextures.pssg` 117.
+- **O que a GPU desenha na carga (LoadView, 2026-10-07):** o core engancha os draws do contexto imediato do D3D11
+  (`src/core/load_view.cpp`) e loga por segundo em que alvos o jogo desenha ("LoadView:").
+  - Na carga: ~44 draws por quadro. São ~11 na tela (a interface) e o resto em alvos pequenos de pós-processo
+    (480x270 e 120x68, r11g11b10f). Não há sombra, profundidade nem cena em tamanho de tela: **o jogo não desenha o
+    mundo enquanto carrega**.
+  - A cena começa só ~1 s antes da largada: profundidade 1024x1024 r32 (sombras), 1920x1080 r11g11b10f e alvos
+    de 128x128; ~1.000 draws por quadro. Na corrida são ~2.000 draws por quadro, sem contextos adiados.
+  - O terminal da tela preta põe de fundo o alvo da cena quando ele tem 50+ draws por 3 quadros seguidos
+    ("LoadView: a cena 3D comecou"). Na prática isso cobre só esse último segundo.
+  - Para ver o mapa durante a carga seria preciso adiantar o render da cena (RE do laço de quadros e da máquina de
+    estados da carga) ou desenhar uma vista própria a partir dos dados da pista.
+- **Adiantar o render da cena (RE, 2026-10-07):** o resultado é que o motor só tem mundo para desenhar no fim da
+  carga, então o ganho máximo é de 0,8 a 4 s. Os experimentos estão no `load_view.cpp` e são ligados por
+  `dr2hook_loadview.ini` (`forcar_mundo_ms=0`, `forcar_vis=1`, `olhar=x,y,z,alvo_x,alvo_y,alvo_z`). Sem o arquivo
+  os hooks só contam.
+  - **Renderer:**
+    - `+0x22a8` é o modo atual (0 corrida, 2 carga) e `+0x22ac` o modo pedido.
+    - O handler `0x479860` pede 0 quando o terreno começa a carregar. O `0x480220` grava o pedido vindo de uma
+      mensagem.
+    - A troca de modo real é o `SetMode 0x4a1580`, que grava os dois campos e roda na largada.
+    - Cena em `+0x2050`. `scene+0x1e98` != 0 desvia a vis do mundo.
+    - Quadro da corrida em `0x4b1990`. Forçado como modo 0, precisa de `+0x88` nulo (senão crasha em `abd040`).
+  - **Preparo do quadro:** `0x4aabd0(renderer, rdx)`, chamado de `0x4b26f0` (`+0x4b36a0`).
+    - É pulado quando `0x1d2b30([renderer+0x2298])` dá verdadeiro.
+    - Com modo != pedido, só retorna (`+0x4aacdb` → `+0x4ab034`).
+    - Em modo 0 faz a atualização completa e chama `0x3c7aa0(cena)`, que limpa e enche as listas visíveis. Em
+      modo 1/2 chama só o `0x3c7aa0`.
+    - Forçar modo 0 nele (modo e pedido em 0 durante a chamada, `1e98` zerado) liga os jobs de vis na carga e não
+      crashou.
+  - **Terreno:**
+    - Job das células `0xa7f700`:
+      - só trabalha com `[terreno+0xd0] == 6`;
+      - insere nos coletores por `bcb2d0`;
+      - chamadores: `+0x3bad93` (a `ground_cover_camera`, vista de cima 128x128, terreno = `[cena+0x1008]`),
+        `+0x3bacb1` (as 6 faces do fog renderer) e o cull da vista da tela `0x39ccb0` (volta em `+0x39d107`).
+        Corrigido em 2026-10-07 à noite: antes o `+0x3bad93` estava aqui como a vista principal.
+    - Estados: 7 é sem dados. O worker `0xa96150` passa para 4 quando os dados chegam. Depois
+      `0x6c2de0(self 0x14159d770, dt)` → `0xacc960` passa 4→5→6, um passo por quadro.
+  - **Linha do tempo medida (bot + rápida, cache quente):**
+
+    | t (s) | evento |
+    |---:|---|
+    | 0 | processo do jogo, tela preta |
+    | 3,4 | abre o `.nefs` da pista |
+    | 7,8 | terreno 7→4→5→6 em ~0,1 s |
+    | 8,7 | largada |
+
+    Em outra rodada o intervalo entre terreno pronto e largada foi de 3,8 s. Antes do terreno, as listas
+    da cena ficam vazias (0 itens).
+  - **Com `forcar_vis=1`:** nesse intervalo final já saem 140 a 300 itens e células por quadro. Mas os draws vão
+    só para os alvos 128x128 (faces do env-map).
+    - A vista principal não desenha nada, porque a câmera da cena (`[cena+0x17c0]`) fica na origem `(0, 1, 0)`
+      até a largada.
+    - O `olhar=` muda a câmera da especial (`[[exe+0x168caf0]+0x20]+0x1cf8`, linhas `+0x210..+0x240`), mas ela
+      não chega à câmera da cena antes da largada. Falta achar quem copia uma para a outra.
+  - **Conclusão:** um fundo com o mundo do jogo só cobre o último 1 a 4 s da carga. Para o resto, o fundo teria
+    que ser próprio, desenhado a partir dos dados da pista; a foto aérea do §11 já existe.
+  - **Por que a vista principal fica vazia (2026-10-07, tarde):** não é a câmera, é o **modo da cena**.
+    - `[cena+0x1e98]` é uma cópia do modo do renderer. O `SetMode 0x4a1580(raceObj, modo)` chama `0x3c4a80`,
+      que grava `+0x1e98` e zera `+0x1ed8`. O quadro `0x4b1990` aplica a troca em `+0x4b261a` quando
+      `22ac != 22a8`; o `0x476cb0` pede o modo 2.
+    - Fica 2 até a largada. O cull/push dos objetos `0x39ccb0` sai cedo com `cmp [rcx+0x1e98],0` (ou o byte
+      global `[exe+0x169af48]`, que estava 0). Ele chama `0x953220` com a caixa 17 e depois `0xb51560` por
+      `[cena+0x1040]`. O passe do mundo `0x3c9170` também testa o modo.
+    - Outros leitores do `+0x1e98`: `39dd70`, `3ba760`, `3bada0`, `3bed80`, `3c1520`, `3c7aa0`, `3c8580`,
+      `3caa60`, `9530f0`, `953f80`, `9ac9b0`, `599160`, `5a0e70`, `5bbfd0`, `5bd3d0`.
+    - A cena tem endereço quase fixo: `0x15480e80` (às vezes `0x15490e80`).
+  - **Caixas de itens da cena:** em `cena+0x1190 + k*24` fica `{u32 n, ptr @+8, u32 cap @+0x10, byte ligada @+0x14}`.
+    - Caixa 0: células do terreno (194). Caixa 2: objetos (2318). Caixa 17 (`+0x1328`): 1. Caixa 18: 51.
+    - Enchidas a cada quadro pelo `0xb293a0` (grava em `+0xb29684`). O culler é `cena+0x14e0`, com máscara em
+      `+0x114`, modo em `+0xf4` e um byte em `+0x160`. Cadeia de chamada: job `b2fa50` → `b2a610` → `b2a8b0`
+      → `b293a0`.
+    - Depois do terreno em 6, as caixas já estão cheias, mas o modo segue 2.
+  - **Experimento `manter_cena=1`** (no `dr2hook_loadview.ini`): o modo da cena fica 0 entre os quadros
+    forçados. **O mundo desenha na carga**, com 587 a 1.179 draws por quadro no alvo 1920x1080. Mas crasha,
+    nesta ordem:
+    1. **Visual do carro.** `0x6ee9e0(carVis, dt)` → `6eef50` → `6f0940` → `6eeb00` lê `[carro+0xa28]` lixo e
+       crasha em `+0x6eed75`. Contorno: hook que pula a chamada na carga forçada ("carro pulado N").
+    2. **Anel de instâncias.** `0xab2190(conj, quadro, r8)` → `0xab20e0(conj, idx)` sobe o buffer do quadro.
+       - O conjunto tem: byte ligado `@0`, entradas `@+0x20` (24 bytes: obj `@0`, ptr `@8`, n `@+0x14`),
+         tamanho do elemento `@+0x18` e contagem `@+0x28`.
+       - Usa o device `[exe+0x1f45258]`: vt+0x100 Map (→ `8f4950` → `8f4960`, que chama obj vt+0x80), vt+0x118
+         Unmap e obj vt+0x78.
+       - Chamadores do `ab2190`: `39db80`, `39dd00`, `39dd70`, `39e100`, `3c1090`, `46dd90`, `9f8e60`,
+         `a7d640`, `c43580`.
+       - O conjunto ruim é `[[M+0x1d30]+0x20]`, com M = `[cena+0x1018]` (chamada em `+0xab21da`). O
+         `[M+0x1a0]` está bom.
+       - Com obj inválido, salta para lixo via `+0x8f497c`. Contorno: guarda no `0xab20e0` que pula a entrada
+         cujo obj não tem vtable no exe ("buffers liberados pulados N"). Com ela, a carga chega à largada.
+    3. **Reset do quadro.** `0xab16f0(M)` (de `497fe0` ← `4b26f0`) percorre `[M+0x1a0]` e
+       `[[M+0x1d30]+0x20]` chamando `[vt+0x60]`. Crasha logo depois da largada. **Aberto.**
+  - **O conjunto de buffers** (amostrado por `/proc/pid/mem`):
+    - M = `0x15436dd0`, e `[M+0x1d30]` já existe cedo (`0x6c894f10`).
+    - O ponteiro do conjunto (`0x6c894f30`) fica 0 até o primeiro quadro em modo 0. Aí nasce com n=32, ligado.
+    - As entradas apontam para objetos espaçados de 0x18 (`19d60cda0`, `19d60ce30`, `19d60ce48`…). A "vtable"
+      de cada um é o nó anterior, ou seja, são **nós livres de um pool**: os buffers nunca foram construídos
+      para esse conjunto.
+  - **Causa achada (caça dos buffers):** não era um pool de buffers, era um **estouro do buffer de itens de
+    desenho** do M.
+    - Quem cria: o objeto de 0x3d0 em `[M+0x1d30]` nasce no init do M `0xa6c9c0` (construtor `0xa6c390`, vtable
+      `exe+0x13a78f0`). O preparo de GPU `0xa95c40(M)`, chamado pelo método virtual `0xb920c0` (de
+      `+0xba8a27`), faz duas coisas:
+      - cria o buffer de itens `[M+0x1b20]` (0x58200 bytes = 0x3ac0 itens de 24, capacidade em `+0x1b18`);
+      - cria o conjunto por `0xa8d9f0` → `0xa9eff0`. O conjunto tem 32 entradas e só a 31 com buffer
+        ("DataBuffer"); as outras ficam zeradas.
+    - O conjunto é destruído por `0xa92a60`, e o objeto é resetado por `0xaca5c0` (pelo descarregamento do M,
+      `0xaca6c0`). O destrutor é o `0xab7770`.
+    - **Quem escreve:** o `0xa78150` empurra itens de desenho. Ele pega blocos de 64 itens com
+      `lock xadd [M+0x1b28]` **sem checar a capacidade** e liga cada item numa lista: `[item] = cabeça`, em
+      `+0xa78215`. Achado com o watchpoint de hardware do GhostLab no array (pilha `a753ec` ← `a756f9` ←
+      `a7525d` ← `39d174` ← job `b2fa90`).
+    - **Quem zera o contador:** o fim do quadro `0x497fe0(renderer)`, chamado por `4b26f0` (`+0x4b3462`). Ele
+      chama `0xab16f0([renderer+0x70])` (zera `+0x1b28`) e `0xab1870([renderer+0x78])` (zera `+0x14d8`), **só com
+      `[renderer+0x22a8] == 0`**.
+    - Na carga forçada o modo do renderer é 2, então o contador nunca zerava. Ele passava do fim e escrevia itens
+      sobre o array de entradas, alocado logo depois no heap. Os "nós livres de 0x18" eram itens de desenho
+      encadeados.
+  - **Correção (no `load_view.cpp`):** hook no `0x497fe0`. Nos quadros forçados (`forcar_vis=1`) ele roda com
+    `22a8 = 0` ("resets forcados N" no log). Com isso, em 2026-10-07:
+    - `manter_cena=1` chegou à largada e seguiu na corrida sem crash;
+    - a guarda do anel não pulou nada;
+    - o visual do carro ainda precisa ser pulado na carga.
+    
+    Os draws do mundo na carga apareceram nesta rodada só no último segundo (436 por quadro): o terreno ficou
+    pronto 0,85 s antes da largada.
+  - **Rastreio (`rastrear_buffers=1`):** loga o preparo de GPU, a montagem e a destruição do conjunto e o
+    `free` do alocador (`[obj+8]`, vt[5] `0x860020`). Também arma o watchpoint de hardware no array e no
+    ponteiro dele, e vigia o array a cada quadro.
+    - O VEH do GhostLab tinha um bug: com o Dr6 zerado (Wine) ele escolhia o slot 3 e, com menos de 4
+      endereços, não logava. Corrigido: com Dr6 zerado, usa o slot 0.
+  - **Abrir o jogo logo depois de um `kill -9`** dá travas e crashes no boot (`8d1d20`, `d6f9b8`, espera em
+    `c63cb0`). Depois de um crash: matar o `CrashSender1405` e o `dirtrally2.exe` (`pgrep -x`), esperar o
+    wineserver sair e só então abrir.
+  - **Crash com `rip` lixo:** o CrashLogger do GhostLab também loga os quatro primeiros qwords de `[rsp]`
+    ("GhostLab[crash]: [rsp]"). Num salto por ponteiro ruim, `[rsp]` é o retorno de quem chamou.
+  - **O fundo com o mundo (2026-10-07, noite, runs cam53–60):** com `manter_cena`, `forcar_vis`, `adiantar_tudo`
+    e `todas_celulas` (a vista da tela recebe as 194 células) o mundo desenha na carga, mas o fundo nunca era
+    escolhido. Duas causas:
+    - **MSAA 4x.** O jogo do dono roda com `multisampling="4xmsaa"` (`hardware_settings_config.xml`). Os alvos
+      1920x1080 r11g11b10f e rgba8 têm 4 amostras, e o filtro exigia 1. Agora o `ViewFor` resolve
+      (`ResolveSubresource`) o alvo numa textura nossa a cada quadro.
+    - **HDR.** A cena é luz linear (terreno ~3, céu e névoa ~90–190) e saía branca. A LoadView mede a exposição
+      (média log dos pixels acesos, numa cópia lida a cada ~0,25 s, linha "LoadView[hdr]") e o overlay aplica
+      exposição, curva ACES e gama 2,2 num pixel shader próprio.
+
+    Linha do tempo a partir da tela preta:
+
+    | Evento | Cache quente (cam56) | A frio (cam54) |
+    |---|---:|---:|
+    | abre o `.nefs` da pista | 3,5 s | 5,3 s |
+    | vis e objetos lidos | 4,6 s | 7,0 s |
+    | terreno em 6, desenhado no fundo | 5,3 s | 8,1 s |
+    | vis do jogo pronta (céu, névoa) | 7,9 s | 13,1 s |
+    | largada | 8,8 s | ~16 s |
+
+    **O que aparece não é a pista.** No fundo sai só uma elipse pequena, no alto à direita. Depois vem uma névoa
+    uniforme. Duas rodadas de enquadramento:
+    - **cam58:** `posicao=` (a referência `[renderer+0x2060]+0x1140`) no olho da câmera. A imagem ficou idêntica.
+    - **cam59:** câmera quase a pino sobre a largada. A elipse some e a névoa muda de forma, então a câmera conta,
+      mas o terreno da largada não aparece de jeito nenhum.
+
+    Os logs já mostravam a nossa pose na câmera de render (`[cena+0x38]`) e no olho da lista de células
+    (`[cena+0x15c0]`). Portanto não é o recorte: nessa fase o motor não desenha o terreno perto da largada.
+    Parado aí: seguir exigiria RE do desenho das células do terreno, sem garantia de ganho.
+  - **Fundo da carga rápida = foto aérea (2026-10-07, noite):** o `loading_screen.py` também grava
+    `captures/overlay/dr2hook/loadcover_<pista>_<rota>.ppm`, a foto do §11 com o traçado em branco, em
+    1600x900. O `ring_deploy.py --quick` põe `fundo=Z:\...` no `dr2hook_quickload.ini`. O core passa o caminho ao
+    overlay (`SetLoadCoverImage`), que a carrega no primeiro quadro ("Overlay: foto da carga") e a desenha
+    escurecida atrás do terminal, cobrindo a tela. A foto tem prioridade sobre a cena da LoadView.
+    - Na cam60 ela apareceu 1,6 s depois da tela preta e ficou até a largada, sem crash.
+    - Os experimentos do mundo ficaram em `dr2hook_loadview.ini.off` na pasta do jogo (desligados).
+  - **Câmera da corrida na carga (cam61–63):** a sonda `sonda_cb=<pasta>` do `dr2hook_loadview.ini`
+    copia os constant buffers do vertex shader do 11º e do 151º draw do alvo grande da cena a cada 0,5 s,
+    junto com 0x200 bytes de `[cena+0x17c0]` e de `[cena+0x38]`, em `cb_NNNN.bin`. O slot 3 (272 bytes) é o da vista:
+    - +0x00: projeção;
+    - +0x80: olho;
+    - +0x90: vista×projeção relativa ao olho (translação zerada);
+    - +0xd0: eixos do mundo da câmera.
+    - Na carga (cam61) a GPU já recebia a pose da `olhar=`: a câmera nunca foi o problema.
+    - Na corrida (cam62, só a sonda) o jogo põe a câmera em olho (17,46, 1432,84, -557,06), eixo z
+      (-0,666, 0,051, -0,744), fov 55. São as mesmas coordenadas da `olhar=`.
+    - Na cam63, com essa pose exata (`olhar=17.464,1432.836,-557.058,24.124,1432.326,-549.618` + `fov=55`, chave
+      nova), a GPU ficou com a pose da largada desde +1,5 s da carga. O céu do fundo saiu igual ao da corrida,
+      mas o chão, a pista e os objetos não foram desenhados: só céu e névoa. Isso apareceu ~1,6 s antes da largada.
+    - Conclusão: o motor não desenha o conteúdo perto da largada nessa fase. A câmera da corrida não resolve isso.
+      Fica a foto aérea.
+    - A cam61 (pose antiga + experimentos) crashou em exe+0xbb96df na thread do jogo, logo depois do
+      "preparar todos" (pilha +6b2d7e/+480d68/+497f35). A sonda não está nessa pilha.
+- **`--edits`:** o `ring_objects.py --edits` aplica um `dr2-track-edits` v1 como o viewer faz:
+  - a chave é (tipo, idnum);
+  - movido troca a matriz;
+  - apagado sai;
+  - cópia (`added` + `src`) entra com o tipo do original;
+  - só a `route_0` conta;
+  - edições que não acham a instância saem no log ("N ficaram de fora").
+- **Jogo:**
+  - fecha o jogo e a janela de erro (`CrashSender1405`; com ela aberta a Steam acha que o jogo ainda roda e não
+    abre outro) e espera o wineserver do prefixo sair. Um boot logo depois de fechar o jogo crashou uma vez
+    (`exe+0x8d1d20`, chamada virtual num objeto nulo logo depois do `persistentDB.pssg`); não voltou em 3
+    aberturas seguidas;
+  - apaga um `dr2hook_cmd.txt` velho, porque ele rodaria no boot;
+  - grava no `dr2hook_autostage.ini`: `enabled = 1`, `once = 1`, `portugal` / `dr2hook_ring` / `route_0`;
+  - abre com `steam steam://rungameid/690790`;
+  - lê o `dr2hook.log` (ignora um log de antes da abertura) e cada fase vira uma etapa da barra:
+
+    | Etapa | Termina em | Run de 2026-10-07 |
+    | --- | --- | --- |
+    | Abrindo o jogo (Steam) | o processo existe | |
+    | Iniciando o jogo | "AutoStage: Fast-path" | 08:09:52 |
+    | Carregando os dados do jogo | "RaceEvent: carregando" | +3,8 s |
+    | Carregando a pista | os arquivos abertos chegam aos da última vez, ou 1,5 s sem abrir nenhum | +3,4 s (1564 arquivos) |
+    | Preparando a largada | "RaceEvent: largada" | +1,6 s |
+
+    - Em "Carregando a pista", o andamento é a contagem de "LoadTrace: open" desde o "carregando" contra a
+      da última vez (`cache.json`, 1600 sem histórico). Nas outras, é o tempo da última vez.
+    - "LoadTrace: IO" não serve de marca: sai a cada segundo com leitura, inclusive no boot. Depois do último
+      arquivo vêm ~5 s sem abrir nada até a largada.
+    - Uma marca só vale depois da anterior; a da largada fecha todas. Cada fase tem limite de 5 min.
+    - O log é lido em bytes: ele tem `\r\n`, e a posição em modo texto se perdia (linhas repetidas).
+    - As linhas do jogo que interessam (AutoStage, LoadProbe, RaceEvent, LoadCover, `[crash]`, `[ERROR]`)
+      vão para o log do viewer.
+    - Para com erro numa linha `[crash]`, mesmo com a janela do CrashRpt segurando o processo vivo, e se o
+      jogo fechar.
+- **Modos:**
+  - `--mode freecam` manda `key f9` pelo canal de comandos na largada;
+  - `--mode bot` deixa o benchmark dirigir;
+  - `drive` para com erro, porque o AutoStage ainda não passa o controle ao jogador.
+- **Antes de começar** confere os arquivos de entrada, a overlay e os dois `.ini` (`dr2hook_loadprobe.ini` com
+  `enabled`, `overlay_dir` e `track_alias`).
+- **Protocolo do stdout:** `@step k n texto`, `@progress 0..1` (pelo log do jogo ou pela duração da última vez),
+  `@done texto` e `@fail texto`. Qualquer outra linha é log.
+- **No viewer3d (F5 ou o botão verde):**
+  - grava as edições atuais em `build/re/ring_deploy/viewer.edits.json`;
+  - roda o script num grupo de processos próprio (`app/launch.cpp`);
+  - lê o protocolo sem travar a janela (`core/progress.cpp`);
+  - Cancelar manda SIGTERM ao grupo. O jogo, aberto pela Steam numa sessão à parte, segue.
+- **Testes:** `python3 -m unittest scripts/research/test_ring_deploy.py` (edições, `.ini`, assinatura) e
+  `test_progress` no `core_tests`.
+- **Verificado:** a saída do porte bate byte a byte com a overlay de antes (0 de 10 arquivos mudaram). O
+  cancelamento no meio não deixa processo nem arquivo pela metade.
+  - O primeiro F5 com câmera livre crashou pelo `cameralines.cqtc` errado (§12.1); corrigido.
+  - Pelo script, 2026-10-07: bot normal, bot com `--quick` e câmera livre com `--quick` chegaram à largada, com
+    a tela preta do boot até a largada. A câmera livre ficou 15 s ligada sem crash (parada).

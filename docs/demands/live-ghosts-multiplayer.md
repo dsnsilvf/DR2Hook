@@ -35,7 +35,7 @@ Each point below links to the note it comes from and is graded by what that note
 
 ## Why the network layer needs a decision
 
-`NetworkGuard` refuses non-local traffic on purpose, so no tool built on DR2Hook can reach RaceNet. A multiplayer feature would need a **narrow, explicit exception** for a ghost server, and it must never reach RaceNet or official leaderboards. That changes the [Fair play](../../README.md#fair-play) rule, so it needs a clear decision from the maintainer before any code is written. The early steps below use only localhost.
+`NetworkGuard` refuses non-local traffic on purpose, so no tool built on DR2Hook can reach RaceNet. A multiplayer feature would need a **narrow, explicit exception** for a ghost server, and it must never reach RaceNet or official leaderboards. That changes the [online play](../../README.md#online-play) rule, so it needs a clear decision from the maintainer before any code is written. The early steps below use only localhost.
 
 ## Staged plan (each step can end the idea)
 

@@ -32,9 +32,11 @@ Nome de string no executável não é variável localizada.
 - [Renderização da UI](ui_render.md) — como o frontend e o HUD desenham, e por onde um mod pode desenhar de forma nativa
 - [Câmera](camera.md) — dono, tick, olho em `+0x240`, base cima/direita/frente e a câmera livre do core (F9)
 - [Dano terminal](terminal_damage.md) — insta crash (F11), pausa e Reiniciar durante a destruição, o gate `host+0x2350` e o que fica preso depois
+- [Abertura do jogo](boot_intro.md) — logo, avisos legais e título; o `IntroSkip` pula o vídeo da Codemasters (13,6 s → 6,3 s até o título)
 - [Carregamento de especiais](stage_loading.md) — resolução de pistas, `BenchmarkManager`, hook do `AutoStage`, `LoadTrace`
 - [Travamentos da carga](loading_hangs.md) — usar uma carga travada como sonda do carregamento
 - [Carregamento de pista](track_loading.md) — `raceload.jpk`/`track_loader.xml`, tokens, processadores, PSSG→GPU e a LoadProbe
+- [Render da pista](track_render.md) — mapa vivo da carga ao quadro: linha do tempo, sistemas, modos, câmeras (até o constant buffer), células, passes da GPU, experimentos e o que falta
 - [Formatos de pista](track_formats.md) — o que já foi decifrado em `locations/*.nefs` (terreno, objetos, árvores, ornamentos, traçado, JPAK) e o que falta; usado pelo Track Explorer ([../UIVIEW.md](../tools/uiview.md))
 - [Fantasmas](ghosts.md) — saves `GHST`, slots, cópias, `GhostCarValues`, a curva de 5–50 m, o descarte com fator 1,0 (fantasma sólido), colisão, pausa dos fantasmas e o máximo de 15 fantasmas + jogador
 

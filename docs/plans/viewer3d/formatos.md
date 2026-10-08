@@ -95,6 +95,8 @@ Cada item de `routes`:
 | `progress` | `{routes: [...], gates: [{d, l:[x,y,z], r:[x,y,z]}...]}`: portões de progresso (distância `d` ao longo da pista, ponto esquerdo e direito). 143 portões na Montalegre |
 | `ai` | lista de `{name, pts: [[x,y,z]...]}`: linhas da IA. `name == "default"` é a principal. 164 pontos na Montalegre |
 | `ens_ids` | o `id` de texto de cada instância do `objects.ens`, indexado por `idnum`; só serve para rotular a seleção |
+| `replay` | opcional, só nas pistas do `synthtrack`: câmeras do replay (`cameras`: `name`, `kind` trackside/static/dolly, `role`, `s`, `pos`, `aim`, e nas dolly `path`/`target` em Bézier de 4 pontos e `duration`), zonas de troca (`zones`: `name`, `s`, `l`, `r`, `lap`, `switch: [{camera, p}]`) e prismas (`bounds`: `name`, `corners` xz, `y0`, `y1`). Detalhes em [`synthtrack.md`](../../tools/synthtrack.md); o viewer desenha com a tecla C |
+| `grids` | opcional, só nas pistas do `synthtrack`: vagas de largada, uma entrada por grade (`name`, `role`, `pos`, `fwd`, `s`, `slots`, `markers`). Cada vaga tem `name`, `pos` (centro do carro), `fwd` (unitário), `s`, `lat` e `size` [largura, comprimento]; as `markers` têm só `name`, `pos` e `fwd`. Detalhes em [`synthtrack.md`](../../tools/synthtrack.md); o viewer desenha com a tecla L |
 
 As rotas repetem a contagem de distância `d`: quando `d` diminui, é outra volta/ramo; o viewer web **quebra a linha** aí (`tvLinesFrom`). Cores usadas no web: portão esquerdo `(0.95, 0.4, 0.4)`, direito `(0.4, 0.6, 1.0)`, degraus `(0.5, 0.5, 0.55)`, IA principal `(0.3, 0.95, 0.4)`, IA outras `(0.95, 0.8, 0.25)`.
 

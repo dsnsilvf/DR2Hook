@@ -1,352 +1,50 @@
 # DR2Hook
 
-**DR2Hook** is a project to fully reverse-engineer **DiRT Rally 2.0** (EGO Engine, x64, DirectX 11).
+Reverse-engineering project for DiRT Rally 2.0 (EGO Engine, x64, DirectX 11): notes on the game's internals, a mod loader, and tools for its files.
 
-The project is built in four layers, each one resting on the one before it:
+Not affiliated with Codemasters or Electronic Arts.
 
-1. **Reverse engineering** — the goal. Map the game's memory, physics, tick order, UI, ghost cars, save files, and asset formats, with every finding graded by evidence.
-2. **Mod loader** — the consequence. What the RE work makes possible: a DLL that loads into the game, runs Lua mods, and adds an overlay and native menus.
-3. **Example mod** — the demonstration. `mods/practice_mode/` shows a mod built on the loader: checkpoints, race-start modes, and ghost-car tools.
-4. **Asset tools** — the same reverse engineering applied to the game's files, outside the game: a browser-based **Car Model Explorer** and **Track Explorer / editor** (`tools/uiview/`), plus a **map editor** (`tools/synthtrack/` + the native `tools/viewer3d/`) whose tracks **load in the game as a new, custom track**.
+## Contents
 
-### What is new since v0.1.0
-
-- **Map editor and custom track loading: ready.** The map editor builds a track from scratch, and the game loads it as a **new track with its own name**: the **DR2 Hook Ring**. No original track is replaced and no `.nefs` is modified. The Ring brings its own terrain, collision, objects, trees, decoration, and loading screen with an aerial photo. See [section 5](#5-map-editor-and-custom-tracks).
-- **Ghost cars.** Save format (`GHST`) and cipher decoded, a live gap to the ghost, extra ghost copies, a solid (opaque) ghost, ghost collision research, and **up to 15 ghost cars plus the player** on one stage (the 16-car render limit was measured). See [ghosts.md](docs/reverse_engineering/ghosts.md).
-- **Stage lifecycle events in Lua.** `onStageLoad`, `onCountdown`, and `onStageStart` now fire from gameplay, plus `Race.setStartMode` (normal, no countdown, automatic, on throttle).
-- **Main-menu tab and richer native menu.** A **DR2 Hook** tab in the main menu, a right-hand panel per option, rich text, and per-mod saved settings (`settings.ini`).
-- **Remote command channel.** `dr2hook_cmd.txt` lets a tool or an AI drive the game without anyone at the keyboard ([docs](docs/guides/remote_commands.md)).
-- **Free camera (F9) and terminal damage (F11)** with their reverse-engineering notes.
-- **Physics tick harness gate G3 passed.** The harness self-test ran in-game with no mismatches, and the rig velocities were moved to the origin block (`+0x2b0` / `+0x2c0`).
-- **Asset tools.** Save decryption (`dr2save`), ghost parsing (`dr2ghost`), NEFS writing, a PSSG parser and serializer, and the browser explorers for **cars** and **tracks**, which can move, rotate, delete, and duplicate stage objects and write the result into a *new* `.nefs`.
-
-This project is not affiliated with Codemasters or Electronic Arts.
-
-## 1. Reverse engineering
-
-This is the core of DR2Hook. Findings are split by subsystem and carry confidence labels: `CONFIRMED`, `PROBABLE`, `HYPOTHESIS`, and `REFUTED` (some documents use the Portuguese equivalents).
-
-| Resource | What it is |
+| Path | What |
 | --- | --- |
-| [docs/reverse_engineering/README.md](docs/reverse_engineering/README.md) | Index of all findings: PhysicsRig pointer chain, wheels, suspension, tyres, engine, gearbox, damage, telemetry UDP, executable, UI data, pause menu, camera, terminal damage, ghosts, stage loading, track file formats |
-| [ghosts.md](docs/reverse_engineering/ghosts.md) | Ghost cars: encrypted saves, `GHST` format, slots, copies, opacity, collision, and the 15-car limit |
-| [track_formats.md](docs/reverse_engineering/track_formats.md) | What is decoded in `locations/*.nefs`: terrain, objects, trees, ornaments, AI line, collision archive |
-| [INV-01 handoff](docs/reverse_engineering/investigations/INV-01/HANDOFF.md) | Current car-state investigation: origin block on the rig, tick order, native state API candidates, validation gates |
-| [INV-01 knowledge base](docs/reverse_engineering/investigations/INV-01/kb/) | Graded facts, hypotheses, open questions, history, glossary |
+| `docs/reverse_engineering/` | Notes on the game: memory, physics, UI, ghosts, stage loading, file formats |
+| `src/` | Mod loader: a `dxgi.dll` proxy that loads `dr2hook_core.dll` (Lua mods, overlay, menu entry) |
+| `mods/practice_mode/` | Example mod |
+| `tools/` | Python tools for the game files, a web viewer for cars and tracks (`uiview`), and a track editor (`synthtrack`, `viewer3d`) |
+| `scripts/` | Release, dev, and research scripts |
 
-### Research tools
-
-| Tool | What it does |
-| --- | --- |
-| **Physics tick harness** ([docs](docs/architecture/physics_tick_harness.md)) | Opt-in hooks on the EGO physics tick path. Logs rig samples to CSV and can test queued writes and native calls on real tick boundaries. Off by default. |
-| **`dr2rec`** ([docs](docs/tools/dr2rec.md)) | Offline session recorder and analyzer. Read-only: no game writes, no RaceNet. Run with `python3 -m tools.dr2rec`. |
-| **`egodata`** (`tools/egodata/`) | Reads and writes EGO game data: NEFS archives (including writing a modified copy), AES, binary XML, text files. |
-| **`dr2save`**, **`dr2ghost`** (`tools/`) | Decrypt the game's save files (AES-256-ECB, fixed key) and parse ghost recordings (`GHST`). |
-| **`pssg`** (`tools/egodata/pssg.py`) | Parser and serializer for the PSSG model/texture format. |
-| **DR2 UI Viewer** (`tools/uiview/`, [docs](docs/tools/uiview.md): [cars](docs/tools/car_explorer.md), [tracks](docs/tools/track_explorer.md), [screens](docs/tools/ui_screens.md)) | Browser tools: UI screens, **Car Model Explorer**, **Track Explorer / editor**. Exports the game's files to a local folder and shows them with WebGL. |
-| `scripts/` | `release/` (package and verify), `dev/` (`restart_game.sh`, `test_tools.sh`, `web_smoke.py`, `golden_export.py`), `research/` (capture and analysis helpers: suspension pairs, pause-menu observation, process dumps). |
-
-Physics tick harness switches (environment variable or INI key):
-
-| Enable | Env / INI |
-| --- | --- |
-| Instrumentation + CSV | `DR2HOOK_PHYSICS_HARNESS=1` or `instrumentation=1` |
-| Queued rig writes | `DR2HOOK_PHYSICS_HARNESS_WRITES=1` or `writes=1` |
-| Experimental native calls | `DR2HOOK_PHYSICS_HARNESS_EXPERIMENTAL_NATIVE=1` or `experimental_native=1` |
-| Self-test (no real writes) | `DR2HOOK_PHYSICS_HARNESS_SELF_TEST=1` or `self_test=1` |
-
-Native calls need instrumentation, the experimental flag, and `SafetyGuard::CanWriteState()`. They run only on chosen physics boundaries, never on `Present`.
-
-## 2. Mod loader
-
-Once the game's memory and UI are mapped, the same knowledge can be used to load code into the game. That is the mod loader: two DLLs placed next to `dirtrally2.exe`, with no external injector.
-
-```
-dirtrally2.exe
-    └── dxgi.dll              stays loaded: DXGI proxy, Present, WndProc, NetworkGuard
-            └── dr2hook_core.dll    overlay, telemetry reads, Lua, savestate (F8 reloads this file)
-```
-
-What it provides:
-
-- **Lua 5.4 mods** loaded from `mods/<name>/`, with `Player`, `Safety`, `UI`, and `Menu` bindings.
-- **In-game overlay** (Dear ImGui, **Insert**):
-  - **Diagnostics** — RPM, gear, redline, speed, position, linear and angular velocity, per-wheel suspension and ground contact, and whether the player / container / physics-rig pointers resolve.
-  - **Mods** — loaded mods. **Reload Scripts** restarts Lua; **Reload Native Core (F8)** reloads `dr2hook_core.dll`.
-  - **One tab per loaded mod.** The Practice Mode tab adds a C++ checkpoint panel (`SavestateManager`) with save/restore buttons and the default restore mode.
-- **Native menus.** The pause menu and the main menu get a **DR2 Hook** entry that opens a game-native screen (built by patching the game's UI data at boot): open the overlay, reload Lua mods, reload the native core, and a **Mods** tab where each mod's `Menu` options appear, with a description panel per option, rich text, and saved settings. How it works: [menu.md](docs/reverse_engineering/menu.md), [ui_data.md](docs/reverse_engineering/ui_data.md), [ui_tabs.md](docs/reverse_engineering/ui_tabs.md), and [ui_limits.md](docs/reverse_engineering/ui_limits.md).
-- **Stage lifecycle.** The core watches the stage load, the countdown, and the start (including restarts) and passes them to Lua. An optional `AutoStage` hook and `LoadTrace` help with loading research ([stage_loading.md](docs/reverse_engineering/stage_loading.md)).
-- **GhostLab.** Native support for ghost cars: live time gap, copies of the ghost lap, opaque ghost, pausing the ghosts, and more ghost cars than the game normally allows.
-- **Remote commands.** A file-based command channel for testing without a person at the keyboard ([docs/guides/remote_commands.md](docs/guides/remote_commands.md)).
-- **Hot reload.** **F8** unloads `dr2hook_core.dll` and loads a fresh copy while the game keeps running. Changes to `dxgi.dll` still need a game restart.
-- **NetworkGuard.** Remote network traffic is blocked while the loader is in the game (see [Fair play](#fair-play)).
-
-### Writing a mod
-
-A mod is a folder under `mods/` with a `mod.json` manifest and a Lua entry script.
-
-```
-mods/
-└── my_mod/
-    ├── mod.json
-    └── main.lua
-```
-
-```lua
-Menu.button("hello", "Say hello", function()
-    UI.notify("Hello from my mod", 2.0)
-end)
-
-function onInit()
-    print("[MyMod] ready")
-end
-
-function onTick(dt)
-    -- once per rendered frame (Present)
-end
-
-function onKeyDown(keyCode)
-    if keyCode == 0x74 then -- F5
-        local pos = Player.getPosition()
-        print(string.format("%.2f %.2f %.2f", pos.x, pos.y, pos.z))
-    end
-end
-```
-
-| API | Contents |
-| --- | --- |
-| Hooks | `onInit`, `onTick(dt)`, `onKeyDown(keyCode)`, `onRenderUI` (while the mod's overlay tab is open), `onStageLoad(stage)`, `onCountdown(light)`, `onStageStart(stage)` (`stage.name`, `stage.restart`) |
-| `Player` | `getPosition`, `setPosition`, `getVelocity`, `setVelocity`, `getState`, `setState`, `getVehicleTelemetry` (RPM, gear, speed, torque, throttle) |
-| `Safety` | `isRestrictedMode()` |
-| `Race` | `setStartMode("normal" \| "no_countdown" \| "automatic" \| "on_throttle")` |
-| `Ghost` | `status()`, `clone(count, spacing)`, `setOpaque(bool)`, `setTimeOffset(seconds)`, `setHud(bool)` |
-| `UI` | `notify(text, seconds)` |
-| `Menu` | `button`, `toggle`, `choice`, `get`, `set`, `describe` — options shown under **Pause → DR2 Hook → Mods** |
-
-Full reference: [docs/guides/modding_guide.md](docs/guides/modding_guide.md).
-
-## 3. Example mod: Practice Mode
-
-`mods/practice_mode/` ships with the loader as a demonstration of what a mod can do. Long rally stages make it hard to repeat one corner; this mod saves the car's state and puts it back without restarting the stage. It also holds the race-start and ghost-car options.
-
-| Key | Action |
-| --- | --- |
-| **F5** | Save checkpoint (position, orientation, linear and angular velocity) |
-| **F6** | Restore **Normal** — saved pose, velocities zeroed |
-| **F7** | Restore **With Momentum** — saved pose and saved velocities |
-
-Core hotkeys (not part of any mod):
-
-| Key | Action |
-| --- | --- |
-| **F8** | Reload `dr2hook_core.dll` from disk. The game stays open; the in-memory C++ checkpoint is cleared and Lua restarts (`onInit` runs again). |
-| **F9** | Toggle the free camera on a stage. Mouse looks. WASD moves, Space/Q go up and down. Hold Ctrl to freeze keyboard movement; the mouse keeps looking. + and − raise and lower the keyboard speed. Shift multiplies that speed by 4. The game pause menu gives the cursor back and freezes the fly camera until it closes. Insert still opens the overlay and pauses the fly camera. |
-| **F11** | Insta crash: destroys the car on a stage (offline only) so the terminal-damage flow can be studied. Esc during the sequence opens the pause menu with Restart. See [terminal_damage.md](docs/reverse_engineering/terminal_damage.md). |
-
-Ghost-car mode (developer feature): while `dr2hook_ghost_cars.txt` exists next to `dirtrally2.exe`, the number inside it sets how many ghost cars the game creates on the next full stage load (**15 is the maximum**: larger values are clamped, because 16 ghosts crash the load), and the core fills them with copies of your ghost lap automatically. In that mode **F7** adds one more test copy and **F6** pauses and resumes all ghosts, instead of the checkpoint actions. Without the file, F6 and F7 keep the Practice Mode behavior. See [ghosts.md](docs/reverse_engineering/ghosts.md) §6.
-
-The same actions are under **Pause → DR2 Hook → Mods → Practice Mode**, together with: restore mode, race-start mode (Normal, No countdown, Automatic, On throttle), live gap to the ghost, extra ghost copies and their spacing, a head start for the ghost, a solid ghost car, and a notifications toggle. The mod keeps its own checkpoint in Lua through `Player.getState` / `Player.setState`.
-
-The core now reads and writes the rig velocities at the origin state block (`+0x2b0` linear, `+0x2c0` angular), after INV-01 `REFUTED` `+0x320` as a velocity field (it is a one-tick-delayed copy). **Known limitation:** an in-game validation of **With Momentum** on the new offsets is not recorded in the docs yet, and the restore is still not the game's own "reset vehicle" path.
-
-## 4. Asset tools: Car and Track Explorer
-
-`tools/uiview/` reads the game's own files (NEFS archives, PSSG models, XML) and shows them in a local web page. It never changes the game folder. Details and commands: [docs/tools/uiview.md](docs/tools/uiview.md); one document per tool: [Car Model Explorer](docs/tools/car_explorer.md), [Track Explorer](docs/tools/track_explorer.md), [UI screens](docs/tools/ui_screens.md) (in Portuguese).
-
-| Tab | What it does |
-| --- | --- |
-| **Screens** | The game's UI screens and images, with search and localization (pt/en). |
-| **Cars** | **Car Model Explorer.** Real node tree of each car (LOD, nodes, slices, materials), 3D viewport with textures, move/rotate parts with undo/redo, game cameras, and wheel and disc patches. |
-| **Tracks** | **Track Explorer and editor.** Terrain, physics objects, ornaments, trees, track limits, and the AI line of a stage, drawn with instancing. Move, rotate, delete, and **duplicate** objects (Ctrl+Z / Ctrl+Y). **Save .nefs** writes a *new* package under `build/uiview/saves/`; the game folder is never written. |
-
-```bash
-python -m tools.uiview.track --tracks montalegre -o build/uiview   # export one stage (about 15 s)
-python -m tools.uiview.serve                                       # serve build/uiview and enable Save .nefs
-```
-
-**Limits.** A modified `.nefs` has **not been tested in the game yet**. The Track Explorer does not rewrite stage collision (`track.jpk`), so a deleted object can still be solid. The format itself is now decoded and generated for custom tracks; see section 5. Only the Montalegre rallycross was exported and viewed. The rally stages (millions of vertices) are exported but not rendered in the test environment. Duplicating works only for objects in `objects.ens`.
-
-## 5. Map editor and custom tracks
-
-**Status: ready.** You build a track in the map editor, and the game loads it as a new track with its own name. The first one is the **DR2 Hook Ring**: a ~2.1 km circuit set in Portugal, with route `route_0`. In the game it has the following:
-- terrain and asphalt, plus its own collision;
-- barriers, grandstands, and a start arch;
-- paddock and parking;
-- crowd banks, forests, and two farms;
-- a wind farm;
-- a loading screen with an aerial photo and the track line drawn over it.
-
-| Piece | What it does |
-| --- | --- |
-| **`tools/synthtrack/`** ([docs](docs/tools/synthtrack.md), in Portuguese) | The editor's source of truth. It generates the track layout, terrain, textures, objects, decoration, AI line, and gates in the explorer format. It also writes the game's own instance formats. |
-| **`tools/viewer3d/`** ([README](tools/viewer3d/README.md), in Portuguese) | Native 3D viewer and editor (SDL3 + OpenGL). It shows the track with textures, lets you select, move, rotate, delete, and drop objects to the ground, and takes screenshots. |
-| **Port scripts** (`scripts/research/`) | These scripts turn the editor output into game files. `ring_tracksplit.py` writes the visible terrain, `track_jpk.py` the collision, and `ring_objects.py` the objects, textures, `ornaments.bin`, and `track.vis`. `custom_track.py` writes the catalogue entry, and `loading_screen.py` the loading screen. |
-
-**How the game finds the track:**
-- The core's LoadProbe mounts a folder overlay (`captures/overlay/`) over the game data.
-- It serves a generated catalogue (`base.ctpk`) from the first file the game reads at boot (`overlay_early = 2`).
-- It maps the location package name with `track_alias = dr2hook_ring=montalegre_rallycross`.
-- The track names come from `dr2hook_texts.ini`.
-
-The full pipeline, from the editor to the game, is in [track_loading.md §12](docs/reverse_engineering/track_loading.md), in Portuguese.
-
-**Start the game directly on the Ring** (AutoStage, run once per launch). Run this in the game folder, with `dr2hook_loadprobe.ini` set up as above:
-
-```bash
-sed -i 's/^enabled = .*/enabled = 1/; s/^once = .*/once = 1/; s/^location = .*/location = portugal/; s/^track = .*/track = dr2hook_ring/; s/^route = .*/route = route_0/' dr2hook_autostage.ini && steam steam://rungameid/690790
-```
-
-**Limits:**
-- The track opens through AutoStage. Picking it from the game's own event menus has not been tested.
-- The location package name is still borrowed from Montalegre (`track_alias`), because the exe keeps a fixed list of package names.
-- The menu minimap (`splines/<route>_sa.tpk`) and the reset and camera lines (`.cqtc`) still come from Montalegre.
-- The setup was tested only on Linux/Proton.
+More in [docs/README.md](docs/README.md). Writing mods: [modding_guide.md](docs/guides/modding_guide.md).
 
 ## Install
 
-Copy `dxgi.dll`, `dr2hook_core.dll`, and the `mods/` folder into the game directory:
-
-`[SteamLibrary]/steamapps/common/DiRT Rally 2.0/`
-
-The game loads `dxgi.dll` at startup. The proxy forwards to the real `dxgi.dll` in `System32` and loads `dr2hook_core.dll` from the same folder.
-
-Windows and Linux / Steam Deck (Proton) steps: [docs/guides/install.md](docs/guides/install.md).
+Copy `dxgi.dll`, `dr2hook_core.dll`, and `mods/` next to `dirtrally2.exe`. See [install.md](docs/guides/install.md).
 
 ## Build
 
-Requirements: CMake 3.20+, and either MinGW-w64 (Linux cross-compile) or Visual Studio 2022 (MSVC, x64, C++20).
-
-| Goal | Command |
-| --- | --- |
-| Linux: unit tests + release package | `bash scripts/release/verify_release.sh` |
-| Linux: release package only | `bash scripts/release/package_release.sh` |
-
-Python tools (`tools/`): `bash scripts/dev/test_tools.sh` runs their tests. Optional dependencies are declared in `pyproject.toml` (`pip install -e .[all]`: `numpy` for `dr2rec`, `Pillow` for the UI Viewer, `pycryptodome` for `dr2save`).
-
-The package (`dist/DR2Hook-v0.1.0.zip`) contains `dxgi.dll`, `dr2hook_core.dll`, and `mods/`. Both DLLs are statically linked.
-
-Windows:
+CMake 3.20+ with MinGW-w64 (Linux) or Visual Studio 2022.
 
 ```bash
-mkdir build && cd build
-cmake .. -A x64
-cmake --build . --config Release --target dxgi --target dr2hook_core
+bash scripts/release/verify_release.sh
 ```
 
-During development, rebuild only `dr2hook_core.dll`, replace it next to `dirtrally2.exe`, and press **F8**. The host copies the file to `dr2hook_core.N.dll` before loading it, so the build can overwrite the original while the game runs. **F8** is handled by the proxy and is not passed to mods.
+Python tool tests: `bash scripts/dev/test_tools.sh`.
 
-## Repository layout
+## Online play
 
-| Path | Role |
-| --- | --- |
-| `docs/reverse_engineering/` | RE findings by subsystem, investigations (INV-01) |
-| `docs/` | [Index](docs/README.md): `guides/` (install, Lua mods, remote commands), `architecture/`, `tools/` (dr2rec, UI Viewer) |
-| `docs/demands/` | Speculative ideas (multiplayer, map, vehicle, level editor and modeling) |
-| `docs/plans/` | Execution plans written for another person or AI: layered Python tools, modular web viewer, per-tool docs, and the [native 3D viewer](docs/plans/viewer3d/README.md) in 7 stages |
-| `tools/dr2rec/`, `tools/egodata/` (NEFS, BXML, PSSG), `tools/dr2save.py`, `tools/dr2ghost.py` | Offline research tools (Python) |
-| `tools/uiview/` | DR2 UI Viewer: `car/` (Car Model Explorer), `track/` (Track Explorer export and `.nefs` edit), `serve.py`, `web/` (HTML, `js/`, `css/`) |
-| `src/proxy/dxgi_proxy.cpp` | DXGI proxy |
-| `src/core/hooks.cpp` | `Present`, window procedure, and Winsock hooks (resident in proxy) |
-| `src/core/host.cpp` | Loads `dr2hook_core.dll` and reloads it on F8 |
-| `src/core/core_module.cpp` | Reloadable core entry: frame, input, init, shutdown |
-| `src/core/player.cpp` | Vehicle reads and checkpoint restore, using the documented rig offsets |
-| `src/core/physics_tick_harness.cpp` | Opt-in physics instrumentation |
-| `src/core/pause_menu.cpp`, `ui_patch.cpp`, `native_screen.cpp` | Native pause-menu entry and screens |
-| `src/core/ghost_lab.cpp`, `ghost_trace.cpp` | Ghost cars: gap, copies, opacity, pause, limits |
-| `src/core/race_events.cpp`, `load_trace.cpp`, `auto_stage.cpp` | Stage lifecycle events and loading research |
-| `src/core/free_camera.cpp`, `terminal_damage.cpp`, `remote_commands.cpp` | Free camera (F9), insta crash (F11), remote command channel |
-| `src/core/safety.cpp` | Session write gate |
-| `src/script/` | Lua runtime, mod loading, `Menu` API |
-| `src/ui/overlay.cpp` | ImGui overlay |
-| `mods/practice_mode/` | Example mod |
-| `tests/` | C++ unit and Wine tests (Python tests live next to each tool, in `tools/*/tests`) |
-| `scripts/` | `release/`, `dev/`, `research/` |
-| `pyproject.toml` | Python tools metadata and optional dependencies |
-
-## Fair play
-
-DR2Hook is for offline practice, research, and community mods. It is not for leaderboards or RaceNet.
-
-**Network.** While `dxgi.dll` is loaded, `NetworkGuard` hooks `ws2_32.dll`:
-
-- `getaddrinfo` / `GetAddrInfoW` for anything other than localhost returns "name not found".
-- `connect` outside `127.0.0.0/8` and IPv6 loopback returns `WSAECONNREFUSED`.
-- Localhost is untouched, so local tools (SimHub, motion rigs, UDP telemetry on `127.0.0.1`) still work.
-
-No menu or script can turn this off. To play online again, exit the game and remove `dxgi.dll` and `dr2hook_core.dll`.
-
-**Memory writes.** `SafetyGuard` is designed to allow position, velocity, and state writes only in DirtFish, offline time trial, and custom offline championships, and to refuse when the session mode is unknown. In v0.1.0 the core still starts in permissive mode, so this check is **not enforced in-game yet**.
+While the loader is in the game, network traffic outside localhost is blocked. Remove the two DLLs to play online.
 
 ## Status
 
-Developed and validated on Linux with Proton, against one `dirtrally2.exe` build (`c119f509…3442`). Windows native and other game builds are untested. The packaged release is still labelled **v0.1.0**; the list above ("What is new since v0.1.0") has not been through a new release yet.
+Only tested on Linux/Proton with one game build.
 
-### ✅ Working
+## Thanks
 
-| Area | What works |
-| --- | --- |
-| Research | Evidence-graded RE docs, INV-01 investigation (gate G3 passed), `dr2rec`, `egodata`, `dr2save`, `dr2ghost`, `pssg` |
-| Loader | DXGI proxy that loads `dr2hook_core.dll`; hot reload with **F8** |
-| Overlay | Dear ImGui overlay on **Insert**: Diagnostics tab and one tab per mod |
-| Native menus | **DR2 Hook** entry in the pause menu and in the main menu, with a Mods page, per-option description panel, and saved settings |
-| Lua mods | Lua 5.4 with `onInit`, `onTick`, `onKeyDown`, `onStageLoad`, `onCountdown`, `onStageStart`, and `Player`, `Safety`, `Race`, `Ghost`, `UI`, `Menu` |
-| Network | `NetworkGuard` always on: non-local traffic is refused, localhost still works |
-| Practice Mode | Save a checkpoint (F5) and restore the **position and orientation** (F6); race-start modes; clear checkpoint on a new stage |
-| Ghost cars | Live gap, extra copies, solid ghost, pause (F6 in ghost mode), up to **15 ghost cars + player** |
-| Free camera / insta crash | F9 free camera; F11 terminal damage with pause and restart |
-| Remote testing | `dr2hook_cmd.txt` command channel (status, pause, link, key, opt) |
-| Asset tools | Car Model Explorer and Track Explorer, with edits written to a **new** `.nefs` (tested by re-reading the package; 27 + 16 Python tests pass) |
-| Map editor and custom tracks | `synthtrack` + `viewer3d` build a track. The **DR2 Hook Ring** loads in the game with its own name, terrain, collision, objects, decoration, and loading screen, and the race starts and drives normally. |
-
-### ⚠️ Not working yet
-
-| Area | Problem |
-| --- | --- |
-| Practice Mode | **Velocity restore is not validated.** The core now uses the origin block (`+0x2b0` / `+0x2c0`), but **With Momentum** has not been re-checked in-game. |
-| Practice Mode | "Indestructible tyres" and "Indestructible car" are placeholders. |
-| Safety | `SafetyGuard` offline-only check is **not enforced**; the core starts in permissive mode. |
-| Lua API | `Race.setStartMode` returns `false` outside the Windows build. |
-| Ghost cars | More than 15 ghosts crash the stage load (17th car render object reads garbage). F8 while the pause menu is open freezes the game (cause unknown). |
-| Terminal damage | Repairing sound and steering after a restart has not been tested. |
-| Track editor | A modified `.nefs` has **not been tried in the game**. Collision is not edited. Duplicated objects get new `instanceID` values; whether the game accepts them is unknown. Rally stages (millions of vertices) are not rendered in the test environment. |
-| Track formats | `grass.grs` and the texture of the dense road blocks are not decoded. (Collision tiles and `track.vis` are now decoded and generated.) |
-| Custom tracks | The track opens through AutoStage. Picking it from the event menus is untested. The location package name is borrowed from Montalegre (`track_alias`). The menu minimap and the reset and camera lines still come from Montalegre. |
-| Compatibility | Only one game build and only Linux/Proton were tested. |
-
-## Roadmap
-
-### Near term (concrete work)
-
-- Test one small, safe edited `.nefs` in the game (only with the owner's go-ahead) to validate the save path of the track editor.
-- Decode the remaining track formats (`grass.grs`), then export and render the rally stages on a real GPU.
-- Custom tracks: their own menu minimap, reset and camera lines, a selectable entry in the event menus, and a location package that does not borrow Montalegre's name.
-- Re-validate **With Momentum** on the origin block.
-- Enforce `SafetyGuard` with a real offline/online signal (proposed INV-02).
-
-### Planned, with a written plan
-
-A native (SDL3 + OpenGL) 3D viewer/editor for stages, in 7 small stages that read what the Python exporters already write: [docs/plans/viewer3d](docs/plans/viewer3d/README.md). **Built:** `tools/viewer3d/`, now part of the map editor (section 5). The same folder has the plans for splitting the Python tools into layers and the web viewer into modules ([docs/plans](docs/plans/README.md)).
-
-### Ideas under study (speculation, no promises)
-
-These are ambitions. Nobody knows yet whether they are possible. They live in [docs/demands](docs/demands/README.md), where each idea explains why it might be possible, what is unknown, and what the first safe experiment is.
-
-| Idea | What it would mean | Status | Document |
-| --- | --- | --- | --- |
-| **Multiplayer through live ghosts** | Other players' cars drawn as ghosts, updated over the network, and maybe made solid up close. | Ghost cars, copies, solid ghost, and the 15-car limit are now understood; networking is not started. | [live-ghosts-multiplayer.md](docs/demands/live-ghosts-multiplayer.md) |
-| **Map editor** | Create or change stages. | **Ready for new tracks:** the DR2 Hook Ring is built in the editor and loads in the game (section 5). Editing *existing* stages through a modified `.nefs` is still untested. | [map-editor.md](docs/demands/map-editor.md) |
-| **Vehicle editor / custom cars** | Install custom cars (for example, a Beetle, if someone builds one). | Car Model Explorer reads car models; custom cars not started. | [vehicle-editor.md](docs/demands/vehicle-editor.md) |
-| **Level editor and modeling** | Build level content and make 3D models. Scope not decided yet. | Not started. | [level-editor-and-modeling.md](docs/demands/level-editor-and-modeling.md) |
-
-`NetworkGuard` blocks the network by design, so any multiplayer would need a separate, narrow exception that never reaches RaceNet or the official leaderboards.
-
-## Special thanks
-
-- **filipe411**, for the tip that changing the paths in `raceload` overrides the `.nefs` packages. That tip led to the folder overlay.
-- **Ssor**, for the research on the Ego visibility system and `track.vis` ([ego-visibility-system](https://github.com/ssor0/ego-visibility-system)), which named the layers and fields of our `track.vis` reader.
-- **Paths** ([ItsNotPaths](https://github.com/ItsNotPaths)), for [DiRTbench](https://github.com/ItsNotPaths/DiRTbench) (MIT), the DiRT 3 stage creator. Its notes corrected our `track.vis` split planes and show how collision, route files, and database rows are built for a new stage.
-- The [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding) project (MIT), whose file templates and database schema were a reference for the catalogue and collision formats.
+- **filipe411**, for the `raceload` path tip that led to the folder overlay.
+- **Ssor**, for [ego-visibility-system](https://github.com/ssor0/ego-visibility-system).
+- **Paths** ([ItsNotPaths](https://github.com/ItsNotPaths)), for [DiRTbench](https://github.com/ItsNotPaths/DiRTbench) (MIT).
+- [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding) (MIT).
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE). Anyone can use, copy, modify, and share DR2Hook for free. Selling it, or using it in a commercial product or service, is not allowed. This license makes the project source-available rather than OSI-approved open source. The bundled Lua in `vendor/lua/` keeps its own MIT license.
+[PolyForm Noncommercial 1.0.0](LICENSE). Free to use, copy, modify, and share; not for commercial use. The bundled Lua in `vendor/lua/` keeps its own MIT license.

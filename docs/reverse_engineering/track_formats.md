@@ -48,7 +48,9 @@ Contêiner **JPAK**: cabeçalho `JPAK`, 0, `n`, offset da tabela (16). Entradas 
 
 ## Não decifrado
 
-Vértices dos `.vcqtc`, `track.vis`, `grass.grs`, `*.cqtc` (resetlines e cameralines), `crowd_standing2.bin`, `ground_cover.pssg`, `replay_camera_config.xml`, e a textura dos blocos `batched_track.fx`.
+`grass.grs`, `crowd_standing2.bin`, `ground_cover.pssg` e a textura dos blocos `batched_track.fx`.
+
+Decifrados depois (ver [track_loading.md](track_loading.md)): vértices dos `.vcqtc` (§9.11), `track.vis` (§9.9), `*.cqtc` de resetlines e cameralines o `replay_camera_config.xml` (§12.1) e o `grids.pssg` das vagas de largada (§12.2).
 
 ## Escrita num `.nefs`
 
