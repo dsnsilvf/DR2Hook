@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Do editor ao jogo num comando: porta o Ring para a overlay e abre o jogo direto na pista (AutoStage).
 
-As etapas são as do docs/reverse_engineering/track_loading.md §12 (terreno, colisão, objetos, câmeras, vagas, tela
+As etapas são as do docs/reverse_engineering/track_loading.md §12 (terreno, colisão, objetos, rota, câmeras, vagas, tela
 de carregamento). Cada saída fica em `build/re/ring_deploy/` e só é refeita quando o que ela lê mudou (assinatura
 em `cache.json`: tamanho e data dos arquivos de entrada, conteúdo do edits.json, os scripts e os argumentos). Depois
 copia para a overlay o que mudou e, se pedido, reabre o jogo:
@@ -28,6 +28,11 @@ Progresso para o viewer3d (F5), uma linha por evento no stdout; o resto é log:
     @fail <texto>             parou com erro (código de saída 1)
 
     python3 scripts/research/ring_deploy.py [--quick] [--mode bot|freecam] [--edits <edits.json>] [--no-game]
+
+Os botões Pausar e Parar do viewer usam o mesmo script, que é quem sabe onde fica o jogo:
+
+    python3 scripts/research/ring_deploy.py --cmd pause|unpause   um lote pelo canal de comandos (remote_commands.md)
+    python3 scripts/research/ring_deploy.py --close               fecha o jogo
 """
 from __future__ import annotations
 
@@ -56,11 +61,14 @@ APP_ID = 690790
 STEAM_URL = f"steam://rungameid/{APP_ID}"
 # moldes da Montalegre que as etapas leem (extraídos antes; ver track_loading.md)
 HOSTS = ("build/re/montalegre/tracksplit.pssg", "build/re/montalegre/route_0__track.vis",
-         "build/re/montalegre_objects/objects.pssg", "build/re/montalegre_route0_orig/grids.pssg")
+         "build/re/montalegre_objects/objects.pssg", "build/re/montalegre_route0_orig/grids.pssg",
+         "build/re/montalegre_route0_orig/triggers_game_object.xml")
+ROUTE_FILES = ("progress_track.xml", "ai_track.xml", "ai_vehicle_track.xml", "vehicle_track_progress_data.xml",
+               "resetlines.cqtc", "ai_track_markers.xml")
 # código que as etapas usam: mudou, refaz
 CODE = ("scripts/research", "tools/egodata", "tools/uiview/mesh.py")
 # duração típica (s) quando ainda não há medida: só pesa a barra
-GUESS = {"terrain": 2.0, "collision": 7.5, "objects": 1.0, "cameras": 0.3, "grids": 0.2, "loading": 20.0,
+GUESS = {"terrain": 2.0, "collision": 7.5, "objects": 1.0, "route": 1.0, "cameras": 0.3, "grids": 0.2, "loading": 20.0,
          "copy": 0.3, "close": 1.0, "open": 3.0, "boot": 15.0, "base": 4.0, "load": 4.0, "start": 2.0,
          "freecam": 0.5}
 # fases do jogo no dr2hook.log, em ordem: (etapa, texto, marca que fecha a fase). Uma marca só vale depois da
@@ -135,6 +143,20 @@ def signature(step: Step, sigs: dict[str, str], edits: str | None) -> str:
     return h.hexdigest()
 
 
+def write_game_transform(track_dir: str) -> None:
+    """<pista>/game_transform.json: o giro e o deslocamento do porte (ring_tracksplit.start_transform), para o
+    viewer3d levar o carro do jogo ao vivo (src/core/live_link.cpp) para as coordenadas da pista."""
+    sys.path[:0] = [ROOT, os.path.dirname(__file__)]
+    from ring_tracksplit import start_transform
+    yaw, offset = start_transform()
+    data = {"yaw_deg": round(float(yaw), 9), "offset": [round(float(v), 6) for v in offset]}
+    path = os.path.join(ROOT, track_dir, "game_transform.json")
+    text = json.dumps(data) + "\n"
+    if not os.path.exists(path) or open(path).read() != text:
+        with open(path, "w") as fh:
+            fh.write(text)
+
+
 def run_script(rep: Report, argv: list[str]) -> None:
     """Roda um script do porte repassando a saída como log; erro vira exceção com o fim da saída."""
     p = subprocess.Popen([sys.executable, "-u", *argv], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -186,6 +208,59 @@ def force_splash_skip(path: str) -> None:
         fh.write("\n".join(lines) + "\n")
 
 
+def cmd_answer(out_text: str, command: str) -> str:
+    """Resposta de `command` no dr2hook_cmd.out (`# lote N`, depois `> comando` e o resultado de cada um)."""
+    lines = out_text.splitlines()
+    for k in range(len(lines) - 1, -1, -1):
+        if lines[k] == f"> {command}":
+            answer = []
+            for line in lines[k + 1:]:
+                if line.startswith("> "):
+                    break
+                answer.append(line)
+            return "\n".join(answer).strip()
+    return ""
+
+
+def send_command(game: str, command: str, timeout: float = 4.0) -> str:
+    """Manda um comando pelo canal do core (docs/guides/remote_commands.md) e devolve a resposta do jogo.
+
+    O core lê e apaga o dr2hook_cmd.txt a cada ~150 ms e só depois grava o dr2hook_cmd.out: a resposta é a do .out
+    que mudou depois do envio. Sem leitura no prazo (jogo fechado ou sem o mod), apaga o arquivo para ele não rodar
+    no próximo boot.
+    """
+    cmd = os.path.join(game, "dr2hook_cmd.txt")
+    out = os.path.join(game, "dr2hook_cmd.out")
+
+    def stamp():
+        try:
+            st = os.stat(out)
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return None
+
+    before = stamp()
+    with open(cmd, "w", encoding="utf-8") as fh:
+        fh.write(command + "\n")
+    deadline = time.time() + timeout
+    while os.path.exists(cmd):
+        if time.time() > deadline:
+            try:
+                os.remove(cmd)
+            except FileNotFoundError:
+                pass
+            raise RuntimeError("o jogo não leu o comando (está aberto com o mod?)")
+        time.sleep(0.05)
+    while time.time() < deadline:
+        if stamp() not in (None, before):
+            time.sleep(0.05)  # o core pode estar no meio da gravação
+            answer = cmd_answer(open(out, encoding="utf-8", errors="replace").read(), command)
+            if answer:
+                return answer
+        time.sleep(0.05)
+    raise RuntimeError("o jogo leu o comando mas não respondeu no dr2hook_cmd.out")
+
+
 class Deploy:
     def __init__(self, a, rep: Report):
         self.a, self.rep = a, rep
@@ -221,12 +296,18 @@ class Deploy:
                                     + (["--edits", edits] if edits else [])),
                  inputs=track + code + [p for p in HOSTS[1:3]] + ([edits] if edits else []), args=[edits or ""],
                  after=["terrain"], outputs=[f"{o}/objects/objects.pssg", f"{o}/objects/{ROUTE}/track.vis"]),
+            Step("route", "Rota: progresso, IA, zonas da IA e paredes de reset",
+                 lambda: run_script(self.rep, ["scripts/research/ring_route.py", f"{o}/route"]
+                                    + (["--edits", edits] if edits else [])),
+                 inputs=track + code + ["build/re/montalegre_route0_orig"] + ([edits] if edits else []),
+                 args=[edits or ""], outputs=[f"{o}/route/{f}" for f in ROUTE_FILES]),
             Step("cameras", "Câmeras do replay",
                  lambda: run_script(self.rep, ["scripts/research/ring_cameras.py", f"{o}/cameras"]),
                  inputs=track + code, outputs=[f"{o}/cameras/replay_camera_config.xml"]),
-            Step("grids", "Vagas de largada",
+            Step("grids", "Vagas de largada e estepes do parque",
                  lambda: run_script(self.rep, ["scripts/research/ring_grids.py", f"{o}/grids"]),
-                 inputs=track + code + [HOSTS[3]], outputs=[f"{o}/grids/grids.pssg"]),
+                 inputs=track + code + [HOSTS[3], HOSTS[4]],
+                 outputs=[f"{o}/grids/grids.pssg", f"{o}/grids/triggers_game_object.xml"]),
         ]
         if not a.quick:
             s.append(Step("loading", "Tela de carregamento (foto aérea)",
@@ -268,6 +349,8 @@ class Deploy:
             f"{ROUTE}/replay_camera_config.xml": f"{o}/cameras/replay_camera_config.xml",
             f"{ROUTE}/cameralines.cqtc": f"{o}/cameras/cameralines.cqtc",
             f"{ROUTE}/grids.pssg": f"{o}/grids/grids.pssg",
+            f"{ROUTE}/triggers_game_object.xml": f"{o}/grids/triggers_game_object.xml",
+            **{f"{ROUTE}/{f}": f"{o}/route/{f}" for f in ROUTE_FILES},
         }
         dest = os.path.join(ROOT, OVERLAY, DEST)
         changed = 0
@@ -393,15 +476,8 @@ class Deploy:
         raise RuntimeError(f"{MILESTONES[i][1].lower()}: nada em 5 minutos")
 
     def freecam(self) -> None:
-        path = os.path.join(self.a.game, "dr2hook_cmd.txt")
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("key f9\n")
-        for _ in range(40):  # o core lê e apaga em ~150 ms
-            if not os.path.exists(path):
-                self.rep.log("  câmera livre ligada (F9 alterna; o carro segue com o bot)")
-                return
-            time.sleep(0.1)
-        raise RuntimeError("o jogo não leu o dr2hook_cmd.txt")
+        answer = send_command(self.a.game, "key f9")
+        self.rep.log(f"  câmera livre ligada (F9 alterna; o carro segue com o bot): {answer}")
 
     # ---- execução
 
@@ -429,6 +505,7 @@ class Deploy:
     def run(self) -> int:
         try:
             self.preflight()
+            write_game_transform(TRACK_DIR)
             steps = self.steps()
             self.plan(steps)
         except Exception as e:  # noqa: BLE001
@@ -492,6 +569,25 @@ class Deploy:
         os.replace(tmp, self.cache_path)
 
 
+def control(a, rep: Report) -> int:
+    """Pausar/continuar (--cmd) e parar (--close) do viewer: uma linha @done ou @fail com o que aconteceu."""
+    try:
+        if a.close:
+            if not game_pids((EXE, CRASH_EXE)):
+                rep.line("@done o jogo já estava fechado")
+                return 0
+            Deploy(a, rep).close_game()
+            rep.line("@done jogo fechado")
+        else:
+            if not game_pids():
+                raise RuntimeError("o jogo não está aberto")
+            rep.line(f"@done {send_command(a.game, a.cmd)}")
+    except Exception as e:  # noqa: BLE001 - qualquer erro vira @fail para o viewer
+        rep.line(f"@fail {e}")
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--quick", action="store_true", help="pula a tela de carregamento (foto aérea e traçado)")
@@ -501,12 +597,16 @@ def main() -> int:
     ap.add_argument("--no-game", action="store_true", help="só porta para a overlay, sem abrir o jogo")
     ap.add_argument("--force", action="store_true", help="refaz todas as etapas, mesmo sem mudança")
     ap.add_argument("--game", default=GAME)
+    ap.add_argument("--cmd", metavar="COMANDO", help="só manda COMANDO (pause, unpause...) ao jogo aberto e sai")
+    ap.add_argument("--close", action="store_true", help="só fecha o jogo e sai")
     a = ap.parse_args()
     if a.edits:
         a.edits = os.path.abspath(a.edits)
     os.chdir(ROOT)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
     rep = Report()
+    if a.cmd or a.close:
+        return control(a, rep)
     if a.mode == "drive":
         rep.line("@fail \"Eu dirijo\" ainda não existe: o AutoStage usa o benchmark, e o carro anda sozinho")
         return 1

@@ -11,11 +11,14 @@ Entra a linha central (`source/layout.json`, amostras a cada 2 m) com o mesmo gi
   de freada por curva (no início dela) e uma de retomada (na saída). Sem fork set de joker;
 - `ai_vehicle_track.xml`: as mesmas linhas de freada para cada tipo de carro, com a velocidade da curva
   (aceleração lateral fixa) escalada pelo ritmo do tipo na Montalegre;
-- `resetlines.cqtc`: sem paredes de reset (ver `resetlines_stub`);
+- `resetlines.cqtc`: paredes de reset (cortinas de 100 m) por trás das barreiras do Ring, dos dois lados: REST
+  (fora da pista) e SCRS (atalho) iguais, ACRS (corte) por dentro das curvas; ACIP e RSTT vazias (ver
+  `reset_walls`);
 - `vehicle_track_progress_data.xml`: curvas de progresso da Montalegre com o tempo esticado pela razão dos
-  comprimentos (são frações da volta).
+  comprimentos (são frações da volta);
+- `ai_track_markers.xml`: curvas, pontos de acidente e reta da largada em fração da volta (ver `track_markers`).
 
-    python3 scripts/research/ring_route.py build/re/ring_route
+    python3 scripts/research/ring_route.py build/re/ring_route [--edits <edits.json>]
 """
 from __future__ import annotations
 
@@ -42,6 +45,7 @@ PROGRESS_HALF = 9.0  # meia largura dos portões de progresso (asfalto 5 m + zeb
 TRACK_HALF = 6.5  # limites da pista para a IA
 RACING_HALF = 4.5  # limites da linha de corrida
 CORNER_RADIUS = 150.0  # abaixo disso a curva ganha linha de freada
+ACCIDENT_RADIUS = 60.0  # curvas mais fechadas que isso são pontos de acidente (6 de 12 no Ring, 6 na Montalegre)
 LATERAL_ACCEL = 12.0  # m/s² na linha de corrida (raio efetivo = 1,5 × o da linha central)
 TOP_SPEED = 45.0
 
@@ -129,8 +133,8 @@ def progress_track(host, s, pos, tan, curv, length):
     return root, len(gates)
 
 
-def corners(s, curv, gate_s):
-    """(índice do portão de freada, de retomada, raio mínimo) de cada curva com raio < CORNER_RADIUS."""
+def corner_spans(s, curv) -> list[tuple[int, int, float]]:
+    """(amostra de entrada, de saída, raio mínimo) de cada curva com raio < CORNER_RADIUS."""
     k = np.abs(smooth(curv, 5))
     inside = k > 1 / CORNER_RADIUS
     out = []
@@ -145,12 +149,49 @@ def corners(s, curv, gate_s):
                 i += 1
             b = (start + i - 1) % n
             seg = [(a + m) % n for m in range((b - a) % n + 1)]
-            r = 1 / k[seg].max()
-            g0 = int(np.searchsorted(gate_s, s[a])) % len(gate_s)
-            g1 = int(np.searchsorted(gate_s, s[b])) % len(gate_s)
-            out.append((g0, g1, r))
+            out.append((a, b, 1 / k[seg].max()))
         i += 1
     return out
+
+
+def corners(s, curv, gate_s):
+    """(índice do portão de freada, de retomada, raio mínimo) de cada curva com raio < CORNER_RADIUS."""
+    return [(int(np.searchsorted(gate_s, s[a])) % len(gate_s), int(np.searchsorted(gate_s, s[b])) % len(gate_s), r)
+            for a, b, r in corner_spans(s, curv)]
+
+
+def track_markers(host, s, curv, length):
+    """ai_track_markers.xml: zonas em fração da volta (0 = chegada, no portão 0 a FIRST_DISTANCE m). Na Montalegre:
+    `critical_corner` e `critical_corner_1` = as curvas (entrada um pouco antes), `accident_black_spots` = as
+    mesmas curvas, `critical_straight_1..3` = da largada ao fim da 1ª curva. No Ring: as curvas com raio <
+    CORNER_RADIUS, entrada 15 m antes; pontos de acidente = as de raio < ACCIDENT_RADIUS."""
+    def frac(d):
+        return ((d + FIRST_DISTANCE) % length) / length
+
+    spans = sorted(corner_spans(s, curv), key=lambda c: frac(s[c[0]] - 15.0))
+    zones = []
+    for a, b, r in spans:
+        f0, f1 = frac(s[a] - 15.0), frac(s[b])
+        zones.append((f0, f1, r))
+    first_end = zones[0][1]
+
+    def zone_nodes(items):
+        out = []
+        for f0, f1 in items:
+            parts = [(f0, f1)] if f0 < f1 else [(f0, 1.0), (0.0, f1)]  # passa pela chegada: em dois
+            out += [node("zone", None, [("start", f"{x0:.3f}"), ("end", f"{x1:.3f}")]) for x0, x1 in parts]
+        return out
+
+    root = copy.deepcopy(host)
+    for group in root[3]:
+        for kind in group[3]:
+            if kind[0] == "accident_black_spots":
+                kind[3] = zone_nodes([(f0, f1) for f0, f1, r in zones if r < ACCIDENT_RADIUS])
+            elif kind[0].startswith("critical_straight"):
+                kind[3] = zone_nodes([(0.0, first_end)])
+            elif kind[0].startswith("critical_corner"):
+                kind[3] = zone_nodes([(f0, f1) for f0, f1, _ in zones])
+    return root, zones
 
 
 def corner_speed(r: float) -> float:
@@ -266,9 +307,199 @@ def resetlines_stub(pos: np.ndarray, reach: float = 4000.0) -> bytes:
     return head + b"".join(secs)
 
 
+# --- paredes de reset --------------------------------------------------------------------------------------------
+# Lido da Montalegre (build/re/montalegre_route0_orig/resetlines.cqtc): cada seção é uma "cortina" vertical de 100 m
+# ao longo de polilinhas (pontos a ~2 m) num quadtree em xz. Cabeçalho: caixa, nº de triângulos, de vértices, 1,
+# offsets dos vértices (56), dos nós, dos triângulos e das refs, etiqueta. Vértice: 8 bytes big-endian (x 24 bits,
+# y 16, z 24, frações da caixa). Nó: 3 bytes; bit 23 = folha (resto = offset nas refs), senão o índice do 1º de 4
+# filhos seguidos (0 = x baixo/z alto, 1 = x alto/z alto, 2 = x baixo/z baixo, 3 = x alto/z baixo); ffffff = vazio.
+# Triângulo: 7 bytes (vértice a de 24 bits, o menor; nibbles altos de b-a e c-a; bytes baixos; material 0). Folha:
+# o menor triângulo em 24 bits e os outros em u16 relativos a ele, o último com o bit 15; até 16 por folha, o
+# triângulo entra em toda folha que a caixa dele toca. Normais para o lado da pista (75% na Montalegre).
+# REST na Montalegre fica a 8,6 m (p10) do centro, com portões de 7,2 m de meia largura: logo depois do asfalto.
+WALL_TYPES = ("e:synth_barrier", "e:synth_tyrewall", "o:synth_adboard", "e:synth_fence", "o:synth_tyrestack",
+              "o:synth_flag")  # o que marca a beira da área de corrida no Ring
+WALL_REACH = 21.0  # além disso é plateia (alambrado atrás dos pneus das curvas e das arquibancadas, a 25 m)
+WALL_MARGIN = 1.5  # parede atrás do objeto
+WALL_MIN = 10.5  # asfalto 5 m + zebra 1,2 m + 4,3 m de grama
+ACRS_HALF = 9.5  # anti-corte: por dentro das curvas, 3,3 m de grama depois da zebra
+WALL_BELOW, WALL_ABOVE = 50.0, 50.0
+LEAF_MAX, DEPTH_MAX = 16, 12
+
+
+def edge_offsets(s, pos, tan, objects) -> np.ndarray:
+    """Distância da parede ao centro, (2, n): linha 0 à esquerda, 1 à direita. No mínimo WALL_MIN; atrás de cada
+    barreira/pneu/placa/alambrado a até WALL_REACH m, com folga, alargada 8 m para os lados e suavizada."""
+    n = len(s)
+    xz = pos[:, [0, 2]]
+    left = np.stack([tan[:, 1], -tan[:, 0]], axis=1)
+    off = np.full((2, n), WALL_MIN)
+    for kind, p in objects:
+        if not kind.startswith(WALL_TYPES):
+            continue
+        i = int(np.argmin(np.linalg.norm(xz - p, axis=1)))
+        lat = float(np.dot(p - xz[i], left[i]))
+        if abs(lat) > WALL_REACH:
+            continue
+        side = 0 if lat > 0 else 1
+        for j in range(i - 3, i + 4):
+            off[side, j % n] = max(off[side, j % n], abs(lat) + WALL_MARGIN)
+    for side in range(2):
+        wide = np.max([np.roll(off[side], k) for k in range(-4, 5)], axis=0)
+        off[side] = np.maximum(smooth(wide, 3), off[side])
+    return off
+
+
+def curtain(xz: np.ndarray, y: np.ndarray, toward: np.ndarray, base: int = 0):
+    """Cortina vertical ao longo da polilinha `xz` (aberta): vértices (cima, baixo) por ponto e dois triângulos por
+    trecho, com a normal virada para `toward` (ponto da pista ao lado de cada ponto)."""
+    verts, tris = [], []
+    for (x, z), h in zip(xz, y):
+        verts += [(x, h + WALL_ABOVE, z), (x, h - WALL_BELOW, z)]
+    v = np.array(verts)
+    for k in range(len(xz) - 1):
+        a_top, a_bot, b_top, b_bot = 2 * k, 2 * k + 1, 2 * k + 2, 2 * k + 3
+        for t in ((a_top, a_bot, b_top), (a_bot, b_bot, b_top)):
+            p = v[list(t)]
+            nrm = np.cross(p[1] - p[0], p[2] - p[0])[[0, 2]]
+            if np.dot(nrm, toward[k] - xz[k]) < 0:
+                t = (t[0], t[2], t[1])
+            r = int(np.argmin(t))
+            tris.append(tuple(base + i for i in t[r:] + t[:r]))
+    return verts, tris
+
+
+def encode_cqtc_tree(verts, tris, tag: bytes) -> bytes:
+    """Cortinas -> cqtc com quadtree em xz (folhas de até LEAF_MAX triângulos), no formato da Montalegre."""
+    v = np.asarray(verts, np.float64)
+    lo, hi = v.min(0) - 0.1, v.max(0) + 0.1
+    p = v[np.array(tris)]
+    bmin, bmax = p.min(1), p.max(1)
+    nodes: list[int] = [0]
+    refs = bytearray()
+
+    def build(slot, ids, x0, z0, x1, z1, depth):
+        if not ids:
+            nodes[slot] = 0xFFFFFF
+            return
+        if len(ids) <= LEAF_MAX or depth == DEPTH_MAX:
+            ids = sorted(ids)
+            assert len(ids) >= 2 and ids[-1] - ids[0] < 0x8000, (tag, ids)
+            nodes[slot] = 0x800000 | len(refs)
+            refs.extend(ids[0].to_bytes(3, "big"))
+            for k, t in enumerate(ids[1:]):
+                refs.extend(((t - ids[0]) | (0x8000 if k == len(ids) - 2 else 0)).to_bytes(2, "big"))
+            return
+        base = len(nodes)
+        nodes.extend([0] * 4)
+        nodes[slot] = base
+        xm, zm = (x0 + x1) / 2, (z0 + z1) / 2
+        for c, (a0, b0, a1, b1) in enumerate(((x0, zm, xm, z1), (xm, zm, x1, z1), (x0, z0, xm, zm), (xm, z0, x1, zm))):
+            sub = [t for t in ids if bmin[t, 0] <= a1 and bmax[t, 0] >= a0 and bmin[t, 2] <= b1 and bmax[t, 2] >= b0]
+            build(base + c, sub, a0, b0, a1, b1, depth + 1)
+
+    build(0, list(range(len(tris))), lo[0], lo[2], hi[0], hi[2], 0)
+    nt, nv = len(tris), len(v)
+    vo = 56
+    no = vo + 8 * nv
+    to = no + 3 * len(nodes)
+    ro = to + 7 * nt
+    out = bytearray(struct.pack("<6f3i4I", *lo, *hi, nt, nv, 1, vo, no, to, ro) + tag)
+    q = (v - lo) / (hi - lo)
+    for x, y, z in q:
+        out += (min(int(round(x * (1 << 24))), (1 << 24) - 1).to_bytes(3, "big")
+                + min(int(round(y * (1 << 16))), (1 << 16) - 1).to_bytes(2, "big")
+                + min(int(round(z * (1 << 24))), (1 << 24) - 1).to_bytes(3, "big"))
+    for n in nodes:
+        out += n.to_bytes(3, "big")
+    for a, b, c in tris:
+        d1, d2 = b - a, c - a
+        assert 0 < d1 < 4096 and 0 < d2 < 4096
+        out += a.to_bytes(3, "big") + bytes([(d1 >> 8) << 4 | (d2 >> 8), d1 & 255, d2 & 255, 0])
+    return bytes(out + refs)
+
+
+def resetlines(sections: dict[bytes, bytes]) -> bytes:
+    """Contêiner do resetlines.cqtc: u32 3, u32 n; n × (u64 offset, u64 tamanho, etiqueta, 8 zeros); as seções."""
+    head = struct.pack("<II", 3, len(sections))
+    off = 8 + 28 * len(sections)
+    for tag, sec in sections.items():
+        head += struct.pack("<QQ", off, len(sec)) + tag + b"\0" * 8
+        off += len(sec)
+    return head + b"".join(sections.values())
+
+
+def reset_walls(s, pos, tan, curv, objects) -> tuple[bytes, dict]:
+    """resetlines.cqtc do Ring: REST e SCRS = laços por fora e por dentro (`edge_offsets`), ACRS = trechos por
+    dentro das curvas a ACRS_HALF m, ACIP e RSTT vazias. Devolve o arquivo e um resumo para conferir."""
+    xz = pos[:, [0, 2]]
+    left = np.stack([tan[:, 1], -tan[:, 0]], axis=1)
+    off = edge_offsets(s, pos, tan, objects)
+    loop = lambda a: np.concatenate([a, a[:1]])  # noqa: E731  (fecha o laço repetindo o 1º ponto)
+    walls = {}
+    for side, sign in ((0, 1.0), (1, -1.0)):
+        line = xz + sign * left * off[side][:, None]
+        seg = np.diff(loop(line), axis=0)
+        back = int((np.einsum("ij,ij->i", seg, tan) <= 0).sum())
+        if back:
+            raise SystemExit(f"parede {'esquerda' if side == 0 else 'direita'} dobra sobre si em {back} trechos")
+        walls[side] = loop(line)
+    y = loop(pos[:, 1])
+    rest_v, rest_t = [], []
+    for side in (0, 1):
+        v, t = curtain(walls[side], y, loop(xz), len(rest_v))
+        rest_v += v
+        rest_t += t
+    # anti-corte: por dentro de cada curva (lado para onde ela vira), 5 amostras antes e depois
+    corner = np.abs(curv) > 1 / 140.0
+    acrs_v, acrs_t, pieces = [], [], 0
+    n = len(s)
+    k = 0
+    while k < n:
+        if not corner[k] or (k == 0 and corner[-1]):
+            k += 1
+            continue
+        j = k
+        while corner[(j + 1) % n] and j + 1 < k + n:
+            j += 1
+        side = 0 if curv[k:j + 1].sum() > 0 else 1
+        idx = [(i % n) for i in range(k - 5, j + 6)]
+        half = np.minimum(ACRS_HALF, off[side][idx])
+        line = xz[idx] + (1.0 if side == 0 else -1.0) * left[idx] * half[:, None]
+        v, t = curtain(line, pos[idx, 1], xz[idx], len(acrs_v))
+        acrs_v += v
+        acrs_t += t
+        pieces += 1
+        k = j + 1
+    c = pos.mean(0)
+    lo, hi = (c[0] - 4000.0, c[1] - 500.0, c[2] - 4000.0), (c[0] + 4000.0, c[1] + 500.0, c[2] + 4000.0)
+    secs = {b"REST": encode_cqtc_tree(rest_v, rest_t, b"REST"),
+            b"ACRS": encode_cqtc_tree(acrs_v, acrs_t, b"ACRS") if acrs_t else cqtc_stub(b"ACRS", lo, hi),
+            b"SCRS": encode_cqtc_tree(rest_v, rest_t, b"SCRS"),
+            b"ACIP": cqtc_stub(b"ACIP", lo, hi),
+            b"RSTT": cqtc_stub(b"RSTT", lo, hi)}
+    info = {"off": off, "walls": walls, "acrs_pieces": pieces, "tris": {t.decode(): struct.unpack_from("<i", b, 24)[0]
+                                                                        for t, b in secs.items()}}
+    return resetlines(secs), info
+
+
+def ring_objects(edits: str | None) -> list[tuple[str, np.ndarray]]:
+    """(tipo, posição xz no jogo) das instâncias do Ring, com as edições do viewer3d se houver."""
+    from ring_objects import RING, apply_edits, read_instances, to_game
+    track = json.load(open(os.path.join(RING, "track.json")))
+    insts = read_instances(os.path.join(RING, "inst_route_0.bin"), track["type_order"], with_ids=True)
+    if edits:
+        pairs, _ = apply_edits(insts, json.load(open(edits, encoding="utf-8")), "route_0")
+    else:
+        pairs = [(t, m) for t, m, _ in insts]
+    yaw, offset = start_transform()
+    return [(t, to_game(m, yaw, offset)[3, [0, 2]]) for t, m in pairs]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
+    ap.add_argument("--edits", help="edits.json do viewer3d: barreiras movidas mudam as paredes de reset")
     a = ap.parse_args()
     load = lambda f: bxml.decode(open(os.path.join(HOST, f), "rb").read())  # noqa: E731
     s, pos, tan, curv, length = centreline()
@@ -278,13 +509,20 @@ def main() -> None:
     out = {"progress_track.xml": prog, "ai_track.xml": ai,
            "ai_vehicle_track.xml": vehicle_track(load("ai_vehicle_track.xml"), cs),
            "vehicle_track_progress_data.xml": progress_data(load("vehicle_track_progress_data.xml"), length)}
+    out["ai_track_markers.xml"], zones = track_markers(load("ai_track_markers.xml"), s, curv, length)
     for name, root in out.items():
         with open(os.path.join(a.out, name), "wb") as fh:
             fh.write(bxml.encode(root))
     with open(os.path.join(a.out, "resetlines.cqtc"), "wb") as fh:
-        fh.write(resetlines_stub(pos))
+        data, info = reset_walls(s, pos, tan, curv, ring_objects(a.edits))
+        fh.write(data)
+    off = info["off"]
+    spots = sum(1 for *_, r in zones if r < ACCIDENT_RADIUS)
     print(f"{a.out}: {length:.1f} m, {n_prog} portões de progresso, {n_ai} da IA, {len(cs)} curvas "
           f"(raios {', '.join(f'{r:.0f}' for _, _, r in cs)})")
+    print(f"  paredes de reset a {off.min():.1f}–{off.max():.1f} m do centro (esquerda p50 {np.median(off[0]):.1f}, "
+          f"direita p50 {np.median(off[1]):.1f}); triângulos {info['tris']}, {info['acrs_pieces']} trechos anti-corte")
+    print(f"  zonas da IA: {len(zones)} curvas, {spots} pontos de acidente, reta da largada até {zones[0][1]:.3f}")
 
 
 if __name__ == "__main__":

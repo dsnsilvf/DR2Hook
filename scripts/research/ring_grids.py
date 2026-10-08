@@ -10,6 +10,10 @@ Formato (PSSG big-endian): `ROOTNODE` "Scene Root" → um `NODE` por grade → u
 linha 3) e `BOUNDINGBOX` (mín xyz, máx xyz). Mundo = local @ mundo do pai. Linhas: 0 = frente × cima (esquerda do
 carro), 1 = cima, 2 = trás (o carro aponta para −linha 2).
 
+Junto sai o `triggers_game_object.xml` (XML binário v0, `cfgxml.py`): o da Montalegre só tem os estepes do parque
+(`SpareWheelData`, `transform` = matriz 4×4 vetor-linha em texto), que vão com as vagas `grid_compound_5#5` para o
+parque do Ring (mesmo giro e deslocamento da grade).
+
     python3 scripts/research/ring_grids.py build/re/ring_grids
 """
 from __future__ import annotations
@@ -27,9 +31,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from ring_tracksplit import HOST_AHEAD, HOST_START, rotate_y, start_transform  # noqa: E402
+from tools.egodata import cfgxml  # noqa: E402
 from tools.egodata.pssg import PSSGFile  # noqa: E402
 
 HOST = "build/re/montalegre_route0_orig/grids.pssg"
+HOST_TRIGGERS = "build/re/montalegre_route0_orig/triggers_game_object.xml"
+COMPOUND = "grid_compound_5#5"
 TRACK = "examples/tracks/synthetic__dr2hook_ring/track.json"
 
 
@@ -115,6 +122,26 @@ def build(host: PSSGFile, grids: list[dict], game: Game) -> list[tuple[str, np.n
     return changed
 
 
+def move_spare_wheels(tree, old_w: np.ndarray, new_w: np.ndarray) -> int:
+    """Leva cada `transform` de `SpareWheelData` de `old_w` (mundo da grade do parque na Montalegre) para `new_w`.
+    Devolve quantos mudaram."""
+    moved = 0
+
+    def walk(node):
+        nonlocal moved
+        name, _, attrs, kids = node
+        a = dict(attrs)
+        if name == "value" and a.get("type") == "matrix4" and a.get("name") == "transform":
+            m = np.array([float(x) for x in a["value"].split(",")]).reshape(4, 4) @ np.linalg.inv(old_w) @ new_w
+            node[2] = [(k, ", ".join(f"{x:.7g}" for x in m.reshape(16)) if k == "value" else v) for k, v in attrs]
+            moved += 1
+        for k in kids:
+            walk(k)
+
+    walk(tree)
+    return moved
+
+
 def check(data: bytes, grids: list[dict], game: Game) -> float:
     """Relê o arquivo gravado e devolve o maior erro de posição (m) contra o plano do editor."""
     f = PSSGFile(data)
@@ -136,6 +163,7 @@ def main() -> None:
     ap.add_argument("out")
     ap.add_argument("--track", default=TRACK)
     ap.add_argument("--host", default=HOST)
+    ap.add_argument("--host-triggers", default=HOST_TRIGGERS)
     a = ap.parse_args()
     grids = json.load(open(a.track))["routes"][0]["grids"]
     game = Game()
@@ -153,6 +181,12 @@ def main() -> None:
         o, n = start_frame(old), start_frame(new)
         print(f"{name:48s} {o[0]:8.2f} {o[1]:7.2f} {o[2]:6.2f} {o[3]:7.1f}   {n[0]:8.2f} {n[1]:7.2f} {n[2]:6.2f} {n[3]:7.1f}")
     print(f"{a.out}/grids.pssg: {len(changed)} nós, {len(data)} bytes, erro ao reler {worst * 1000:.2f} mm")
+    _, old_w, new_w = next(c for c in changed if c[0] == COMPOUND)
+    trig = cfgxml.decode(open(a.host_triggers, "rb").read())
+    moved = move_spare_wheels(trig, old_w, new_w)
+    with open(os.path.join(a.out, "triggers_game_object.xml"), "wb") as fh:
+        fh.write(cfgxml.encode(trig))
+    print(f"{a.out}/triggers_game_object.xml: {moved} estepes levados para o parque do Ring")
 
 
 if __name__ == "__main__":

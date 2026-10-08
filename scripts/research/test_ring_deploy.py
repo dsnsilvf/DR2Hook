@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 import numpy as np
@@ -118,6 +120,46 @@ class GameLogTest(unittest.TestCase):
             d = self._deploy(g)
             with self.assertRaisesRegex(RuntimeError, "travou"):
                 self._feed(d, g, b"[0] [ERROR] GhostLab[crash]: excecao 0xc0000005 rip=1\r\n")
+
+
+class CommandChannelTest(unittest.TestCase):
+    """Pausar/continuar do viewer: um lote pelo dr2hook_cmd.txt e a resposta no dr2hook_cmd.out."""
+
+    def test_answer_is_the_last_entry_of_the_command(self):
+        out = "# lote 7\n> status\ncorrida\n> pause\nok: pausa pedida\n"
+        self.assertEqual(ring_deploy.cmd_answer(out, "pause"), "ok: pausa pedida")
+        self.assertEqual(ring_deploy.cmd_answer(out, "status"), "corrida")
+        self.assertEqual(ring_deploy.cmd_answer(out, "unpause"), "")
+
+    def test_round_trip_with_a_fake_core(self):
+        with tempfile.TemporaryDirectory() as g:
+            with open(os.path.join(g, "dr2hook_cmd.out"), "w") as fh:
+                fh.write("# lote 1\n> pause\nresposta velha\n")
+            old = time.time() - 60  # o .out do lote anterior
+            os.utime(os.path.join(g, "dr2hook_cmd.out"), (old, old))
+
+            def core():  # lê e apaga, e só depois grava a resposta (como o remote_commands.cpp)
+                cmd = os.path.join(g, "dr2hook_cmd.txt")
+                while not os.path.exists(cmd):
+                    time.sleep(0.01)
+                line = open(cmd).read().strip()
+                os.remove(cmd)
+                time.sleep(0.1)
+                with open(os.path.join(g, "dr2hook_cmd.out"), "w") as fh:
+                    fh.write(f"# lote 2\n> {line}\nok: pausa pedida\n")
+
+            th = threading.Thread(target=core)
+            th.start()
+            try:
+                self.assertEqual(ring_deploy.send_command(g, "pause"), "ok: pausa pedida")
+            finally:
+                th.join()
+
+    def test_unread_command_is_removed(self):
+        with tempfile.TemporaryDirectory() as g:
+            with self.assertRaisesRegex(RuntimeError, "não leu"):
+                ring_deploy.send_command(g, "pause", timeout=0.2)
+            self.assertFalse(os.path.exists(os.path.join(g, "dr2hook_cmd.txt")))  # não roda no próximo boot
 
 
 if __name__ == "__main__":
