@@ -74,6 +74,7 @@ add_library(dxgi SHARED
     src/core/race_events.cpp
     src/core/pssg_patch.cpp
     src/core/vehicle_system_patch.cpp
+    src/core/splash_skip.cpp
     src/core/pause_menu.cpp
     src/core/native_screen.cpp
     src/core/ui_data.cpp

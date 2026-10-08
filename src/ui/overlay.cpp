@@ -74,8 +74,10 @@ std::string g_coverGpu;
 ID3D11BlendState *g_opaqueBlend = nullptr;
 // Foto da pista atrás do terminal (a mesma da tela de carregamento, gerada
 // pelo loading_screen.py): PPM binário RGB, carregado no 1º quadro da tela
-// preta. Tem prioridade sobre a cena do jogo.
+// preta. Fica só até a cena 3D do jogo começar; daí em diante o fundo é a
+// cena ao vivo (g_coverSceneSeen), sem voltar para a foto nos quadros vazios.
 std::string g_coverImagePath;
+bool g_coverSceneSeen = false;
 bool g_coverImageTried = false;
 ID3D11ShaderResourceView *g_coverImage = nullptr;
 float g_coverImageAspect = 1.0f;
@@ -312,7 +314,11 @@ bool DrawCoverImage() {
 
 // A cena sem mistura: o alfa de um alvo do jogo não é transparência.
 void DrawCoverScene() {
-  if (DrawCoverImage()) {
+  if (g_coverScene != nullptr && !g_coverSceneSeen) {
+    g_coverSceneSeen = true;
+    Logger::Info("LoadCover: fundo passou da foto para a cena ao vivo.");
+  }
+  if (!g_coverSceneSeen && DrawCoverImage()) {
     return;
   }
 #if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
@@ -633,6 +639,7 @@ bool OverlayManager::HandleWndProc(HWND hWnd, UINT msg, WPARAM wParam,
 void OverlayManager::SetLoadCover(bool on) {
   if (on && !g_loadCover) {
     g_term = LoadTerminal{};
+    g_coverSceneSeen = false;
   } else if (!on && g_loadCover && g_term.frames > 0) {
     char note[128];
     std::snprintf(note, sizeof note,

@@ -6,8 +6,9 @@ de carregamento). Cada saída fica em `build/re/ring_deploy/` e só é refeita q
 em `cache.json`: tamanho e data dos arquivos de entrada, conteúdo do edits.json, os scripts e os argumentos). Depois
 copia para a overlay o que mudou e, se pedido, reabre o jogo:
 
-- fecha o jogo aberto, apaga um `dr2hook_cmd.txt` velho (ele rodaria no boot) e liga o AutoStage
-  (`dr2hook_autostage.ini`: enabled = 1, once = 1, portugal / dr2hook_ring / route_0);
+- fecha o jogo aberto, apaga um `dr2hook_cmd.txt` velho (ele rodaria no boot), liga o AutoStage
+  (`dr2hook_autostage.ini`: enabled = 1, once = 1, portugal / dr2hook_ring / route_0) e o SplashSkip
+  (`dr2hook_intro.ini`: pular_splash=1; a `dxgi.dll` do jogo precisa tê-lo, ver boot_intro.md §4);
 - abre pela Steam e acompanha o `dr2hook.log` fase por fase (MILESTONES): o jogo iniciou (AutoStage), os dados
   base, a pista (andamento pela contagem de arquivos abertos, comparada com a da última vez) e a largada. As linhas
   do jogo que interessam vão para o log; um crash (`[crash]` no log) para na hora, mesmo com a janela de erro do
@@ -177,6 +178,14 @@ def set_ini(path: str, values: dict[str, str]) -> None:
         fh.write(text)
 
 
+def force_splash_skip(path: str) -> None:
+    """O editor abre o jogo sempre sem o splash do logo: pular_splash=1 no dr2hook_intro.ini (a dxgi lê `chave=valor`, sem espaços)."""
+    lines = open(path, encoding="utf-8").read().splitlines() if os.path.exists(path) else []
+    lines = [l for l in lines if not l.startswith("pular_splash=")] + ["pular_splash=1"]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
 class Deploy:
     def __init__(self, a, rep: Report):
         self.a, self.rep = a, rep
@@ -308,6 +317,7 @@ class Deploy:
             pass
         set_ini(os.path.join(g, "dr2hook_autostage.ini"),
                 {"enabled": "1", "once": "1", "location": LOCATION, "track": TRACK, "route": ROUTE})
+        force_splash_skip(os.path.join(g, "dr2hook_intro.ini"))
         quick = os.path.join(g, "dr2hook_quickload.ini")
         if self.a.quick:
             cover = os.path.join(ROOT, OVERLAY, "dr2hook", f"loadcover_{TRACK}_{ROUTE}.ppm")
@@ -408,6 +418,9 @@ class Deploy:
         ini = os.path.join(self.a.game, "dr2hook_loadprobe.ini")
         if not os.path.exists(os.path.join(self.a.game, "dr2hook_autostage.ini")):
             raise RuntimeError(f"não achei dr2hook_autostage.ini em {self.a.game}")
+        dxgi = os.path.join(self.a.game, "dxgi.dll")
+        if not os.path.exists(dxgi) or b"SplashSkip" not in open(dxgi, "rb").read():
+            raise RuntimeError("a dxgi.dll do jogo não tem o SplashSkip (copie a do build/win-redirect)")
         text = open(ini, encoding="utf-8", errors="replace").read() if os.path.exists(ini) else ""
         if not re.search(r"(?m)^enabled\s*=\s*1", text) or "overlay_dir" not in text \
                 or f"track_alias = {TRACK}=" not in text:
