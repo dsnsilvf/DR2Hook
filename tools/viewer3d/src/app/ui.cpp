@@ -1,5 +1,6 @@
 #include "app/ui.hpp"
 
+#include "edit/edits_json.hpp"
 #include "edit/history.hpp"
 #include "render/pick.hpp"
 #include "render/texture.hpp"
@@ -179,6 +180,7 @@ Rect EditorUi::frame(TrackView* track, render::OrbitCamera& cam, float fps) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    poll_launch();
     const ImGuiViewport* main = ImGui::GetMainViewport();
     const float W = main->Size.x, H = main->Size.y;
 
@@ -282,6 +284,16 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
             ImGui::MenuItem("Terreno distante", "F4", &track->layers().dist);
             ImGui::MenuItem("Portões", "G", &track->show_gates());
             ImGui::MenuItem("Linha da IA", "I", &track->show_ai());
+            ImGui::MenuItem("Câmeras do replay", "C", &track->show_replay());
+            if (ImGui::MenuItem("Ver pela próxima câmera", "Shift+C", false, !track->route().replay.cameras.empty())) {
+                const int n = static_cast<int>(track->route().replay.cameras.size());
+                track->look_through((track->replay_selected() + 1) % n, cam);
+            }
+            ImGui::MenuItem("Largada (onde o carro nasce)", "L", &track->show_grids());
+            if (ImGui::MenuItem("Ver da próxima vaga", "Shift+L", false, track->route().slot_count() > 0)) {
+                const Route& r = track->route();
+                track->look_from_slot(r.slot_at((r.slot_index(track->slot_selected()) + 1) % r.slot_count()), cam);
+            }
             ImGui::Separator();
         }
         ImGui::MenuItem("Painéis", "F10", &panels);
@@ -292,6 +304,7 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
         ImGui::MenuItem("Atalhos", "F11", &show_help_);
         ImGui::EndMenu();
     }
+    play_button(track);
     ImGui::EndMainMenuBar();
 }
 
@@ -396,6 +409,8 @@ void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect
     tooltip("Mostrar o terreno (F1)");
     ImGui::SameLine();
     ImGui::TextUnformatted(("Terreno  " + std::to_string(track.terrain().meshes()) + " malhas").c_str());
+    grids_tree(track, cam);
+    replay_tree(track, cam);
     for (const LayerRow& row : rows) {
         std::size_t n_types = 0, n_inst = 0;
         for (const auto& ty : types)
@@ -487,6 +502,132 @@ void EditorUi::scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect
         }
         ImGui::EndChild();
     }
+}
+
+void EditorUi::grids_tree(TrackView& track, render::OrbitCamera& cam) {
+    const Route& route = track.route();
+    if (route.grids.empty()) return;
+    ImGui::PushID("grids");
+    ImGui::Checkbox("##on", &track.show_grids());
+    tooltip("Mostrar as vagas de largada (L)");
+    ImGui::SameLine();
+    char label[96];
+    std::snprintf(label, sizeof label, "Largada (%d vagas)", route.slot_count());
+    const int flat = route.slot_index(track.slot_selected());
+    if (flat != last_slot_sel_) {  // Shift+L ou --look abrem a lista na vaga nova
+        last_slot_sel_ = flat;
+        if (flat >= 0) ImGui::SetNextItemOpen(true);
+    }
+    if (ImGui::TreeNodeEx(label)) {
+        const SlotRef sel = track.slot_selected();
+        if (ImGui::Button("Ver do carro") && sel) track.look_from_slot(sel, cam);
+        tooltip("Põe a vista no banco do piloto da vaga em destaque (Shift+L: próxima)");
+        ImGui::SameLine();
+        if (ImGui::Button("Enquadrar##vaga") && sel) track.frame_slot(sel, cam);
+        tooltip("Vista de trás e de cima da vaga");
+        if (const GridSlot* s = route.slot(sel)) {
+            const Grid& g = route.grids[static_cast<std::size_t>(sel.grid)];
+            ImGui::TextColored(kGreen, "%s / %s", g.name.c_str(), s->name.c_str());
+            ImGui::Text("%s", g.role.c_str());
+            ImGui::Text("pos %.1f %.1f %.1f", s->pos[0], s->pos[1], s->pos[2]);
+            if (s->s >= 0) ImGui::Text("na pista em %.0f m, %.1f m %s do centro", s->s, std::fabs(s->lat), s->lat >= 0 ? "à esquerda" : "à direita");
+            ImGui::Text("caixa %.1f × %.1f m", s->width, s->length);
+            float center = 0, wheels = 0;
+            if (!track.slot_clearance(*s, center, wheels)) {
+                ImGui::TextColored(kYellow, "sem terreno embaixo");
+            } else {
+                const bool low = wheels < TrackView::kSlotLow, high = center > TrackView::kSlotHigh;
+                const ImVec4 color = low ? kRed : high ? kYellow : kGreen;
+                ImGui::TextColored(color, "acima do chão: %.2f m (rodas %.2f m)", center, wheels);
+                if (low) ImGui::TextWrapped("dentro do chão: no jogo o carro nasce enterrado e a carga trava");
+                else if (high) ImGui::TextWrapped("alto demais: o carro cai ao nascer");
+            }
+        }
+        for (std::size_t g = 0; g < route.grids.size(); ++g) {
+            const Grid& grid = route.grids[g];
+            const bool here = sel && sel.grid == static_cast<int>(g);
+            if (here && flat != last_slot_open_) ImGui::SetNextItemOpen(true);
+            const std::string head = grid.name + "  " + grid.role + "  (" + std::to_string(grid.slots.size()) + ")###g" + std::to_string(g);
+            if (ImGui::TreeNodeEx(head.c_str(), g == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                for (std::size_t k = 0; k < grid.slots.size(); ++k) {
+                    const GridSlot& s = grid.slots[k];
+                    const SlotRef ref{static_cast<int>(g), static_cast<int>(k)};
+                    char text[96];
+                    std::snprintf(text, sizeof text, "%s  %.0f m%s###s%zu", s.name.c_str(), s.s, s.lat ? (s.lat > 0 ? "  esq." : "  dir.") : "", k);
+                    if (ImGui::Selectable(text, here && sel.slot == static_cast<int>(k), ImGuiSelectableFlags_AllowDoubleClick)) {
+                        track.select_slot(ref);
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) track.look_from_slot(ref, cam);
+                    }
+                }
+                if (!grid.markers.empty()) ImGui::TextDisabled("%zu nós de apoio sem carro", grid.markers.size());
+                ImGui::TreePop();
+            }
+        }
+        last_slot_open_ = flat;
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
+void EditorUi::replay_tree(TrackView& track, render::OrbitCamera& cam) {
+    const Replay& rep = track.route().replay;
+    if (rep.cameras.empty() && rep.zones.empty()) return;
+    ImGui::PushID("replay");
+    ImGui::Checkbox("##on", &track.show_replay());
+    tooltip("Mostrar câmeras, zonas e prismas do replay (C)");
+    ImGui::SameLine();
+    char label[96];
+    std::snprintf(label, sizeof label, "Câmeras do replay (%zu)", rep.cameras.size());
+    if (track.replay_selected() != last_replay_sel_) {  // Shift+C ou --look abrem a lista na câmera nova
+        last_replay_sel_ = track.replay_selected();
+        if (last_replay_sel_ >= 0) ImGui::SetNextItemOpen(true);
+    }
+    if (ImGui::TreeNodeEx(label)) {
+        const int sel = track.replay_selected();
+        if (ImGui::Button("Ver por esta câmera") && sel >= 0) track.look_through(sel, cam);
+        tooltip("Põe a vista no lugar da câmera em destaque, olhando para onde ela olha (Shift+C: próxima)");
+        if (sel >= 0) {
+            const ReplayCamera& c = rep.cameras[static_cast<std::size_t>(sel)];
+            ImGui::TextColored(kGreen, "%s", c.name.c_str());
+            ImGui::Text("%s%s%s", c.kind.c_str(), c.role.empty() ? "" : " · ", c.role.c_str());
+            ImGui::Text("pos %.1f %.1f %.1f", c.pos[0], c.pos[1], c.pos[2]);
+            if (c.s >= 0) ImGui::Text("na pista em %.0f m", c.s);
+            if (!c.path.empty())
+                ImGui::Text("caminho: %zu trechos, %.1f s%s", c.path.size() / 4, c.duration, c.target.empty() ? "" : ", com alvo");
+            std::string by;
+            for (const ReplayZone& z : rep.zones)
+                for (const ReplaySwitch& w : z.sw)
+                    if (w.camera == c.name) by += (by.empty() ? "" : ", ") + z.name + " (" + std::to_string(static_cast<int>(w.p * 100 + 0.5)) + "%)";
+            ImGui::TextWrapped("ligada por: %s", by.empty() ? "nenhuma zona (tomada do jogo)" : by.c_str());
+        }
+        for (std::size_t i = 0; i < rep.cameras.size(); ++i) {
+            const ReplayCamera& c = rep.cameras[i];
+            const std::string text = c.name + "  " + (c.role.empty() ? c.kind : c.role) + "###c" + std::to_string(i);
+            if (ImGui::Selectable(text.c_str(), static_cast<int>(i) == sel, ImGuiSelectableFlags_AllowDoubleClick)) {
+                track.select_replay(static_cast<int>(i));
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) track.look_through(static_cast<int>(i), cam);
+            }
+        }
+        std::snprintf(label, sizeof label, "Zonas de troca (%zu)", rep.zones.size());
+        if (ImGui::TreeNodeEx(label)) {
+            for (std::size_t i = 0; i < rep.zones.size(); ++i) {
+                const ReplayZone& z = rep.zones[i];
+                std::string text = z.name + "  " + std::to_string(static_cast<int>(z.s)) + " m";
+                if (z.lap > 0) text += "  (volta " + std::to_string(z.lap) + ")";
+                const int target = z.sw.empty() ? -1 : rep.find(z.sw.front().camera);
+                if (ImGui::Selectable((text + "###z" + std::to_string(i)).c_str(), target >= 0 && target == sel)) track.select_replay(target);
+                if (ImGui::IsItemHovered()) {
+                    std::string tip;
+                    for (const ReplaySwitch& w : z.sw) tip += w.camera + "  " + std::to_string(static_cast<int>(w.p * 100 + 0.5)) + "%\n";
+                    ImGui::SetTooltip("%s", tip.c_str());
+                }
+            }
+            ImGui::TreePop();
+        }
+        ImGui::TextDisabled("%zu prismas em volta das peças altas", rep.bounds.size());
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
 }
 
 void EditorUi::inspector(TrackView& track, render::OrbitCamera& cam, const Rect&) {
@@ -776,7 +917,10 @@ void EditorUi::help_window() {
         {"Tab / Shift+Tab", "próxima / anterior rota"},
         {"F1 F2 F3 F4", "terreno, objetos, árvores, terreno distante"},
         {"G / I", "portões / linha da IA"},
+        {"C / Shift+C", "câmeras do replay / ver pela próxima"},
+        {"L / Shift+L", "largada (vagas do carro) / ver da próxima vaga"},
         {"[ / ]", "distância de desenho"},
+        {"F5", "testar no jogo (porta a pista e abre o jogo nela)"},
         {"F10 / F11", "painéis / esta janela"},
     };
     if (ImGui::BeginTable("##atalhos", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -793,6 +937,7 @@ void EditorUi::help_window() {
 }
 
 void EditorUi::modals(TrackView* track) {
+    launch_modal(track);
     if (pending_ != Pending::None && !ImGui::IsPopupOpen("Edições não gravadas")) ImGui::OpenPopup("Edições não gravadas");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (!ImGui::BeginPopupModal("Edições não gravadas", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
@@ -817,6 +962,217 @@ void EditorUi::modals(TrackView* track) {
     if (ImGui::Button(quit ? "Sair sem gravar" : "Abrir sem gravar")) done(true);
     ImGui::SameLine();
     if (ImGui::Button("Cancelar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) done(false);
+    ImGui::EndPopup();
+}
+
+// ---- Testar no jogo (F5)
+
+namespace {
+
+// Só o Ring tem o porte para o jogo (scripts/research/ring_deploy.py).
+constexpr const char* kPortedTrack = "synthetic__dr2hook_ring";
+const char* const kModeArg[] = {"bot", "drive", "freecam"};
+
+}  // namespace
+
+void EditorUi::open_launch(TrackView* track) {
+    if (!track) {
+        show_message("Testar no jogo: abra uma pista antes");
+        return;
+    }
+    // com um teste rodando, mostra o progresso; senão, as opções de um teste novo
+    if (!launch_.child.running()) launch_.started = false;
+    launch_.open = true;
+}
+
+void EditorUi::poll_launch() {
+    const bool was = launch_.child.running();
+    launch_.child.poll(launch_.progress);
+    if (!was || launch_.child.running()) return;
+    launch_.finished_at = launch_.child.seconds();
+    const Progress& p = launch_.progress;
+    show_message(p.state == Progress::State::Done ? "Testar no jogo: " + p.result : "Testar no jogo falhou: " + p.result);
+}
+
+void EditorUi::play_button(TrackView* track) {
+    const float h = ImGui::GetFrameHeight();
+    const float w = std::round(h * 1.8f);
+    const float mid = (ImGui::GetWindowWidth() - w) * 0.5f;
+    if (ImGui::GetCursorPosX() < mid) ImGui::SetCursorPosX(mid);
+    const bool busy = launch_.child.running();
+    const ImVec4 base = busy ? ImVec4(0.60f, 0.42f, 0.10f, 1.0f) : ImVec4(0.16f, 0.52f, 0.24f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, base);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(base.x * 1.25f, base.y * 1.25f, base.z * 1.25f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(base.x * 0.8f, base.y * 0.8f, base.z * 0.8f, 1.0f));
+    ImGui::BeginDisabled(!track);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    if (ImGui::Button("##testar", ImVec2(w, h))) open_launch(track);
+    ImGui::EndDisabled();
+    ImGui::PopStyleColor(3);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p0.x + w * 0.5f, p0.y + h * 0.5f);
+    const float r = h * 0.28f;
+    const ImU32 white = ImGui::GetColorU32(track ? ImVec4(1, 1, 1, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1));
+    if (busy) {  // rodando: a barra enche dentro do botão
+        const float f = launch_.progress.fraction;
+        dl->AddRectFilled(ImVec2(p0.x + 3, p0.y + h - 5), ImVec2(p0.x + 3 + (w - 6) * f, p0.y + h - 2), white);
+        dl->AddRectFilled(ImVec2(c.x - r * 0.75f, c.y - r * 0.85f), ImVec2(c.x - r * 0.2f, c.y + r * 0.55f), white);
+        dl->AddRectFilled(ImVec2(c.x + r * 0.2f, c.y - r * 0.85f), ImVec2(c.x + r * 0.75f, c.y + r * 0.55f), white);
+    } else {
+        dl->AddTriangleFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.8f, c.y + r), ImVec2(c.x + r, c.y), white);
+    }
+    if (busy) {
+        tooltip(("Testando no jogo: " + launch_.progress.label + " (" +
+                 std::to_string(static_cast<int>(launch_.progress.fraction * 100.0f)) + "%). Clique ou F5 para ver")
+                    .c_str());
+    } else {
+        tooltip("Testar no jogo (F5): porta a pista para a overlay e abre o jogo nela");
+    }
+}
+
+void EditorUi::start_launch(TrackView& track) {
+    Launch& L = launch_;
+    L.progress = Progress{};
+    L.finished_at = -1.0;
+    L.started = true;
+    L.follow_log = true;
+    const std::string repo = find_repo(track.track().dir);
+    if (repo.empty()) {
+        L.progress.feed("@fail não achei scripts/research/ring_deploy.py (rode o viewer da raiz do repositório)");
+        return;
+    }
+    // as edições do jeito que estão agora, gravadas ou não (o edits.json do usuário não muda)
+    const std::string edits = repo + "/build/re/ring_deploy/viewer.edits.json";
+    try {
+        edit::write_text(edits, track.current_edits());
+    } catch (const std::exception& e) {
+        L.progress.feed(std::string("@fail não gravei as edições do teste: ") + e.what());
+        return;
+    }
+    std::vector<std::string> argv = {"python3", "-u", repo + "/scripts/research/ring_deploy.py", "--mode", kModeArg[L.mode],
+                                     "--edits", edits};
+    if (L.quick) argv.push_back("--quick");
+    std::string cmd;
+    for (std::size_t k = 2; k < argv.size(); ++k) cmd += (k > 2 ? " " : "") + argv[k];
+    L.progress.log.push_back("$ " + cmd);
+    std::string err;
+    if (!L.child.start(argv, err)) L.progress.feed("@fail " + err);
+}
+
+void EditorUi::launch_modal(TrackView* track) {
+    Launch& L = launch_;
+    const char* const title = "Testar no jogo";
+    if (L.open) {
+        if (!ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
+        L.open = false;
+    }
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+    const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+    const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+    if (!L.started) {
+        // ---- opções
+        const bool ring = track && track->track().id == kPortedTrack;
+        const std::string repo = track ? find_repo(track->track().dir) : std::string();
+        ImGui::TextUnformatted("Pista:");
+        ImGui::SameLine();
+        ImGui::TextColored(kGreen, "%s", track ? track->track().id.c_str() : "(nenhuma)");
+        ImGui::SameLine();
+        ImGui::TextDisabled("route_0");
+        ImGui::Spacing();
+        ImGui::Checkbox("Inicialização rápida", &L.quick);
+        tooltip("Pula a tela de carregamento: a foto aérea renderizada e o traçado (fica a da última vez). Economiza "
+                "uns 20 s. No jogo, tela preta com o log ao vivo e sem som do boot até a largada. As outras etapas só refazem o que mudou");
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Quem dirige");
+        static const char* const modes[] = {"Bot dirige", "Eu dirijo", "Câmera livre"};
+        static const char* const tips[] = {
+            "O AutoStage abre a pista pelo benchmark do jogo: o carro anda sozinho e a câmera segue o carro",
+            "Ainda não: o AutoStage usa o benchmark, que não passa o controle ao jogador. Falta achar como "
+            "(engenharia reversa do benchmark)",
+            "O bot dirige e a câmera fica solta (o teste manda F9 na largada; no jogo, F9 alterna)"};
+        for (int k = 0; k < 3; ++k) {
+            ImGui::BeginDisabled(k == 1);
+            if (ImGui::RadioButton(modes[k], L.mode == k)) L.mode = k;
+            if (k == 1) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(ainda não)");
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tips[k]);
+        }
+        ImGui::Separator();
+        if (track && track->unsaved()) ImGui::TextColored(kYellow, "As edições não gravadas entram no teste (o edits.json fica como está).");
+        if (track && track->route().name != "route_0")
+            ImGui::TextColored(kYellow, "O teste leva só a route_0; as edições da %s ficam de fora.", track->route().name.c_str());
+        if (track && !ring) ImGui::TextColored(kRed, "Só o DR2 Hook Ring (%s) tem o porte para o jogo por enquanto.", kPortedTrack);
+        if (ring && repo.empty()) ImGui::TextColored(kRed, "Não achei scripts/research/ring_deploy.py: rode o viewer da raiz do repositório.");
+        ImGui::TextDisabled("Fecha o jogo se estiver aberto e o abre direto na pista.");
+        ImGui::Spacing();
+        const bool can = ring && !repo.empty();
+        ImGui::BeginDisabled(!can);
+        const bool go = ImGui::Button("Iniciar (Enter)") || (can && enter);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancelar (Esc)") || esc) {
+            ImGui::CloseCurrentPopup();
+        } else if (go && track) {
+            start_launch(*track);
+        }
+        ImGui::TextDisabled("↑↓ quem dirige · R rápida");
+        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) L.quick = !L.quick;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) L.mode = L.mode == 2 ? 0 : 2;  // pula o "Eu dirijo"
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) L.mode = L.mode == 0 ? 2 : 0;
+        ImGui::EndPopup();
+        return;
+    }
+
+    // ---- progresso
+    const Progress& p = L.progress;
+    const bool busy = L.child.running();
+    const float width = std::max(560.0f, ImGui::GetMainViewport()->Size.x * 0.4f);
+    if (p.steps > 0) ImGui::Text("Etapa %d de %d: %s", p.step, p.steps, p.label.c_str());
+    else ImGui::TextUnformatted(busy ? "Começando…" : "");
+    const double secs = busy ? L.child.seconds() : std::max(0.0, L.finished_at);
+    char overlay[64];
+    std::snprintf(overlay, sizeof overlay, "%d%%  ·  %.0f s", static_cast<int>(p.fraction * 100.0f + 0.5f), secs);
+    const ImVec4 bar = p.state == Progress::State::Failed ? ImVec4(0.70f, 0.25f, 0.22f, 1.0f) : ImVec4(0.20f, 0.60f, 0.28f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, bar);
+    ImGui::ProgressBar(p.fraction, ImVec2(width, 0), overlay);
+    ImGui::PopStyleColor();
+    const float log_h = ImGui::GetTextLineHeightWithSpacing() * 14;
+    if (ImGui::BeginChild("##log", ImVec2(width, log_h), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+        for (const std::string& line : p.log) {
+            const bool err = line.rfind("erro:", 0) == 0;
+            const bool ok = line.rfind("pronto:", 0) == 0;
+            const bool head = line.rfind("– ", 0) == 0;
+            if (err || ok || head) ImGui::PushStyleColor(ImGuiCol_Text, err ? kRed : ok ? kGreen : kYellow);
+            ImGui::TextUnformatted(line.c_str());
+            if (err || ok || head) ImGui::PopStyleColor();
+        }
+        // segue o fim enquanto ninguém rolou para cima
+        if (L.follow_log) ImGui::SetScrollHereY(1.0f);
+        L.follow_log = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0f;
+    }
+    ImGui::EndChild();
+    if (p.state == Progress::State::Done) ImGui::TextColored(kGreen, "Pronto: %s", p.result.c_str());
+    else if (p.state == Progress::State::Failed) ImGui::TextColored(kRed, "Falhou: %s", p.result.c_str());
+    else ImGui::TextDisabled("O editor segue usável: Esconder deixa o teste rodando (o botão verde mostra o andamento).");
+    ImGui::Spacing();
+    if (busy) {
+        if (ImGui::Button("Esconder (Esc)") || esc) ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancelar o teste")) {
+            L.child.terminate();
+            L.progress.feed("@fail cancelado (o jogo, se já abriu, continua aberto)");
+        }
+    } else {
+        if (ImGui::Button("Fechar (Enter)") || enter || esc) ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if (ImGui::Button("Testar de novo (F5)") || ImGui::IsKeyPressed(ImGuiKey_F5, false)) L.started = false;
+    }
     ImGui::EndPopup();
 }
 

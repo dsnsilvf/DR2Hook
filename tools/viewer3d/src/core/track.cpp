@@ -15,6 +15,95 @@ Vec3 vec3(const json::Value& v) {
     return {static_cast<float>(v[0].as_number()), static_cast<float>(v[1].as_number()), static_cast<float>(v[2].as_number())};
 }
 
+std::string str(const json::Value& v, std::string_view key) {
+    const json::Value* x = v.find(key);
+    return x && x->is_string() ? x->as_string() : std::string();
+}
+
+std::vector<Vec3> points(const json::Value& v, std::string_view key) {
+    std::vector<Vec3> out;
+    if (const json::Value* a = v.find(key))
+        for (const json::Value& p : a->as_array()) out.push_back(vec3(p));
+    return out;
+}
+
+Replay read_replay(const json::Value& rep) {
+    Replay out;
+    if (const json::Value* cams = rep.find("cameras")) {
+        for (const json::Value& c : cams->as_array()) {
+            ReplayCamera cam;
+            cam.name = str(c, "name");
+            cam.kind = str(c, "kind");
+            cam.role = str(c, "role");
+            cam.s = c.number_or("s", -1.0);
+            cam.pos = vec3(c["pos"]);
+            cam.aim = c.find("aim") ? vec3(c["aim"]) : cam.pos;
+            cam.path = points(c, "path");
+            cam.target = points(c, "target");
+            cam.duration = c.number_or("duration", 0.0);
+            out.cameras.push_back(std::move(cam));
+        }
+    }
+    if (const json::Value* zones = rep.find("zones")) {
+        for (const json::Value& z : zones->as_array()) {
+            ReplayZone zone;
+            zone.name = str(z, "name");
+            zone.s = z.number_or("s", 0.0);
+            zone.l = vec3(z["l"]);
+            zone.r = vec3(z["r"]);
+            zone.lap = static_cast<int>(z.number_or("lap", 0.0));
+            if (const json::Value* sw = z.find("switch"))
+                for (const json::Value& w : sw->as_array()) zone.sw.push_back({str(w, "camera"), w.number_or("p", 0.0)});
+            out.zones.push_back(std::move(zone));
+        }
+    }
+    if (const json::Value* bounds = rep.find("bounds")) {
+        for (const json::Value& b : bounds->as_array()) {
+            ReplayBound bound;
+            bound.name = str(b, "name");
+            const json::Value& cs = b["corners"];
+            if (cs.size() != 4) throw std::runtime_error("track.json: prisma do replay sem 4 cantos");
+            for (std::size_t k = 0; k < 4; ++k)
+                bound.corners[k] = {static_cast<float>(cs[k][0].as_number()), static_cast<float>(cs[k][1].as_number())};
+            bound.y0 = static_cast<float>(b.number_or("y0", 0.0));
+            bound.y1 = static_cast<float>(b.number_or("y1", 0.0));
+            out.bounds.push_back(std::move(bound));
+        }
+    }
+    return out;
+}
+
+GridSlot read_slot(const json::Value& v) {
+    GridSlot slot;
+    slot.name = str(v, "name");
+    slot.pos = vec3(v["pos"]);
+    if (v.find("fwd")) slot.fwd = vec3(v["fwd"]);
+    slot.s = v.number_or("s", -1.0);
+    slot.lat = v.number_or("lat", 0.0);
+    if (const json::Value* sz = v.find("size"); sz && sz->size() >= 2) {
+        slot.width = static_cast<float>((*sz)[0].as_number());
+        slot.length = static_cast<float>((*sz)[1].as_number());
+    }
+    return slot;
+}
+
+std::vector<Grid> read_grids(const json::Value& grids) {
+    std::vector<Grid> out;
+    for (const json::Value& g : grids.as_array()) {
+        Grid grid;
+        grid.name = str(g, "name");
+        grid.role = str(g, "role");
+        grid.pos = vec3(g["pos"]);
+        if (g.find("fwd")) grid.fwd = vec3(g["fwd"]);
+        if (const json::Value* sl = g.find("slots"))
+            for (const json::Value& v : sl->as_array()) grid.slots.push_back(read_slot(v));
+        if (const json::Value* mk = g.find("markers"))
+            for (const json::Value& v : mk->as_array()) grid.markers.push_back(read_slot(v));
+        out.push_back(std::move(grid));
+    }
+    return out;
+}
+
 std::size_t count(const json::Value& v, std::string_view key) {
     const double d = v.number_or(key, 0.0);
     return d > 0 ? static_cast<std::size_t>(d) : 0;
@@ -54,6 +143,8 @@ Track read_track(const std::string& dir) {
         if (const json::Value* ids = r.find("ens_ids")) {
             for (const json::Value& s : ids->as_array()) route.ens_ids.push_back(s.is_string() ? s.as_string() : std::string());
         }
+        if (const json::Value* rep = r.find("replay")) route.replay = read_replay(*rep);
+        if (const json::Value* grids = r.find("grids")) route.grids = read_grids(*grids);
         t.routes.push_back(std::move(route));
     }
     if (t.routes.empty()) throw std::runtime_error("track.json: nenhuma rota");

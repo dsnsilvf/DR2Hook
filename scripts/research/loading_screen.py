@@ -405,6 +405,26 @@ def read_game_pssg(game: str) -> bytes:
     return _open(game, "game_1.dat").read(PSSG_PATH)
 
 
+COVER_SIZE = (1600, 900)  # foto do fundo da carga rápida (PPM lido pelo overlay do core)
+
+
+def cover_path(overlay: str, name: str, route: str) -> str:
+    return os.path.join(overlay, "dr2hook", f"loadcover_{name}_{route}.ppm")
+
+
+def write_cover(path: str, aerial, spline) -> None:
+    """Foto aérea com o traçado (canal R do _spline) em branco por cima, reduzida para COVER_SIZE."""
+    from PIL import Image
+
+    s, ox, oy = SPLINE_TO_PHOTO
+    photo = aerial.convert("RGB")
+    size = (round(spline.width * s), round(spline.height * s))
+    line = spline.split()[0].resize(size, Image.LANCZOS)
+    photo.paste(Image.new("RGB", size, (255, 255, 255)), (round(ox), round(oy)), line)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    photo.resize(COVER_SIZE, Image.LANCZOS).save(path, format="PPM")
+
+
 def main() -> None:
     from tools.egodata.cli import DEFAULT_GAME
 
@@ -466,6 +486,10 @@ def main() -> None:
     imgs = [(spline_name, spline)]
     if aerial is not None:
         imgs.append((image_name, aerial))
+    if aerial is not None:
+        cover = cover_path(args.overlay, args.name, args.route)
+        write_cover(cover, aerial, spline)
+        print(f"  {cover} (fundo da carga rápida)")
     for tpk_name, img in imgs:
         write_tpk(os.path.join(loading_dir, tpk_name + ".tpk"), template, tpk_name, img)
         print(f"  {tpk_name}.tpk ({img.width}×{img.height})")

@@ -3,6 +3,7 @@
 // painel só chama a API do TrackView.
 #pragma once
 
+#include "app/launch.hpp"
 #include "app/track_view.hpp"
 #include "render/camera.hpp"
 
@@ -61,15 +62,24 @@ public:
     }
     bool panels = true;  // barra de ferramentas, Cena e Inspector (F10; o menu e o status ficam)
     void toggle_help() { show_help_ = !show_help_; }
+    // "Testar no jogo" (F5 ou o botão verde da barra de menu): abre a janela de opções ou, com um teste
+    // rodando, a do progresso.
+    void open_launch(TrackView* track);
 
 private:
     void menu_bar(TrackView* track, render::OrbitCamera& cam);
     void toolbar(TrackView& track);
     void scene_tree(TrackView& track, render::OrbitCamera& cam, const Rect& area);
     void inspector(TrackView& track, render::OrbitCamera& cam, const Rect& area);
+    void replay_tree(TrackView& track, render::OrbitCamera& cam);
+    void grids_tree(TrackView& track, render::OrbitCamera& cam);
     void status_bar(TrackView* track, float fps, const Rect& area);
     void modals(TrackView* track);
     void help_window();
+    void play_button(TrackView* track);
+    void poll_launch();
+    void launch_modal(TrackView* track);
+    void start_launch(TrackView& track);
     std::string sel_hint(const TrackView& track) const;
     void scan_tracks();
 
@@ -95,6 +105,8 @@ private:
     float gizmo_ang0_ = 0.0f;
     bool scroll_to_sel_ = false;
     int last_sel_ = -1;
+    int last_replay_sel_ = -1;
+    int last_slot_sel_ = -1, last_slot_open_ = -1;  // vaga de largada em destaque: abre a lista e a grade dela
     std::string message_;
     std::chrono::steady_clock::time_point message_time_{};
     double message_age() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - message_time_).count(); }
@@ -102,6 +114,18 @@ private:
     bool imgui_keys_[SDL_SCANCODE_COUNT] = {};  // teclas cujo apertar foi ao ImGui (a soltura também vai)
     std::vector<std::string> tracks_;  // pastas em build/uiview/tracks e depois em examples/tracks
     bool tracks_scanned_ = false;
+
+    // Testar no jogo: opções (ficam para a próxima vez), o filho e o progresso dele.
+    struct Launch {
+        bool open = false;     // pedir para abrir a janela no próximo quadro
+        bool quick = true;     // pula a foto aérea da tela de carregamento
+        int mode = 0;          // 0 bot dirige, 1 eu dirijo (ainda não), 2 câmera livre
+        bool started = false;  // já houve um teste (a janela mostra o progresso em vez das opções)
+        bool follow_log = true;
+        ChildProcess child;
+        Progress progress;
+        double finished_at = -1.0;  // segundos do filho quando acabou (para o "levou X s")
+    } launch_;
 };
 
 }  // namespace dr2::app

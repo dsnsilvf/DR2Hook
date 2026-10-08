@@ -12,6 +12,7 @@
 #include "core/grid.hpp"
 #include "core/io.hpp"
 #include "core/json.hpp"
+#include "core/progress.hpp"
 #include "core/track.hpp"
 
 #include <cassert>
@@ -259,6 +260,37 @@ void test_track(const std::string& dir) {
     check(t.meshes == r0.terrain_meshes, "track: malhas do terreno batem com routes[0].terrain.meshes");
     check(t.verts == r0.terrain_verts, "track: vértices do terreno batem com routes[0].terrain.verts");
     check(!r0.gates.empty() || !r0.ai.empty(), "track: rota com portões ou linha da IA");
+    if (!r0.replay.cameras.empty()) {  // pista do synthtrack: câmeras do replay
+        const dr2::Replay& rep = r0.replay;
+        bool paths = true, zones = true;
+        for (const dr2::ReplayCamera& c : rep.cameras) paths = paths && c.path.size() % 4 == 0 && c.target.size() % 4 == 0;
+        for (const dr2::ReplayZone& z : rep.zones) {
+            double p = 0;
+            for (const dr2::ReplaySwitch& w : z.sw) p += w.p;
+            zones = zones && !z.sw.empty() && std::fabs(p - 1.0) < 1e-6;
+        }
+        check(paths, "replay: caminhos em trechos de 4 pontos");
+        check(zones, "replay: probabilidades das zonas somam 1");
+        check(rep.find("Grid_Start_Cam_00") >= 0 && rep.find("nada") < 0, "replay: find por nome");
+        const int g = rep.find("Grid_Start_Cam_00");
+        check(!rep.cameras[static_cast<std::size_t>(g)].path.empty() && rep.cameras[static_cast<std::size_t>(g)].duration > 0, "replay: câmera do grid com caminho e duração");
+        check(!rep.bounds.empty() && rep.bounds[0].y0 < rep.bounds[0].y1, "replay: prismas");
+    }
+    if (!r0.grids.empty()) {  // pista do synthtrack: vagas de largada
+        check(r0.slot_count() == 37, "grids: 37 vagas (1+10+10+12+4)");
+        const dr2::SlotRef tt = r0.find_slot("slot_0");
+        check(tt && r0.grids[static_cast<std::size_t>(tt.grid)].name == "grid_time_trial_0", "grids: slot_0 é do contra-relógio");
+        const dr2::SlotRef st = r0.find_slot("grid_start_standing_01/slot_05");
+        check(st && r0.slot(st)->name == "slot_05" && !r0.find_slot("grid_time_trial_0/slot_05") && !r0.find_slot("nada"),
+              "grids: find_slot com grade/vaga");
+        bool round = true;
+        for (int k = 0; k < r0.slot_count(); ++k) round = round && r0.slot_index(r0.slot_at(k)) == k;
+        check(round && !r0.slot_at(r0.slot_count()) && r0.slot_index(dr2::SlotRef{}) < 0, "grids: slot_at/slot_index ida e volta");
+        const dr2::GridSlot* s = r0.slot(tt);
+        check(s && std::fabs(std::sqrt(s->fwd[0] * s->fwd[0] + s->fwd[1] * s->fwd[1] + s->fwd[2] * s->fwd[2]) - 1.0) < 1e-3 && s->width > 2.0f,
+              "grids: vaga com frente unitária e caixa");
+        check(!r0.grids[0].markers.empty(), "grids: nós de apoio lidos");
+    }
 
     std::size_t missing = 0;
     for (const auto& [mat, file] : track.materials)
@@ -306,6 +338,37 @@ void test_track(const std::string& dir) {
 
 }  // namespace
 
+// Protocolo do ring_deploy.py (Testar no jogo, F5).
+void test_progress() {
+    dr2::Progress p;
+    p.feed("@step 2 5 Colisão (track.jpk)");
+    check(p.step == 2 && p.steps == 5 && p.label == "Colisão (track.jpk)", "progress: @step");
+    p.feed("@progress 0.40\r");
+    check(std::fabs(p.fraction - 0.4f) < 1e-6f, "progress: @progress com \\r");
+    p.feed("@progress 0.2");
+    check(std::fabs(p.fraction - 0.4f) < 1e-6f, "progress: não volta");
+    p.feed("@progress 7");
+    check(p.fraction == 1.0f, "progress: limitado a 1");
+    p.feed("@step 9 5 errado");
+    p.feed("@qualquer coisa");
+    p.feed("  log comum");
+    check(p.step == 2 && p.log.back() == "  log comum" && p.log[p.log.size() - 2] == "@qualquer coisa", "progress: @ inválido é log");
+    p.feed("@fail o jogo fechou");
+    check(p.state == dr2::Progress::State::Failed && p.result == "o jogo fechou", "progress: @fail");
+    p.feed("@done tarde demais");
+    p.exited(0);
+    check(p.state == dr2::Progress::State::Failed && p.result == "o jogo fechou", "progress: o primeiro fim vale");
+    dr2::Progress q;
+    q.max_log = 3;
+    for (int k = 0; k < 10; ++k) q.feed(std::to_string(k));
+    check(q.log.size() == 3 && q.log.front() == "7", "progress: log limitado");
+    q.exited(143);
+    check(q.state == dr2::Progress::State::Failed && q.result.find("143") != std::string::npos, "progress: saída sem @done");
+    dr2::Progress d;
+    d.feed("@done na pista");
+    check(d.state == dr2::Progress::State::Done && d.fraction == 1.0f && d.result == "na pista", "progress: @done");
+}
+
 int main(int argc, char** argv) {
     std::string track_dir;
     for (int i = 1; i < argc; ++i) {
@@ -321,6 +384,7 @@ int main(int argc, char** argv) {
         test_dr2m_synthetic();
         test_dr2i_synthetic();
         test_grid();
+        test_progress();
         if (!track_dir.empty()) test_track(track_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FALHOU com exceção: %s\n", e.what());

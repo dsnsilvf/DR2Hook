@@ -258,6 +258,8 @@ void TrackView::load_route(std::size_t index) {
     }
     objects_->regroup(inst_);
     sel_ = -1;
+    replay_sel_ = -1;
+    slot_sel_ = {};
     drag_ = EditDrag{};
     ++edit_rev_;
     std::fprintf(stderr, "viewer3d: rota %s (%zu de %zu), %u instâncias\n", route_->name.c_str(), index + 1, track_.routes.size(),
@@ -339,6 +341,22 @@ bool TrackView::key(SDL_Keycode key, SDL_Keymod mod, render::OrbitCamera& cam) {
     case SDLK_RIGHTBRACKET: draw_dist_ = std::min(4000.0f, draw_dist_ + 100.0f); return true;
     case SDLK_G: show_gates_ = !show_gates_; return true;
     case SDLK_I: show_ai_ = !show_ai_; return true;
+    case SDLK_C:
+        if (mod & SDL_KMOD_SHIFT) {  // próxima câmera do replay, vista por ela
+            const int n = static_cast<int>(route_->replay.cameras.size());
+            if (n > 0) look_through((replay_sel_ + 1) % n, cam);
+        } else {
+            show_replay_ = !show_replay_;
+        }
+        return true;
+    case SDLK_L:
+        if (mod & SDL_KMOD_SHIFT) {  // próxima vaga de largada, vista do banco do piloto
+            const int n = route_->slot_count();
+            if (n > 0) look_from_slot(route_->slot_at((route_->slot_index(slot_sel_) + 1) % n), cam);
+        } else {
+            show_grids_ = !show_grids_;
+        }
+        return true;
     default: return false;
     }
 }
@@ -352,7 +370,97 @@ void TrackView::draw(const glm::mat4& view_proj, const render::OrbitCamera& cam)
     objects_->draw(shader_, textures_);
     if (sel_ >= 0 && !inst_.hidden[static_cast<std::size_t>(sel_)])
         objects_->draw_one(shader_, textures_, inst_, static_cast<std::size_t>(sel_), 1.0f);
-    lines_->draw(shader_, show_gates_, show_ai_);
+    int inside = -1;  // vendo pela câmera em destaque: a pirâmide dela tamparia a vista
+    if (replay_sel_ >= 0) {
+        const Vec3& p = route_->replay.cameras[static_cast<std::size_t>(replay_sel_)].pos;
+        if (glm::distance(cam.eye(), glm::vec3(p[0], p[1], p[2])) < 1.0f) inside = replay_sel_;
+    }
+    render::LinesShow show;
+    show.gates = show_gates_;
+    show.ai = show_ai_;
+    show.replay = show_replay_;
+    show.grids = show_grids_;
+    show.sel_cam = replay_sel_;
+    show.inside_cam = inside;
+    show.sel_slot = route_->slot_index(slot_sel_);
+    if (const GridSlot* s = route_->slot(slot_sel_))  // no banco do piloto: a caixa da vaga tamparia a vista
+        if (glm::distance(cam.eye(), glm::vec3(s->pos[0], s->pos[1], s->pos[2])) < 3.0f) show.inside_slot = show.sel_slot;
+    lines_->draw(shader_, show);
+}
+
+namespace {
+
+glm::vec3 slot_forward(const GridSlot& s) {
+    glm::vec3 f(s.fwd[0], s.fwd[1], s.fwd[2]);
+    return glm::length(f) > 1e-3f ? glm::normalize(f) : glm::vec3(0.0f, 0.0f, 1.0f);
+}
+
+// Põe a órbita com o olho em `eye` olhando para `aim` (o pitch fica na faixa da órbita).
+void aim_orbit(render::OrbitCamera& cam, const glm::vec3& eye, const glm::vec3& aim) {
+    const glm::vec3 d = eye - aim;
+    cam.dist = std::clamp(glm::length(d), render::OrbitCamera::kDistMin, render::OrbitCamera::kDistMax);
+    cam.pitch = std::clamp(std::asin(d.y / glm::length(d)), render::OrbitCamera::kPitchMin, render::OrbitCamera::kPitchMax);
+    cam.yaw = std::atan2(d.x, d.z);
+    cam.target = aim;
+}
+
+}  // namespace
+
+bool TrackView::look_from_slot(SlotRef r, render::OrbitCamera& cam) {
+    select_slot(r);
+    const GridSlot* s = route_->slot(slot_sel_);
+    if (!s) return false;
+    const glm::vec3 f = slot_forward(*s), c(s->pos[0], s->pos[1], s->pos[2]);
+    // olho do piloto: 0,7 m acima do centro da vaga (1,2 m do asfalto), um pouco atrás do meio
+    const glm::vec3 eye = c + glm::vec3(0.0f, 0.7f, 0.0f) - f * 0.3f;
+    aim_orbit(cam, eye, eye + f * 25.0f - glm::vec3(0.0f, 1.2f, 0.0f));
+    set_status("vendo da vaga " + route_->grids[static_cast<std::size_t>(slot_sel_.grid)].name + "/" + s->name);
+    return true;
+}
+
+bool TrackView::frame_slot(SlotRef r, render::OrbitCamera& cam) {
+    select_slot(r);
+    const GridSlot* s = route_->slot(slot_sel_);
+    if (!s) return false;
+    const glm::vec3 f = slot_forward(*s), c(s->pos[0], s->pos[1], s->pos[2]);
+    aim_orbit(cam, c - f * 12.0f + glm::vec3(0.0f, 6.0f, 0.0f), c + f * 4.0f);
+    return true;
+}
+
+bool TrackView::slot_clearance(const GridSlot& s, float& center, float& wheels) {
+    const glm::vec3 f = slot_forward(s);
+    glm::vec3 r = glm::cross(f, glm::vec3(0.0f, 1.0f, 0.0f));
+    r = glm::length(r) < 1e-3f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::normalize(r);
+    const glm::vec3 c(s.pos[0], s.pos[1], s.pos[2]);
+    float y = 0;
+    // o que está até 1 m acima do centro conta como chão: um carro afundado também aparece
+    if (!terrain_height(c.x, c.z, c.y + 1.0f, y)) return false;
+    center = c.y - y;
+    wheels = center;
+    // rodas: 80 % da meia largura e 70 % do meio comprimento da caixa da vaga
+    for (const float u : {-1.0f, 1.0f})
+        for (const float v : {-1.0f, 1.0f}) {
+            const glm::vec3 p = c + r * (u * s.width * 0.4f) + f * (v * s.length * 0.35f);
+            if (terrain_height(p.x, p.z, p.y + 1.0f, y)) wheels = std::min(wheels, p.y - y);
+        }
+    return true;
+}
+
+bool TrackView::look_through(int i, render::OrbitCamera& cam) {
+    select_replay(i);
+    if (replay_sel_ < 0) return false;
+    const ReplayCamera& c = route_->replay.cameras[static_cast<std::size_t>(replay_sel_)];
+    const glm::vec3 eye(c.pos[0], c.pos[1], c.pos[2]);
+    glm::vec3 aim(c.aim[0], c.aim[1], c.aim[2]);
+    if (glm::length(aim - eye) < render::OrbitCamera::kDistMin) aim = eye + glm::vec3(0.0f, 0.0f, render::OrbitCamera::kDistMin);
+    const glm::vec3 d = eye - aim;
+    cam.dist = std::clamp(glm::length(d), render::OrbitCamera::kDistMin, render::OrbitCamera::kDistMax);
+    // o pitch da órbita vai de kPitchMin a kPitchMax: uma câmera que olha muito para cima fica aproximada
+    cam.pitch = std::clamp(std::asin(d.y / glm::length(d)), render::OrbitCamera::kPitchMin, render::OrbitCamera::kPitchMax);
+    cam.yaw = std::atan2(d.x, d.z);
+    cam.target = aim;
+    set_status("vendo pela câmera " + c.name);
+    return true;
 }
 
 void TrackView::frame_selected(render::OrbitCamera& cam) const {

@@ -116,6 +116,23 @@ public:
     bool& show_terrain() { return show_terrain_; }
     bool& show_gates() { return show_gates_; }
     bool& show_ai() { return show_ai_; }
+    bool& show_replay() { return show_replay_; }
+    // Câmera do replay em destaque (-1 = nenhuma) e "ver por ela": a órbita fica com o olho na câmera
+    // e o alvo no ponto para onde ela olha (nas que andam, o começo do caminho).
+    int replay_selected() const { return replay_sel_; }
+    void select_replay(int i) { replay_sel_ = route_ && i >= 0 && i < static_cast<int>(route_->replay.cameras.size()) ? i : -1; }
+    bool look_through(int i, render::OrbitCamera& cam);
+    // Vagas de largada (onde o carro nasce): camada (L), vaga em destaque e "ver do carro" (Shift+L: a vista no
+    // banco do piloto, olhando para a frente da vaga), ou "enquadrar" (de trás e de cima).
+    bool& show_grids() { return show_grids_; }
+    SlotRef slot_selected() const { return slot_sel_; }
+    void select_slot(SlotRef r) { slot_sel_ = route_ && route_->slot(r) ? r : SlotRef{}; }
+    bool look_from_slot(SlotRef r, render::OrbitCamera& cam);
+    bool frame_slot(SlotRef r, render::OrbitCamera& cam);
+    // Folga da vaga até o terreno: no centro e a menor sob as 4 rodas (m); false se não há terreno embaixo.
+    // Abaixo de kSlotLow o carro nasce dentro do chão (no jogo: posição NaN e a carga trava).
+    static constexpr float kSlotLow = 0.2f, kSlotHigh = 1.5f;
+    bool slot_clearance(const GridSlot& s, float& center, float& wheels);
     float& draw_dist() { return draw_dist_; }
     // Raio do terreno em metros a partir do alvo da câmera, no plano xz (0 = sem limite, o padrão).
     float& terrain_dist() { return terrain_dist_; }
@@ -208,7 +225,9 @@ private:
     bool fit_instance(std::uint32_t i, float* out);
     void commit(const char* label, std::vector<edit::Snap> before);
     float snapped(float v, float step) const { return step > 0 ? std::round(v / step) * step : v; }
-    bool show_terrain_ = true, show_gates_ = true, show_ai_ = true;
+    bool show_terrain_ = true, show_gates_ = true, show_ai_ = true, show_replay_ = true, show_grids_ = true;
+    int replay_sel_ = -1;
+    SlotRef slot_sel_;
 };
 
 }  // namespace dr2::app

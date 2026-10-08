@@ -6,6 +6,10 @@
 // --out é onde Ctrl+S grava o edits.json (padrão build/uiview/saves/<id>.edits.json); um caminho
 // dentro da pasta do jogo é recusado.
 // --camera põe a câmera num estado exato (para comparar capturas com o viewer web).
+// --look NOME começa vendo pela câmera do replay com esse nome (ex.: camera_r0_spectator_001) ou do banco do
+// piloto da vaga de largada com esse nome (ex.: slot_0 ou grid_start_standing_01/slot_05).
+// --grid-check imprime a folga de cada vaga de largada até o terreno e sai com 1 se alguma está dentro do chão.
+// --launch abre a janela do Testar no jogo (F5) ao começar (para capturas; o teste só começa com Enter).
 // Sem --track, mostra a cena de teste (cubo e grade). Com --track, abre a pista exportada em DIR
 // (track.json, terrain_<n>.bin, ...). Com --frames, roda N quadros, imprime
 // "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
@@ -44,7 +48,7 @@ struct Options {
     float terrain_dist = 0.0f;
     float walk = 0.0f;  // metros por quadro que a câmera anda em x (para medir o corte)
     dr2::render::TextureCache::Options tex;
-    const char* hide = nullptr;         // camadas escondidas, separadas por vírgula: terrain, obj, tree, dist, lines
+    const char* hide = nullptr;         // camadas escondidas, separadas por vírgula: terrain, obj, tree, dist, lines (portões, IA, replay e largada), replay, grids
     int shot_w = 0, shot_h = 0;         // --shot-size: a captura sai de um framebuffer fora da tela, só com o 3D
     const char* touch_test = nullptr;   // "IDX,dx,dy,dz[,commit]": desloca a instância em 8 quadros só pelo reenvio parcial (ou, com commit, fecha o passo e força o corte completo)
     const char* settle_list = nullptr;  // arquivo com índices de instância: assenta todas antes de seguir (teste do reenvio parcial)
@@ -54,6 +58,9 @@ struct Options {
     const char* probe_rays = nullptr;  // arquivo com raios (ox oy oz dx dy dz por linha): imprime a distância até o terreno e sai
     bool wait_textures = false;  // só conta quadros com a fila de texturas vazia (capturas iguais entre execuções)
     double autosave = 60.0;  // segundos entre autosaves (0 = desligado)
+    const char* look = nullptr;  // nome de câmera do replay ou de vaga de largada: começa vendo por ela
+    bool grid_check = false;     // imprime a folga das vagas de largada até o terreno e sai
+    bool launch = false;         // abre a janela do Testar no jogo (F5) ao começar
     bool has_camera = false;
     float camera[6] = {};  // yaw, pitch, dist, alvo x, y, z
 };
@@ -118,6 +125,8 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 std::fprintf(stderr, "--shot-size precisa de LxA, de 16 a 16384 (ex.: 4608x2592)\n");
                 return false;
             }
+        } else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) {
+            opt.look = argv[++i];
         } else if (std::strcmp(argv[i], "--hide") == 0 && i + 1 < argc) {
             opt.hide = argv[++i];
         } else if (std::strcmp(argv[i], "--touch-test") == 0 && i + 1 < argc) {
@@ -130,6 +139,10 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.align_check = argv[++i];
         } else if (std::strcmp(argv[i], "--ground-check") == 0 && i + 1 < argc) {
             opt.ground_check = argv[++i];
+        } else if (std::strcmp(argv[i], "--grid-check") == 0) {
+            opt.grid_check = true;
+        } else if (std::strcmp(argv[i], "--launch") == 0) {
+            opt.launch = true;
         } else if (std::strcmp(argv[i], "--wait-textures") == 0) {
             opt.wait_textures = true;
         } else if (std::strcmp(argv[i], "--walk") == 0 && i + 1 < argc) {
@@ -145,7 +158,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines,replay,grids] [--look CÂMERA|VAGA] [--grid-check] [--launch] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
@@ -379,6 +392,10 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
             ui.toggle_help();
             break;
         }
+        if (event.key.key == SDLK_F5 && !event.key.repeat) {
+            ui.open_launch(track);  // testar no jogo
+            break;
+        }
         if (event.key.key == SDLK_ESCAPE) {
             if (track) track->deselect();  // Esc só tira a seleção; sair é Ctrl+Q ou fechar a janela
             else if (ui.ask_quit(track)) return false;  // cena de teste: nada a perder
@@ -506,11 +523,22 @@ int run(const Options& opt) {
             if (h.find(",obj,") != std::string::npos) track->layers().obj = false;
             if (h.find(",tree,") != std::string::npos) track->layers().tree = false;
             if (h.find(",dist,") != std::string::npos) track->layers().dist = false;
-            if (h.find(",lines,") != std::string::npos) track->show_gates() = track->show_ai() = false;
+            const bool lines = h.find(",lines,") != std::string::npos;
+            if (lines) track->show_gates() = track->show_ai() = false;
+            if (lines || h.find(",replay,") != std::string::npos) track->show_replay() = false;
+            if (lines || h.find(",grids,") != std::string::npos) track->show_grids() = false;
         }
         track->frame_route(cam);
     } else {
         scene = std::make_unique<TestScene>(cam.target);
+    }
+    if (opt.look) {
+        const int i = track ? track->route().replay.find(opt.look) : -1;
+        const dr2::SlotRef slot = track ? track->route().find_slot(opt.look) : dr2::SlotRef{};
+        if (!(i >= 0 ? track->look_through(i, cam) : slot && track->look_from_slot(slot, cam))) {
+            std::fprintf(stderr, "--look: \"%s\" não é câmera do replay nem vaga de largada desta rota\n", opt.look);
+            return 1;
+        }
     }
     if (opt.has_camera) {
         cam.yaw = opt.camera[0];
@@ -582,6 +610,28 @@ int run(const Options& opt) {
         std::fclose(f);
         return 0;
     }
+    if (opt.grid_check) {
+        // por vaga: "grade/vaga x y z folga_centro folga_rodas" (ou "sem-terreno"); sai com 1 se alguma afunda
+        if (!track) {
+            std::fprintf(stderr, "--grid-check precisa de --track\n");
+            return 1;
+        }
+        int bad = 0;
+        for (const dr2::Grid& g : track->route().grids)
+            for (const dr2::GridSlot& s : g.slots) {
+                float center = 0, wheels = 0;
+                std::printf("%s/%s %.3f %.3f %.3f ", g.name.c_str(), s.name.c_str(), static_cast<double>(s.pos[0]),
+                            static_cast<double>(s.pos[1]), static_cast<double>(s.pos[2]));
+                if (!track->slot_clearance(s, center, wheels)) {
+                    std::printf("sem-terreno\n");
+                    continue;
+                }
+                const bool low = wheels < dr2::app::TrackView::kSlotLow;
+                bad += low;
+                std::printf("%.3f %.3f%s\n", static_cast<double>(center), static_cast<double>(wheels), low ? " DENTRO-DO-CHAO" : "");
+            }
+        return bad ? 1 : 0;
+    }
     if (opt.ground_check) {
         // teste do assentar e da oclusão: por instância, "i x z y_antes y_depois pick_de_cima pick_de_baixo".
         // Cima: raio 40 m acima, vertical, até o centro. Baixo: 30 m abaixo do centro, para cima (o terreno, se existe, tapa).
@@ -635,6 +685,7 @@ int run(const Options& opt) {
     }
     dr2::app::EditorUi ui(window, platform.context());
     ui.panels = opt.panels;
+    if (opt.launch) ui.open_launch(track.get());
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 

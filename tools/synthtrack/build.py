@@ -21,7 +21,7 @@ import os
 import random
 import struct
 
-from tools.synthtrack import decor, layout, meshes, textures
+from tools.synthtrack import cameras, decor, grids, layout, meshes, textures
 from tools.uiview.mesh import pack_geom, unpack_geom
 from tools.uiview.track.edit import BIN_LAYOUT
 from tools.uiview.track.export import pack_instances, write_index
@@ -344,6 +344,8 @@ def build(out: str, seed: int = 7, log=print) -> dict:
         "ens_ids": ens_ids,
         "terrain": {"file": "terrain_0.bin", "meshes": len(terrain), "verts": sum(len(m["positions"]) for m in terrain)},
         "instances": len(items),
+        "replay": cameras.plan(pts, ground, items, corner),
+        "grids": grids.plan(pts, ground),
     }
     route_alt = dict(route, name=ROUTE_ALT, ens_ids=alt_ids, instances=len(alt), ai=[route["ai"][0]])
     route_alt["progress"] = {"routes": [{"id": 1, "direction": "forward", "splits": [{"type": "joker", "gate": 3}]}],

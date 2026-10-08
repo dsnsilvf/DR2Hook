@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import struct
 import tempfile
@@ -129,6 +130,56 @@ class SynthTrackTest(unittest.TestCase):
         generated = {os.path.relpath(os.path.join(r, f), self.dest) for r, _, fs in os.walk(self.dest) for f in fs}
         versioned = {os.path.relpath(os.path.join(r, f), example) for r, _, fs in os.walk(example) for f in fs}
         self.assertEqual(versioned, generated)
+
+    def test_replay_cameras(self):
+        rep = self.doc["routes"][0]["replay"]
+        cams = {c["name"]: c for c in rep["cameras"]}
+        # nomes que o jogo procura no replay_camera_config.xml
+        for name in ("initial_camera_r0", "Grid_Start_Cam_00", "finish_line_camera_001", "first_corner_001",
+                     "pre_race_intro_001", "camera_r0_firstlap_001", *(f"pre_race_{k:03d}" for k in range(1, 8))):
+            self.assertIn(name, cams)
+        self.assertGreaterEqual(sum(c["kind"] == "trackside" for c in rep["cameras"]), 10)
+        for c in rep["cameras"]:
+            self.assertEqual(len(c["pos"]), 3, c["name"])
+            self.assertGreater(sum((a - b) ** 2 for a, b in zip(c["pos"], c["aim"])), 1.0, c["name"])
+            for key in ("path", "target"):
+                pts = c.get(key, [])
+                self.assertEqual(len(pts) % 4, 0, c["name"])
+                for k in range(4, len(pts), 4):
+                    self.assertEqual(pts[k], pts[k - 1], c["name"])   # trechos de Bézier encadeados
+        for z in rep["zones"]:
+            self.assertAlmostEqual(sum(sw["p"] for sw in z["switch"]), 1.0, places=6, msg=z["name"])
+            for sw in z["switch"]:
+                self.assertTrue(sw["camera"] in cams or sw["camera"].startswith(("onboard_", "external_")), sw)
+            self.assertGreater(math.dist(z["l"], z["r"]), 2 * 5.0)
+        for b in rep["bounds"]:
+            self.assertEqual(len(b["corners"]), 4)
+            self.assertLess(b["y0"], b["y1"])
+        self.assertEqual(rep, self.doc["routes"][1]["replay"])
+
+    def test_start_grids(self):
+        from tools.synthtrack import layout
+
+        grids = {g["name"]: g for g in self.doc["routes"][0]["grids"]}
+        # grades e quantidade de vagas que o grids.pssg da Montalegre tem
+        counts = {"grid_time_trial_0": 1, "grid_near_reset_01": 10, "grid_start_standing_01": 10,
+                  "grid_start_staggered_01": 12, "grid_compound_5#5": 4}
+        self.assertEqual({k: len(g["slots"]) for k, g in grids.items()}, counts)
+        self.assertEqual(grids["grid_time_trial_0"]["slots"][0]["name"], "slot_0")
+        for g in grids.values():
+            names = [s["name"] for s in g["slots"]]
+            self.assertEqual(len(set(names)), len(names), g["name"])
+            for s in g["slots"] + g["markers"]:
+                self.assertAlmostEqual(math.hypot(*s["fwd"]), 1.0, places=3, msg=s["name"])
+            for s in g["slots"]:
+                if g["name"] != "grid_compound_5#5":   # o paddock fica fora da pista
+                    self.assertLessEqual(abs(s["lat"]) + s["size"][0] / 2, layout.ROAD_HALF + 0.05, s["name"])
+            for a in g["slots"]:   # caixas não se sobrepõem
+                for b in g["slots"]:
+                    if a is not b:
+                        apart = math.dist(a["pos"], b["pos"])
+                        self.assertGreater(apart, min(a["size"][0], a["size"][1]) - 1e-6, (a["name"], b["name"]))
+        self.assertEqual(self.doc["routes"][0]["grids"], self.doc["routes"][1]["grids"])
 
 
 if __name__ == "__main__":

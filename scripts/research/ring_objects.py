@@ -15,6 +15,8 @@ track.json = ordem dos tipos e materiais, source/textures = PNGs). Sai, numa pas
   registro estático da Montalegre);
 - `route_0/track.vis`: células do tracksplit do Ring + a camada 2 com a caixa de cada instância.
 
+Com `--edits`, as edições do viewer3d (edits.json) entram antes: objetos movidos, apagados e copiados.
+
 As instâncias passam pelo mesmo giro e deslocamento do terreno (`ring_tracksplit.start_transform`). Sem colisão:
 ornamento não tem física (o carro atravessa).
 
@@ -71,22 +73,62 @@ def fnv1a(name: str) -> int:
     return h
 
 
-def read_instances(path: str, type_order: list[str]) -> list[tuple[str, np.ndarray]]:
-    """(tipo, matriz 4×4 vetor-linha) de cada instância do inst_<rota>.bin do viewer."""
+def read_instances(path: str, type_order: list[str], with_ids: bool = False) -> list[tuple]:
+    """(tipo, matriz 4×4 vetor-linha) de cada instância do inst_<rota>.bin do viewer; com `with_ids`,
+    (tipo, matriz, identificador = posição no arquivo de origem, a chave do edits.json)."""
     data = open(path, "rb").read()
     assert data[:4] == b"DR2I"
     (n,) = struct.unpack_from("<I", data, 4)
     types = struct.unpack_from(f"<{n}H", data, 8)
     o = 8 + 2 * n
     o += -o % 4
-    o += 4 * n  # identificadores (posição no arquivo de origem): não usados aqui
+    ids = struct.unpack_from(f"<{n}I", data, o)
+    o += 4 * n
     flat = np.frombuffer(data, "<f4", n * 12, o).reshape(n, 12).astype(np.float64)
     out = []
-    for t, f in zip(types, flat):
-        m = np.eye(4)
-        m[0, :3], m[1, :3], m[2, :3], m[3, :3] = f[0:3], f[3:6], f[6:9], f[9:12]
-        out.append((type_order[t], m))
+    for t, i, f in zip(types, ids, flat):
+        m = matrix12(f)
+        out.append((type_order[t], m, i) if with_ids else (type_order[t], m))
     return out
+
+
+def matrix12(f) -> np.ndarray:
+    """12 floats do viewer (3 eixos e a translação, linha a linha) para a 4×4 vetor-linha."""
+    m = np.eye(4)
+    m[0, :3], m[1, :3], m[2, :3], m[3, :3] = f[0:3], f[3:6], f[6:9], f[9:12]
+    return m
+
+
+def apply_edits(insts: list[tuple], edits: dict, route: str) -> tuple[list[tuple[str, np.ndarray]], list[str]]:
+    """Aplica o edits.json do viewer3d (dr2-track-edits v1) às instâncias (tipo, matriz, id) de `read_instances`.
+
+    Como o viewer: a chave é (tipo, id); movida troca a matriz, apagada sai, cópia (`added`, `src` = id da
+    original) entra no fim com o tipo da original. Devolve (instâncias, avisos do que ficou de fora)."""
+    if edits.get("format") != "dr2-track-edits" or edits.get("version") != 1:
+        raise SystemExit("não é um edits.json (dr2-track-edits v1)")
+    by_key = {(t, i): k for k, (t, _, i) in enumerate(insts)}
+    mats = [m for _, m, _ in insts]
+    gone = set()
+    added = []
+    skipped = []
+    for n, e in enumerate(edits.get("edits", [])):
+        if e.get("route") != route:
+            continue
+        name = f"{e.get('kind')}:{e.get('type')}"
+        key = e.get("src") if e.get("added") else e.get("index")
+        k = by_key.get((name, key))
+        m = e.get("m")
+        if k is None or not isinstance(m, list) or len(m) != 12:
+            skipped.append(f"#{n + 1} {name} {key}")
+            continue
+        if e.get("added"):
+            added.append((name, matrix12(np.asarray(m, np.float64))))
+        elif e.get("deleted"):
+            gone.add(k)
+        else:
+            mats[k] = matrix12(np.asarray(m, np.float64))
+    out = [(t, mats[k]) for k, (t, _, _) in enumerate(insts) if k not in gone]
+    return out + added, skipped
 
 
 def to_game(m: np.ndarray, yaw: float, offset: np.ndarray) -> np.ndarray:
@@ -294,6 +336,7 @@ def main() -> None:
     ap.add_argument("--tracksplit", required=True, help="tracksplit.pssg do Ring (células da camada 0 do track.vis)")
     ap.add_argument("--route", default="route_0")
     ap.add_argument("--kinds", default="eo", help="prefixos de tipo do editor a portar (e entidades, o ornamentos, t árvores)")
+    ap.add_argument("--edits", help="edits.json do viewer3d: objetos movidos, apagados e copiados")
     a = ap.parse_args()
     from PIL import Image
 
@@ -321,7 +364,12 @@ def main() -> None:
             materials[key] = b.material(f"dr2hook_{base}" + ("_2s" if key[1] else ""), tex, key[1])
         return materials[key]
 
-    insts = read_instances(os.path.join(RING, f"inst_{a.route}.bin"), track["type_order"])
+    insts = read_instances(os.path.join(RING, f"inst_{a.route}.bin"), track["type_order"], with_ids=True)
+    if a.edits:
+        insts, skipped = apply_edits(insts, json.load(open(a.edits, encoding="utf-8")), a.route)
+        print(f"  edições de {a.edits}: {len(skipped)} ficaram de fora" + (f" ({', '.join(skipped[:5])})" if skipped else ""))
+    else:
+        insts = [(t, m) for t, m, _ in insts]
     # o jogo espera o XML e os registros do ornaments.bin em ordem crescente de reference_id
     wanted = sorted((t for t in track["type_order"] if t[0] in a.kinds and track["types"][t]["count"]),
                     key=lambda t: fnv1a(t[2:]))

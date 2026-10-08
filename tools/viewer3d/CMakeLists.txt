@@ -34,6 +34,7 @@ add_library(dr2core STATIC
     src/core/dr2i.cpp
     src/core/grid.cpp
     src/core/track.cpp
+    src/core/progress.cpp
 )
 target_include_directories(dr2core PUBLIC src)
 
@@ -71,7 +72,7 @@ target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 target_compile_options(imgui PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 ${CMAKE_DL_LIBS})
 
-add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp src/app/ui.cpp)
+add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp src/app/ui.cpp src/app/launch.cpp)
 target_link_libraries(viewer3d PRIVATE dr2render dr2edit imgui SDL3::SDL3)
 
 add_executable(camera_test tests/camera_test.cpp)
