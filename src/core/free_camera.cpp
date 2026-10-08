@@ -277,12 +277,34 @@ void Apply(void *camera) {
   Store(camera, kEye, g_pose.eye, g_pose.eyeW);
 }
 
+// Última pose da câmera da especial (livre ou do jogo), para o LiveLink.
+std::mutex g_viewMutex;
+FreeCamPose g_view{};
+ULONGLONG g_viewTick = 0;
+
+void KeepView(void *camera) {
+  const Simd4 rows[3] = {Load(camera, kRow0), Load(camera, kRow0 + 0x10),
+                         Load(camera, kRow0 + 0x20)};
+  const Simd4 eye = Load(camera, kEye);
+  const FreeCamVec3 raw[3] = {{rows[0].x, rows[0].y, rows[0].z},
+                              {rows[1].x, rows[1].y, rows[1].z},
+                              {rows[2].x, rows[2].y, rows[2].z}};
+  FreeCamPose pose{};
+  if (!FreeCamPoseFromRows(raw, {eye.x, eye.y, eye.z}, eye.w, pose)) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_viewMutex);
+  g_view = pose;
+  g_viewTick = GetTickCount64();
+}
+
 void AfterTick(void *camera) {
   void *stage = StageCamera();
   if (stage == nullptr || camera != stage) {
     return;
   }
   Apply(camera);
+  KeepView(camera);
 }
 
 void DetourTick(void *camera) {
@@ -519,6 +541,21 @@ std::string FreeCamera::RemotePose() {
                 static_cast<double>(g_pose.eye.y), static_cast<double>(g_pose.eye.z), static_cast<double>(g_pose.forward.x),
                 static_cast<double>(g_pose.forward.y), static_cast<double>(g_pose.forward.z));
   return text;
+}
+
+bool FreeCamera::StageView(float eye[3], float forward[3], float up[3]) {
+  std::lock_guard<std::mutex> lock(g_viewMutex);
+  if (g_viewTick == 0 || GetTickCount64() - g_viewTick > 500) {
+    return false;
+  }
+  const FreeCamVec3 src[3] = {g_view.eye, g_view.forward, g_view.up};
+  float *dst[3] = {eye, forward, up};
+  for (int i = 0; i < 3; ++i) {
+    dst[i][0] = src[i].x;
+    dst[i][1] = src[i].y;
+    dst[i][2] = src[i].z;
+  }
+  return true;
 }
 
 void FreeCamera::OnFrame(HWND hwnd) {

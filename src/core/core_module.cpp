@@ -14,6 +14,7 @@
 #include "dr2hook/savestate.h"
 #include "dr2hook/load_view.h"
 #include "dr2hook/intro_skip.h"
+#include "dr2hook/live_link.h"
 #include "dr2hook/session_audio.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
@@ -160,6 +161,7 @@ void DispatchStageEvents() {
       break;
     case dr2hook::kDr2StageStart:
       StopLoadCover("largada");
+      dr2hook::LiveLink::OnStageStart();
       dr2hook::GhostLab::OnStageStart();
       dr2hook::ModManager::DispatchStageStart(event.name, event.value != 0);
       break;
@@ -255,6 +257,7 @@ int Core_Initialize(int truncateLog) {
     dr2hook::NetDialog::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::IntroSkip::Install();
+    dr2hook::LiveLink::Install();
 
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
@@ -280,6 +283,7 @@ void Core_Shutdown() {
   try {
     StopLoadCover("core descarregado");
     dr2hook::IntroSkip::Shutdown();
+    dr2hook::LiveLink::Shutdown();
     dr2hook::SessionAudio::Shutdown();
     dr2hook::LoadView::Shutdown();
     dr2hook::OverlayManager::Shutdown();
@@ -358,6 +362,7 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
     SyncNativeMenu();
 
     dr2hook::FreeCamera::OnFrame(hwnd);
+    dr2hook::LiveLink::OnFrame();
     if (dr2hook::OverlayManager::IsInitialized()) {
       RenderOverlay(swapChain);
     }

@@ -105,6 +105,7 @@ add_library(dr2hook_core SHARED
     src/core/net_dialog.cpp
     src/core/session_audio.cpp
     src/core/intro_skip.cpp
+    src/core/live_link.cpp
     src/core/load_view.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp

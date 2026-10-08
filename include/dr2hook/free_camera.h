@@ -24,6 +24,9 @@ public:
   // aplicada com a câmera livre ligada (F9, ou `key f9`).
   static std::string RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz);
   static std::string RemotePose();
+  // Pose da câmera da especial no último tick (a livre, se ligada): olho, frente e
+  // cima em metros do mundo. false se não houve tick nos últimos 500 ms.
+  static bool StageView(float eye[3], float forward[3], float up[3]);
 };
 
 } // namespace dr2hook
