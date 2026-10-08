@@ -51,6 +51,7 @@ enum Dr2StageEventKind : int {
   kDr2StageLoad = 0,      // abriu locations/<local>__<pista>.nefs
   kDr2StageCountdown = 1, // "startlightsstart": uma luz por segundo, value = 1..5
   kDr2StageStart = 2,     // "racestart": jogador no controle; value = 1 em reinicio
+  kDr2StageRoute = 3,     // tela de carregamento da rota; name = chave do catálogo sem "lng_" ("<pista>_route_N")
 };
 
 struct Dr2StageEvent {

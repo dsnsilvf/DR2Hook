@@ -13,10 +13,17 @@
 #if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
+#include <d3dcompiler.h>
 #endif
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -25,6 +32,7 @@ namespace {
 
 bool g_initialized = false;
 bool g_showMenu = false;
+bool g_loadCover = false;
 HWND g_hWnd = nullptr;
 ID3D11Device *g_device = nullptr;
 ID3D11DeviceContext *g_deviceContext = nullptr;
@@ -32,6 +40,424 @@ ID3D11RenderTargetView *g_renderTargetView = nullptr;
 
 std::mutex g_notificationMutex;
 std::vector<dr2hook::ToastNotification> g_notifications;
+
+// Terminal da tela preta (inicialização rápida): o dr2hook.log ao vivo, lido
+// do buffer da proxy, com a fase, o tempo e os arquivos abertos.
+struct TermLine {
+  std::string time;
+  std::string text;
+  ImU32 color;
+  int repeats = 1; // a mesma linha seguida (o jogo reabre o mesmo arquivo)
+};
+
+struct LoadTerminal {
+  unsigned long long seq = 0;
+  std::deque<TermLine> lines;
+  double start = -1.0;     // ImGui::GetTime() do primeiro frame
+  double lastOpen = -1.0;  // quando chegou o último "LoadTrace: open"
+  const char *phase = "Iniciando o jogo";
+  bool track = false;      // depois do "RaceEvent: carregando"
+  int opens = 0;
+  int overlayOpens = 0;
+  double megabytes = 0.0;
+  int frames = 0;
+  float maxGap = 0.0f;
+};
+
+LoadTerminal g_term;
+
+// Cena do jogo atrás do terminal (LoadView, no core) e a linha da GPU.
+ID3D11ShaderResourceView *g_coverScene = nullptr;
+float g_coverAspect = 1.0f;
+float g_coverExposure = 0.0f; // > 0: cena HDR, passa pela curva abaixo
+std::string g_coverGpu;
+ID3D11BlendState *g_opaqueBlend = nullptr;
+// Foto da pista atrás do terminal (a mesma da tela de carregamento, gerada
+// pelo loading_screen.py): PPM binário RGB, carregado no 1º quadro da tela
+// preta. Tem prioridade sobre a cena do jogo.
+std::string g_coverImagePath;
+bool g_coverImageTried = false;
+ID3D11ShaderResourceView *g_coverImage = nullptr;
+float g_coverImageAspect = 1.0f;
+#if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
+// Cena HDR do jogo (luz linear) para a tela: exposição, curva ACES
+// (aproximação do Narkowicz) e gama 2,2; params = {exposição, escurecer}.
+// Mesma entrada do vertex shader do ImGui.
+constexpr char kTonemapPS[] = R"(
+cbuffer Tonemap : register(b0) { float4 params; };
+struct PS_INPUT { float4 pos : SV_POSITION; float4 col : COLOR0; float2 uv : TEXCOORD0; };
+sampler sampler0;
+Texture2D texture0;
+float4 main(PS_INPUT input) : SV_Target {
+  float3 c = max(texture0.Sample(sampler0, input.uv).rgb, 0.0) * params.x;
+  c = saturate((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14));
+  return float4(pow(c, 1.0 / 2.2) * params.y, 1.0);
+}
+)";
+ID3D11PixelShader *g_tonemapPS = nullptr;
+ID3D11Buffer *g_tonemapCB = nullptr;
+bool g_tonemapTried = false;
+
+bool EnsureTonemap() {
+  if (g_tonemapTried) {
+    return g_tonemapPS != nullptr && g_tonemapCB != nullptr;
+  }
+  g_tonemapTried = true;
+  ID3DBlob *blob = nullptr;
+  ID3DBlob *errors = nullptr;
+  if (FAILED(D3DCompile(kTonemapPS, sizeof kTonemapPS - 1, nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0,
+                        &blob, &errors))) {
+    Logger::Warn(std::string("Overlay: shader do tonemap do fundo nao compilou: ") +
+                 (errors != nullptr ? static_cast<const char *>(errors->GetBufferPointer()) : "?"));
+    if (errors != nullptr) {
+      errors->Release();
+    }
+    return false;
+  }
+  if (errors != nullptr) {
+    errors->Release();
+  }
+  if (FAILED(g_device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &g_tonemapPS))) {
+    g_tonemapPS = nullptr;
+  }
+  blob->Release();
+  D3D11_BUFFER_DESC desc{};
+  desc.ByteWidth = 16;
+  desc.Usage = D3D11_USAGE_DYNAMIC;
+  desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+  desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+  if (FAILED(g_device->CreateBuffer(&desc, nullptr, &g_tonemapCB))) {
+    g_tonemapCB = nullptr;
+  }
+  if (g_tonemapPS == nullptr || g_tonemapCB == nullptr) {
+    Logger::Warn("Overlay: tonemap do fundo indisponivel; cena HDR vai crua.");
+    return false;
+  }
+  Logger::Info("Overlay: tonemap do fundo pronto.");
+  return true;
+}
+#endif
+
+constexpr std::size_t kTermKeep = 300;
+constexpr ImU32 kTermText = IM_COL32(170, 170, 170, 255);
+constexpr ImU32 kTermDim = IM_COL32(110, 110, 110, 255);
+constexpr ImU32 kTermMark = IM_COL32(120, 210, 255, 255);
+constexpr ImU32 kTermOverlay = IM_COL32(110, 230, 120, 255);
+constexpr ImU32 kTermWarn = IM_COL32(240, 200, 80, 255);
+constexpr ImU32 kTermError = IM_COL32(255, 90, 90, 255);
+
+bool StartsWith(const std::string &s, std::size_t at, const char *prefix) {
+  return s.compare(at, std::char_traits<char>::length(prefix), prefix) == 0;
+}
+
+// Caminho a partir da pasta do jogo ("locations\x.nefs").
+std::string GameRelative(std::string path) {
+  std::string lower = path;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  const std::string root = "dirt rally 2.0\\";
+  const std::size_t at = lower.find(root);
+  return at == std::string::npos ? path : path.substr(at + root.size());
+}
+
+// "[08:34:51.178] [INFO] LoadTrace: open S:\...": a linha como o terminal a
+// mostra, e as contas da fase.
+void TermFeed(const std::string &raw, double now) {
+  TermLine out{std::string(), raw, kTermText};
+  const std::size_t close = raw.find("] [");
+  const std::size_t levelEnd =
+      close == std::string::npos ? std::string::npos : raw.find("] ", close + 3);
+  if (raw.size() > 1 && raw[0] == '[' && levelEnd != std::string::npos) {
+    out.time = raw.substr(4, close - 4); // sem a hora
+    const std::string level = raw.substr(close + 3, levelEnd - close - 3);
+    const std::string msg = raw.substr(levelEnd + 2);
+    std::string shown = msg;
+    if (level == "WARN") {
+      out.color = kTermWarn;
+    } else if (level == "ERROR") {
+      out.color = kTermError;
+    }
+    if (StartsWith(msg, 0, "LoadTrace: open ")) {
+      ++g_term.opens;
+      g_term.lastOpen = now;
+      const std::string rel = GameRelative(msg.substr(16));
+      if (StartsWith(rel, 0, "dr2hook_overlay")) {
+        ++g_term.overlayOpens;
+        out.color = kTermOverlay;
+      }
+      shown = "abre " + rel;
+    } else if (StartsWith(msg, 0, "LoadTrace: IO ")) {
+      g_term.megabytes += std::atof(msg.c_str() + 14);
+      out.color = kTermDim;
+    } else if (StartsWith(msg, 0, "AutoStage: Fast-path")) {
+      g_term.phase = "Carregando os dados do jogo";
+      out.color = kTermMark;
+    } else if (StartsWith(msg, 0, "RaceEvent: carregando")) {
+      g_term.phase = "Carregando a pista";
+      g_term.track = true;
+      out.color = kTermMark;
+    } else if (StartsWith(msg, 0, "RaceEvent") ||
+               StartsWith(msg, 0, "AutoStage") ||
+               StartsWith(msg, 0, "LoadProbe") ||
+               StartsWith(msg, 0, "LoadCover")) {
+      if (out.color == kTermText) {
+        out.color = kTermMark;
+      }
+    }
+    out.text = std::move(shown);
+  }
+  if (!g_term.lines.empty() && g_term.lines.back().text == out.text &&
+      g_term.lines.back().color == out.color) {
+    g_term.lines.back().time = std::move(out.time);
+    ++g_term.lines.back().repeats;
+    return;
+  }
+  g_term.lines.push_back(std::move(out));
+  if (g_term.lines.size() > kTermKeep) {
+    g_term.lines.pop_front();
+  }
+}
+
+void ReleaseCoverImage() {
+  if (g_coverImage != nullptr) {
+    g_coverImage->Release();
+    g_coverImage = nullptr;
+  }
+  g_coverImageTried = false;
+}
+
+#if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
+// PPM "P6 <largura> <altura> 255" seguido dos pixels RGB.
+bool LoadCoverImage() {
+  if (g_coverImageTried || g_device == nullptr) {
+    return g_coverImage != nullptr;
+  }
+  g_coverImageTried = true;
+  if (g_coverImagePath.empty()) {
+    return false;
+  }
+  std::ifstream in(g_coverImagePath, std::ios::binary);
+  std::string magic;
+  int w = 0, h = 0, maxval = 0;
+  in >> magic >> w >> h >> maxval;
+  in.get();
+  if (!in || magic != "P6" || maxval != 255 || w <= 0 || h <= 0 || w > 8192 || h > 8192) {
+    Logger::Warn("Overlay: foto da carga ilegivel: " + g_coverImagePath);
+    return false;
+  }
+  std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+  in.read(reinterpret_cast<char *>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+  if (!in) {
+    Logger::Warn("Overlay: foto da carga incompleta: " + g_coverImagePath);
+    return false;
+  }
+  std::vector<uint32_t> rgba(static_cast<size_t>(w) * h);
+  for (size_t i = 0; i < rgba.size(); ++i) {
+    rgba[i] = rgb[i * 3] | (rgb[i * 3 + 1] << 8) | (rgb[i * 3 + 2] << 16) | 0xff000000u;
+  }
+  D3D11_TEXTURE2D_DESC desc{};
+  desc.Width = static_cast<UINT>(w);
+  desc.Height = static_cast<UINT>(h);
+  desc.MipLevels = 1;
+  desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_IMMUTABLE;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  D3D11_SUBRESOURCE_DATA data{rgba.data(), static_cast<UINT>(w) * 4, 0};
+  ID3D11Texture2D *tex = nullptr;
+  if (FAILED(g_device->CreateTexture2D(&desc, &data, &tex))) {
+    Logger::Warn("Overlay: sem textura para a foto da carga.");
+    return false;
+  }
+  const HRESULT hr = g_device->CreateShaderResourceView(tex, nullptr, &g_coverImage);
+  tex->Release();
+  if (FAILED(hr)) {
+    g_coverImage = nullptr;
+    return false;
+  }
+  g_coverImageAspect = static_cast<float>(w) / static_cast<float>(h);
+  char note[96];
+  std::snprintf(note, sizeof note, "Overlay: foto da carga %dx%d no fundo do terminal.", w, h);
+  Logger::Info(note);
+  return true;
+}
+#endif
+
+// A foto cobre a tela inteira (corta o que sobra), escurecida como a cena.
+bool DrawCoverImage() {
+#if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
+  if (!LoadCoverImage()) {
+    return false;
+  }
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  const float screenAspect = screen.x / std::max(screen.y, 1.0f);
+  ImVec2 uv0(0.0f, 0.0f), uv1(1.0f, 1.0f);
+  if (g_coverImageAspect > screenAspect) {
+    const float keep = screenAspect / g_coverImageAspect;
+    uv0.x = (1.0f - keep) * 0.5f;
+    uv1.x = 1.0f - uv0.x;
+  } else {
+    const float keep = g_coverImageAspect / screenAspect;
+    uv0.y = (1.0f - keep) * 0.5f;
+    uv1.y = 1.0f - uv0.y;
+  }
+  ImGui::GetBackgroundDrawList()->AddImage(reinterpret_cast<ImTextureID>(g_coverImage), ImVec2(0.0f, 0.0f),
+                                           screen, uv0, uv1, IM_COL32(140, 140, 140, 255));
+  return true;
+#else
+  return false;
+#endif
+}
+
+// A cena sem mistura: o alfa de um alvo do jogo não é transparência.
+void DrawCoverScene() {
+  if (DrawCoverImage()) {
+    return;
+  }
+#if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
+  if (g_coverScene == nullptr || g_device == nullptr) {
+    return;
+  }
+  if (g_opaqueBlend == nullptr) {
+    D3D11_BLEND_DESC desc{};
+    desc.RenderTarget[0].BlendEnable = FALSE;
+    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(g_device->CreateBlendState(&desc, &g_opaqueBlend))) {
+      g_opaqueBlend = nullptr;
+      return;
+    }
+  }
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  float w = screen.x;
+  float h = w / std::max(g_coverAspect, 0.1f);
+  if (h > screen.y) {
+    h = screen.y;
+    w = h * g_coverAspect;
+  }
+  const ImVec2 a((screen.x - w) * 0.5f, (screen.y - h) * 0.5f);
+  ImDrawList *draw = ImGui::GetBackgroundDrawList();
+  // Escurecida para o texto do terminal ficar legível.
+  constexpr float kDim = 140.0f / 255.0f;
+  if (g_coverExposure > 0.0f && EnsureTonemap()) {
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (SUCCEEDED(g_deviceContext->Map(g_tonemapCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+      const float params[4] = {g_coverExposure, kDim, 0.0f, 0.0f};
+      std::memcpy(mapped.pData, params, sizeof params);
+      g_deviceContext->Unmap(g_tonemapCB, 0);
+    }
+    draw->AddCallback(
+        [](const ImDrawList *, const ImDrawCmd *) {
+          g_deviceContext->OMSetBlendState(g_opaqueBlend, nullptr, 0xffffffffu);
+          g_deviceContext->PSSetShader(g_tonemapPS, nullptr, 0);
+          g_deviceContext->PSSetConstantBuffers(0, 1, &g_tonemapCB);
+        },
+        nullptr);
+    draw->AddImage(reinterpret_cast<ImTextureID>(g_coverScene), a,
+                   ImVec2(a.x + w, a.y + h));
+  } else {
+    draw->AddCallback(
+        [](const ImDrawList *, const ImDrawCmd *) {
+          g_deviceContext->OMSetBlendState(g_opaqueBlend, nullptr, 0xffffffffu);
+        },
+        nullptr);
+    draw->AddImage(reinterpret_cast<ImTextureID>(g_coverScene), a,
+                   ImVec2(a.x + w, a.y + h), ImVec2(0, 0), ImVec2(1, 1),
+                   IM_COL32(140, 140, 140, 255));
+  }
+  draw->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+#endif
+}
+
+void DrawLoadTerminal() {
+  DrawCoverScene();
+  ImGuiIO &io = ImGui::GetIO();
+  const double now = ImGui::GetTime();
+  if (g_term.start < 0.0) {
+    g_term.start = now;
+  } else {
+    // Intervalo grande = o jogo não chamou Present (a carga segurou a
+    // thread de render; a LoadTrace loga cada um como "frame travado").
+    ++g_term.frames;
+    g_term.maxGap = std::max(g_term.maxGap, io.DeltaTime);
+  }
+
+  static char buffer[65536];
+  for (int i = 0; i < 8; ++i) {
+    const int used =
+        dr2hook::Logger::ReadSince(&g_term.seq, buffer, sizeof buffer);
+    if (used <= 0) {
+      break;
+    }
+    const char *p = buffer;
+    const char *end = buffer + used;
+    while (p < end) {
+      const char *nl = static_cast<const char *>(std::memchr(p, '\n', end - p));
+      if (nl == nullptr) {
+        nl = end;
+      }
+      TermFeed(std::string(p, nl), now);
+      p = nl + 1;
+    }
+    if (used < static_cast<int>(sizeof buffer) / 2) {
+      break;
+    }
+  }
+
+  ImDrawList *draw = ImGui::GetBackgroundDrawList();
+  ImFont *font = ImGui::GetFont();
+  // A fonte padrão é bitmap: só escala inteira fica nítida.
+  const float scale = std::max(1.0f, std::round(io.DisplaySize.y / 1080.0f));
+  const float size = ImGui::GetFontSize() * scale;
+  const float lineH = size + 2.0f * scale;
+  const float margin = 24.0f * scale;
+  float y = margin;
+
+  const char *phase = g_term.phase;
+  char quiet[64] = "";
+  if (g_term.track && g_term.lastOpen >= 0.0 && now - g_term.lastOpen > 1.5) {
+    phase = "Preparando a largada";
+    std::snprintf(quiet, sizeof quiet, "   (%.1f s sem abrir arquivos)",
+                  now - g_term.lastOpen);
+  }
+  const char *spin = "|/-\\";
+  char status[256];
+  std::snprintf(status, sizeof status,
+                "%c %s   %5.1f s   arquivos %d (overlay %d)   IO %.0f MB%s",
+                spin[static_cast<int>(now * 8.0) & 3], phase,
+                now - g_term.start, g_term.opens, g_term.overlayOpens,
+                g_term.megabytes, quiet);
+  draw->AddText(font, size, ImVec2(margin, y), kTermMark,
+                "DR2Hook - inicializacao rapida (dr2hook.log ao vivo)");
+  y += lineH;
+  draw->AddText(font, size, ImVec2(margin, y), IM_COL32(235, 235, 235, 255),
+                status);
+  y += lineH;
+  if (!g_coverGpu.empty()) {
+    draw->AddText(font, size, ImVec2(margin, y), kTermWarn, g_coverGpu.c_str());
+    y += lineH;
+  }
+  y += lineH * 0.5f;
+
+  const float bottom = io.DisplaySize.y - margin;
+  const int room = std::max(1, static_cast<int>((bottom - y) / lineH) - 1);
+  const std::size_t count = g_term.lines.size();
+  const std::size_t first =
+      count > static_cast<std::size_t>(room) ? count - room : 0;
+  std::string text;
+  for (std::size_t i = first; i < count; ++i) {
+    const TermLine &line = g_term.lines[i];
+    text = line.time.empty() ? line.text : line.time + "  " + line.text;
+    if (line.repeats > 1) {
+      text += "  (x" + std::to_string(line.repeats) + ")";
+    }
+    draw->AddText(font, size, ImVec2(margin, y), line.color, text.c_str());
+    y += lineH;
+  }
+  if (static_cast<int>(now * 2.0) % 2 == 0) {
+    draw->AddText(font, size, ImVec2(margin, y), kTermText, "_");
+  }
+}
 
 } // namespace
 
@@ -99,6 +525,21 @@ void OverlayManager::Shutdown() {
     g_renderTargetView->Release();
     g_renderTargetView = nullptr;
   }
+  if (g_opaqueBlend != nullptr) {
+    g_opaqueBlend->Release();
+    g_opaqueBlend = nullptr;
+  }
+  if (g_tonemapPS != nullptr) {
+    g_tonemapPS->Release();
+    g_tonemapPS = nullptr;
+  }
+  if (g_tonemapCB != nullptr) {
+    g_tonemapCB->Release();
+    g_tonemapCB = nullptr;
+  }
+  g_tonemapTried = false;
+  g_coverScene = nullptr;
+  ReleaseCoverImage();
   ImGui_ImplDX11_Shutdown();
   ImGui_ImplWin32_Shutdown();
 #endif
@@ -189,7 +630,44 @@ bool OverlayManager::HandleWndProc(HWND hWnd, UINT msg, WPARAM wParam,
   return false;
 }
 
+void OverlayManager::SetLoadCover(bool on) {
+  if (on && !g_loadCover) {
+    g_term = LoadTerminal{};
+  } else if (!on && g_loadCover && g_term.frames > 0) {
+    char note[128];
+    std::snprintf(note, sizeof note,
+                  "LoadCover: %d frames no terminal, maior intervalo %.0f ms.",
+                  g_term.frames, g_term.maxGap * 1000.0f);
+    Logger::Info(note);
+  }
+  g_loadCover = on;
+}
+
+bool OverlayManager::IsLoadCoverOn() { return g_loadCover; }
+
+void OverlayManager::SetLoadCoverImage(std::string path) {
+  g_coverImagePath = std::move(path);
+  g_coverImageTried = false;
+}
+
+void OverlayManager::SetLoadCoverScene(ID3D11ShaderResourceView *scene,
+                                       float aspect, std::string gpuStatus,
+                                       float exposure) {
+  g_coverScene = scene;
+  g_coverAspect = aspect;
+  g_coverExposure = exposure;
+  g_coverGpu = std::move(gpuStatus);
+}
+
 void OverlayManager::RenderUI() {
+  if (g_loadCover) {
+    ImGui::GetBackgroundDrawList()->AddRectFilled(
+        ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, IM_COL32(0, 0, 0, 255));
+    DrawLoadTerminal();
+  } else if (g_coverImage != nullptr) {
+    ReleaseCoverImage();
+  }
+
   // 1. HUD Toast Overlay
   float dt = ImGui::GetIO().DeltaTime;
   if (dt > 0.0f) {

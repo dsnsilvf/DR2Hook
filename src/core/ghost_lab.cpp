@@ -1448,6 +1448,7 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
     w->Dr6 = 0;
     size_t which = 0;
     while (which < 3 && !(hit & (1ull << which))) ++which;
+    if (hit == 0) which = 0; // Dr6 zerado: loga com o 1o endereço (os valores de todos vão na linha)
     const uintptr_t a = g_watchAddrs[which].load();
     if (a != 0 && g_watchLogged.fetch_add(1) < 40) {
       char buf[420];
@@ -1572,6 +1573,13 @@ LONG CALLBACK CrashLogger(EXCEPTION_POINTERS *info) {
       dumpAt("[crbp-0x8]", crbp - 8, 0x10);
       dumpAt("[crbp]", crbp, 0x10);
     }
+  }
+  if (Readable(c->Rsp, 0x20)) {
+    // Topo cru da pilha: com rip lixo (salto por ponteiro ruim), [rsp] é o retorno de quem chamou.
+    const auto *top = reinterpret_cast<const unsigned long long *>(c->Rsp);
+    char t[160];
+    std::snprintf(t, sizeof(t), "GhostLab[crash]: [rsp] %llx %llx %llx %llx", top[0], top[1], top[2], top[3]);
+    Logger::Error(t);
   }
   Logger::Error("GhostLab[crash]: pilha (retornos no exe):" + ReturnChain(c->Rsp));
   return EXCEPTION_CONTINUE_SEARCH;
@@ -2956,6 +2964,16 @@ void PatchObjectUpdateSerial() {
 #endif
 
 } // namespace
+
+// Para outros módulos (LoadView): onde cada thread está (RIP + retornos do jogo).
+void GhostLabDumpThreads() {
+  DumpThreads();
+}
+
+// Para outros módulos (LoadView): o mesmo watchpoint de escrita, logado pelo CrashLogger.
+void GhostLabArmWriteWatch(const std::vector<uintptr_t> &addrs, const std::vector<int> &lens) {
+  ArmWriteWatch(addrs, lens);
+}
 
 bool GhostLab::Install(uintptr_t gameBase) {
 #if defined(_WIN32)

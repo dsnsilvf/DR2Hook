@@ -44,6 +44,7 @@ void *g_target = nullptr;
 std::mutex g_mutex;
 std::deque<Dr2StageEvent> g_events;
 std::string g_stage;        // pista do ultimo carregamento
+std::string g_route;        // rota do ultimo carregamento ("montalegre_rallycross_route_0")
 int g_lights = 0;           // luzes desde a ultima largada
 bool g_startedSinceLoad = false;
 ULONGLONG g_lastLoadTick = 0;
@@ -128,10 +129,25 @@ void NotifyStageLoad(const char *nefsFileName) {
   if (stage == g_stage && now - g_lastLoadTick < kLoadDedupMs) return;
   g_lastLoadTick = now;
   g_stage = stage;
+  g_route.clear();
   g_lights = 0;
   g_startedSinceLoad = false;
   Push(kDr2StageLoad, 0);
   Logger::Info("RaceEvent: carregando '" + stage + "'.");
+}
+
+void NotifyRoute(const char *routeKey) {
+  if (routeKey == nullptr || *routeKey == '\0') return;
+  const std::string key(routeKey);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (key == g_route) return;
+  g_route = key;
+  if (g_events.size() >= kMaxQueuedEvents) g_events.pop_front();
+  Dr2StageEvent event{};
+  event.kind = kDr2StageRoute;
+  std::snprintf(event.name, sizeof(event.name), "%s", key.c_str());
+  g_events.push_back(event);
+  Logger::Info("RaceEvent: rota '" + key + "'.");
 }
 
 void UninstallRaceEventsHook() {
@@ -159,6 +175,7 @@ namespace dr2hook {
 bool InstallRaceEventsHook() { return false; }
 void UninstallRaceEventsHook() {}
 void NotifyStageLoad(const char *) {}
+void NotifyRoute(const char *) {}
 } // namespace dr2hook
 
 int Dr2Host_StageConsumeEvent(dr2hook::Dr2StageEvent *) { return 0; }

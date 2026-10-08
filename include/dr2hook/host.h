@@ -17,3 +17,4 @@ void HostLog(const char *message);
 
 DR2HOOK_API void Dr2Host_RequestReload();
 DR2HOOK_API void Dr2Host_Log(int level, const char *message);
+DR2HOOK_API int Dr2Host_LogRead(unsigned long long *seq, char *out, int cap);

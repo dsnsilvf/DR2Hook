@@ -102,6 +102,9 @@ add_library(dr2hook_core SHARED
     src/core/terminal_damage.cpp
     src/core/remote_commands.cpp
     src/core/net_dialog.cpp
+    src/core/session_audio.cpp
+    src/core/intro_skip.cpp
+    src/core/load_view.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp
     src/script/mod_manager.cpp
@@ -173,6 +176,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 endif()
 
 target_compile_definitions(dr2hook_core PRIVATE DR2HOOK_CORE_MODULE)
+if(WIN32)
+    target_link_libraries(dr2hook_core PRIVATE ole32)  # SessionAudio (COM)
+endif()
 
 if((WIN32 OR MSVC) AND MINGW)
     target_link_options(dr2hook_core PRIVATE

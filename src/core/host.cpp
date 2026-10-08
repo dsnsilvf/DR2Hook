@@ -282,6 +282,10 @@ void HostLog(const char *message) {
 
 void Dr2Host_RequestReload() { dr2hook::RequestCoreReload(); }
 
+int Dr2Host_LogRead(unsigned long long *seq, char *out, int cap) {
+  return dr2hook::Logger::ReadSince(seq, out, cap);
+}
+
 void Dr2Host_Log(int level, const char *message) {
   const std::string_view text = message != nullptr ? message : "";
   switch (level) {

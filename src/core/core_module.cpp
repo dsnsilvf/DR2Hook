@@ -12,11 +12,18 @@
 #include "dr2hook/player.h"
 #include "dr2hook/safety.h"
 #include "dr2hook/savestate.h"
+#include "dr2hook/load_view.h"
+#include "dr2hook/intro_skip.h"
+#include "dr2hook/session_audio.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
 #include "dr2hook/ui/overlay.h"
 
 #include <d3d11.h>
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 
 namespace {
 
@@ -25,6 +32,94 @@ dr2hook::MemoryScanner g_memoryScanner(&g_directAccessor);
 bool g_notifyReload = false;
 
 using ConsumeFn = int (*)();
+
+// Inicialização rápida do editor (scripts/research/ring_deploy.py --quick):
+// com dr2hook_quickload.ini recente na pasta do jogo, a tela fica preta do
+// boot até a largada, e sem som (música, efeitos, o bipe da pista pronta). O
+// arquivo é apagado ao ler; um velho (o jogo não abriu
+// daquela vez) é ignorado para não escurecer um boot normal. Com
+// "fundo=<caminho>" o terminal fica sobre a foto da pista.
+constexpr auto kQuickLoadMaxAge = std::chrono::minutes(10);
+constexpr ULONGLONG kLoadCoverTimeoutMs = 180000;
+ULONGLONG g_loadCoverSince = 0;
+
+void StartLoadCover() {
+  namespace fs = std::filesystem;
+  const fs::path marker = "dr2hook_quickload.ini";
+  std::error_code ec;
+  if (!fs::exists(marker, ec)) {
+    return;
+  }
+  const auto age = fs::file_time_type::clock::now() -
+                   fs::last_write_time(marker, ec);
+  // "fundo=<caminho>": foto da pista para trás do terminal.
+  std::string image;
+  {
+    std::ifstream in(marker);
+    for (std::string line; std::getline(in, line);) {
+      if (line.rfind("fundo=", 0) == 0) {
+        image = line.substr(6);
+        while (!image.empty() && (image.back() == '\r' || image.back() == ' ')) {
+          image.pop_back();
+        }
+      }
+    }
+  }
+  fs::remove(marker, ec);
+  if (age > kQuickLoadMaxAge) {
+    dr2hook::Logger::Info(
+        "LoadCover: dr2hook_quickload.ini velho; ignorado e apagado.");
+    return;
+  }
+  dr2hook::OverlayManager::SetLoadCoverImage(image);
+  dr2hook::OverlayManager::SetLoadCover(true);
+  dr2hook::LoadView::SetActive(true);
+  dr2hook::SessionAudio::SetMuted(true);
+  g_loadCoverSince = GetTickCount64();
+  dr2hook::Logger::Info("LoadCover: tela preta ate a largada.");
+}
+
+void StopLoadCover(const char *why) {
+  if (!dr2hook::OverlayManager::IsLoadCoverOn()) {
+    return;
+  }
+  dr2hook::OverlayManager::SetLoadCover(false);
+  dr2hook::LoadView::SetActive(false);
+  dr2hook::SessionAudio::SetMuted(false);
+  dr2hook::Logger::Info(std::string("LoadCover: tela liberada (") + why +
+                        ").");
+}
+
+// O overlay por cima do quadro do jogo. Na tela preta, a LoadView mede o que o
+// jogo desenhou neste quadro e entrega a cena (se houver) para o fundo do
+// terminal; os draws do próprio overlay não contam.
+void RenderOverlay(IDXGISwapChain *swapChain) {
+  static bool tried = false;
+  if (!tried && dr2hook::OverlayManager::IsLoadCoverOn() && swapChain != nullptr) {
+    tried = true;
+    ID3D11Device *device = nullptr;
+    if (SUCCEEDED(swapChain->GetDevice(__uuidof(ID3D11Device),
+                                       reinterpret_cast<void **>(&device))) &&
+        device != nullptr) {
+      ID3D11DeviceContext *context = nullptr;
+      device->GetImmediateContext(&context);
+      if (context != nullptr) {
+        dr2hook::LoadView::Install(context);
+        context->Release();
+      }
+      device->Release();
+    }
+  }
+  dr2hook::LoadView::OnFrame(swapChain);
+  float aspect = 1.0f;
+  ID3D11ShaderResourceView *scene = dr2hook::LoadView::SceneView(&aspect);
+  dr2hook::OverlayManager::SetLoadCoverScene(scene, aspect,
+                                             dr2hook::LoadView::StatusLine(),
+                                             dr2hook::LoadView::SceneExposure());
+  dr2hook::LoadView::SetOwnDraws(true);
+  dr2hook::OverlayManager::Render(swapChain);
+  dr2hook::LoadView::SetOwnDraws(false);
+}
 
 template <typename Fn> Fn HostExport(const char *name) {
   const HMODULE host = GetModuleHandleA("dxgi.dll");
@@ -57,10 +152,14 @@ void DispatchStageEvents() {
       dr2hook::GhostLab::OnStageLoad();
       dr2hook::ModManager::DispatchStageLoad(event.name);
       break;
+    case dr2hook::kDr2StageRoute:
+      dr2hook::LoadView::NoteRoute(event.name);
+      break;
     case dr2hook::kDr2StageCountdown:
       dr2hook::ModManager::DispatchCountdown(event.value);
       break;
     case dr2hook::kDr2StageStart:
+      StopLoadCover("largada");
       dr2hook::GhostLab::OnStageStart();
       dr2hook::ModManager::DispatchStageStart(event.name, event.value != 0);
       break;
@@ -155,6 +254,7 @@ int Core_Initialize(int truncateLog) {
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::NetDialog::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
+    dr2hook::IntroSkip::Install();
 
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
@@ -167,6 +267,9 @@ int Core_Initialize(int truncateLog) {
     }
 
     g_notifyReload = truncateLog == 0;
+    if (truncateLog != 0) {
+      StartLoadCover();
+    }
     return 1;
   } catch (...) {
     return 0;
@@ -175,6 +278,10 @@ int Core_Initialize(int truncateLog) {
 
 void Core_Shutdown() {
   try {
+    StopLoadCover("core descarregado");
+    dr2hook::IntroSkip::Shutdown();
+    dr2hook::SessionAudio::Shutdown();
+    dr2hook::LoadView::Shutdown();
     dr2hook::OverlayManager::Shutdown();
     dr2hook::FreeCamera::Shutdown();
     dr2hook::PhysicsTickHarness::Shutdown();
@@ -232,6 +339,10 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
     dr2hook::TerminalDamage::Update();
     dr2hook::RemoteCommands::Poll(hwnd);
     DispatchStageEvents();
+    if (dr2hook::OverlayManager::IsLoadCoverOn() &&
+        GetTickCount64() - g_loadCoverSince > kLoadCoverTimeoutMs) {
+      StopLoadCover("3 min sem largada");
+    }
     dr2hook::ModManager::DispatchTick(deltaTime);
 
     if (ConsumePauseMenuRequest()) {
@@ -248,7 +359,7 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
 
     dr2hook::FreeCamera::OnFrame(hwnd);
     if (dr2hook::OverlayManager::IsInitialized()) {
-      dr2hook::OverlayManager::Render(swapChain);
+      RenderOverlay(swapChain);
     }
   } catch (...) {
     dr2hook::Logger::Error("Excecao em Dr2Core::OnFrame.");

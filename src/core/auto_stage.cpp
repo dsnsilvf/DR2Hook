@@ -1,6 +1,7 @@
 #include "dr2hook/auto_stage.h"
 #include "dr2hook/host.h"
 #include "dr2hook/logger.h"
+#include "dr2hook/race_events.h"
 
 #include <MinHook.h>
 #include <algorithm>
@@ -310,14 +311,18 @@ static void DetourLoadingFill(void *screen) {
   auto *distance = game != nullptr ? reinterpret_cast<float *>(game + kGameDistance) : nullptr;
   void *source = game != nullptr ? *reinterpret_cast<void **>(game + kGameRouteSource) : nullptr;
   void *catalogue = *reinterpret_cast<void **>(g_gameBase + kCatalogueRva);
-  if (distance != nullptr && *distance == 0.0f && source != nullptr && catalogue != nullptr) {
+  if (distance != nullptr && source != nullptr && catalogue != nullptr) {
     using RouteIdFn = uint32_t (*)(void *, int);
     const uint32_t routeId = (*reinterpret_cast<RouteIdFn **>(source))[2](source, 0);
     uint8_t **row = reinterpret_cast<CatalogueRowFn>(g_gameBase + kCatalogueRowRva)(
         catalogue, kTrackModelTable | routeId, nullptr);
     const uint8_t *fields = row != nullptr ? *row : nullptr;
     const char *nameKey = fields != nullptr ? *reinterpret_cast<const char *const *>(fields + kRouteName) : nullptr;
-    if (nameKey != nullptr && std::strncmp(nameKey, "lng_", 4) == 0) {
+    const bool known = nameKey != nullptr && std::strncmp(nameKey, "lng_", 4) == 0;
+    if (known) {
+      NotifyRoute(nameKey + 4); // chave da pose da largada (LoadView, olhar=auto)
+    }
+    if (known && *distance == 0.0f) {
       *distance = *reinterpret_cast<const float *>(fields + kRouteLength);
       auto *elevation = reinterpret_cast<float *>(game + kGameElevation);
       if (*elevation == 0.0f) {
