@@ -87,3 +87,22 @@ def _decode_v1(data: bytes) -> Node:
 
     root, _ = element(5)
     return root
+
+
+FOOTER = b"\0\4\6\0\0\0" * 2  # depois da raiz em todo arquivo da versão 0 (surface_materials, triggers_*)
+
+
+def encode(root: Node) -> bytes:
+    """Versão 0 (o inverso de `decode`): o `u32` do cabeçalho conta do próprio `u32` ao fim dos atributos, menos
+    um; o do fim vale sempre 5 (o `4` e ele mesmo); depois da raiz vem o `FOOTER`."""
+
+    def element(node: Node) -> bytes:
+        name, text, attrs, children = node
+        head = bytes([len(attrs)]) + name.encode() + b"\0"
+        for key, value in attrs:
+            head += key.encode() + b"\0" + value.encode() + b"\0"
+        out = b"\0" + struct.pack("<I", len(head) + 3) + head
+        out += b"".join(element(c) for c in children)
+        return out + (text or "").encode() + b"\0\4" + struct.pack("<I", 5)
+
+    return MAGIC + element(root) + FOOTER

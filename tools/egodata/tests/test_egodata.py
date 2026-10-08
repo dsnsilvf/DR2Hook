@@ -132,6 +132,16 @@ class CfgXmlTest(unittest.TestCase):
                 ["note", "oi", [], []],
             ]])
 
+    def test_encode(self):
+        tree = ["triggers", None, [], [
+            ["trigger", None, [("type", "DummyTrigger")], [
+                ["value", None, [("type", "int32"), ("name", "max_height"), ("value", "3")], []]]],
+            ["note", "oi", [], []]]]
+        data = cfgxml.encode(tree)
+        self.assertEqual(cfgxml.decode(data), tree)
+        self.assertTrue(data.endswith(cfgxml.FOOTER))
+        # u32 do cabeçalho de "triggers": 1 (nº de atributos) + 9 (nome) + 3
+        self.assertEqual(struct.unpack_from("<I", data, 6)[0], 13)
 
     def test_decode_v1(self):
         def element(name, attrs, children=b""):
