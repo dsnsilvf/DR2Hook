@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/dr2hook_logo.webp" alt="DR2Hook — DR2 Mod Loader" width="560"></p>
+
 # DR2Hook
 
 Reverse-engineering project for DiRT Rally 2.0 (EGO Engine, x64, DirectX 11): notes on the game's internals, a mod loader, and tools for its files.
