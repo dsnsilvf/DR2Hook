@@ -101,6 +101,8 @@ for REQUIRED_FILE in \
   "DR2Hook-${VERSION}/dr2hook_core.dll" \
   "DR2Hook-${VERSION}/mods/practice_mode/mod.json" \
   "DR2Hook-${VERSION}/mods/practice_mode/main.lua" \
+  "DR2Hook-${VERSION}/mods/debug_mode/mod.json" \
+  "DR2Hook-${VERSION}/mods/debug_mode/main.lua" \
   "DR2Hook-${VERSION}/README.txt" \
   "DR2Hook-${VERSION}/INSTALL.txt"; do
   if ! echo "${ZIP_CONTENTS}" | grep -q "${REQUIRED_FILE}"; then

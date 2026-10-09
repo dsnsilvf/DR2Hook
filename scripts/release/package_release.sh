@@ -40,7 +40,7 @@ fi
 # 2. Montar árvore de diretórios de distribuição limpa
 echo "[2/5] Montando estrutura de distribuição em ${PKG_DIR}..."
 rm -rf "${PKG_DIR}" "${ZIP_FILE}" "${SHA_FILE}"
-mkdir -p "${PKG_DIR}/mods/practice_mode"
+mkdir -p "${PKG_DIR}/mods/practice_mode" "${PKG_DIR}/mods/debug_mode"
 
 # Copiar proxy DLL e o core recarregável para a raiz do pacote
 cp "${DXGI_BIN}" "${PKG_DIR}/dxgi.dll"
@@ -63,6 +63,10 @@ fi
 # Copiar mod de treino padrão (Practice Mode)
 cp "${ROOT_DIR}/mods/practice_mode/mod.json" "${PKG_DIR}/mods/practice_mode/"
 cp "${ROOT_DIR}/mods/practice_mode/main.lua" "${PKG_DIR}/mods/practice_mode/"
+
+# Copiar o Debug Mode (numero de fantasmas, teclas F9/F11)
+cp "${ROOT_DIR}/mods/debug_mode/mod.json" "${PKG_DIR}/mods/debug_mode/"
+cp "${ROOT_DIR}/mods/debug_mode/main.lua" "${PKG_DIR}/mods/debug_mode/"
 
 # 3. Gerar arquivos de documentação para o pacote
 echo "[3/5] Gerando README.txt e INSTALL.txt..."
@@ -120,6 +124,9 @@ DR2Hook - Guia de Instalação, Configuração e Desinstalação
      ├── dxgi.dll
      ├── dr2hook_core.dll
      ├── mods/
+     │   ├── debug_mode/
+     │   │   ├── mod.json
+     │   │   └── main.lua
      │   └── practice_mode/
      │       ├── mod.json
      │       └── main.lua

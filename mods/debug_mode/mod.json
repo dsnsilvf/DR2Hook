@@ -1,0 +1,8 @@
+{
+  "name": "Debug Mode",
+  "id": "dr2.debug_mode",
+  "version": "1.0.0",
+  "author": "DR2Hook Community",
+  "description": "Ghost car count, solid ghost and the debug keys (free camera, insta crash).",
+  "main": "main.lua"
+}
