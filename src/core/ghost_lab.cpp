@@ -247,6 +247,8 @@ struct InFlight {
 
 // -1 = nada pendente.
 std::atomic<int> g_cloneCount{-1};
+// Carros fantasma pedidos pelo menu (Debug Mode); 0 = padrao do jogo.
+std::atomic<int> g_menuGhostCars{0};
 bool g_collideApplied = false;
 // Carros com a colisao ligada: a thread do jogo poe, o Update desfaz na pausa.
 std::mutex g_collideMutex;
@@ -1079,16 +1081,14 @@ void LogStageEntries(const char *when) {
   Logger::Info(line);
 }
 
-// Teste de limite: o 2o passe de SpawnStageVehicles pula a entrada de fantasma
-// com +0xb4 = 1 (as entradas 3 a 5 chegam assim). Se existir
-// dr2hook_ghost_cars.txt com N, desmarca ate haver N entradas de fantasma
-// liberadas; sem arquivo, nada muda.
+int RequestedGhostCars(); // definido mais abaixo (arquivo de teste ou menu)
+
+// O 2o passe de SpawnStageVehicles pula a entrada de fantasma com +0xb4 = 1
+// (as entradas 3 a 5 chegam assim). Com N carros pedidos (dr2hook_ghost_cars.txt
+// ou o contador do Debug Mode), desmarca ate haver N entradas de fantasma
+// liberadas; sem pedido, nada muda.
 void UnflagGhostEntries() {
-  int want = 0;
-  if (FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
-    if (std::fscanf(f, "%d", &want) != 1) want = 0;
-    std::fclose(f);
-  }
+  const int want = RequestedGhostCars();
   if (want <= 0) return;
   uint8_t *session = Read<uint8_t *>(reinterpret_cast<const uint8_t *>(g_gameBase + kSessionGlobalRva), 0);
   if (!UsablePointer(reinterpret_cast<uintptr_t>(session))) return;
@@ -1168,13 +1168,21 @@ void DumpThreads() {
 // Teto do experimento de limite (carros fantasma pedidos no arquivo de teste).
 constexpr int kMaxGhostCars = 32;
 
-// Quantos carros fantasma pedir (arquivo de teste); 0 = comportamento do jogo.
-int WantedGhostCars() {
-  int want = 0;
+// Pedido cru: o dr2hook_ghost_cars.txt, se existir (pesquisa, pode passar de 15),
+// senao o contador do Debug Mode (ja limitado a 15). 0 = comportamento do jogo.
+int RequestedGhostCars() {
   if (FILE *f = std::fopen("dr2hook_ghost_cars.txt", "r")) {
+    int want = 0;
     if (std::fscanf(f, "%d", &want) != 1) want = 0;
     std::fclose(f);
+    return want;
   }
+  return g_menuGhostCars.load();
+}
+
+// Quantos carros fantasma pedir; 0 = comportamento do jogo.
+int WantedGhostCars() {
+  const int want = RequestedGhostCars();
   // 15 fantasmas + jogador = 16 e o maximo estavel: acima disso o jogo crasha
   // (arrays/locais de 16 posicoes na rotina por carro, exe+0x49d260; ver
   // docs/reverse_engineering/investigations/ghost-limit-ladder-2026-10-05.md).
@@ -3129,6 +3137,27 @@ void GhostLab::Update() {
 GhostLab::Status GhostLab::GetStatus() {
   std::lock_guard<std::mutex> lock(g_mutex);
   return g_status;
+}
+
+void GhostLab::SetWantedCars(int cars) {
+#if defined(_WIN32)
+  // So ate 15: de 16 em diante o core precisa dos patches que so entram no boot
+  // (ghosts.md §6.8), entao ali vale apenas o arquivo de teste.
+  const int n = cars < 2 ? 0 : std::min(cars, 15);
+  if (g_menuGhostCars.exchange(n) != n)
+    Logger::Info("GhostLab: " + std::to_string(n) +
+                 " carros fantasma pedidos pelo menu; valem na proxima carga da especial.");
+#else
+  (void)cars;
+#endif
+}
+
+int GhostLab::WantedCars() {
+#if defined(_WIN32)
+  return WantedGhostCars();
+#else
+  return 0;
+#endif
 }
 
 void GhostLab::RequestClones(int count, float stepSeconds) {
