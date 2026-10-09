@@ -98,7 +98,7 @@ Hipóteses (Gemini; endereços vistos por ele no binário/dump, não testados em
 
 ## 6. GhostLab: testes no jogo (2026-10-02, tarde)
 
-Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Practice Mode (*Live gap to ghost*, *Extra ghost copies*, *Ghost copy spacing*, *Ghost head start*, *Solid ghost car*) e Lua `Ghost.status/clone/setOpaque/setTimeOffset/setHud`. Branch `feat/ghost-live`. Relatórios brutos do Gemini usados aqui (fora do git): `captures/gemini/ghost_visual/REPORT.md` e `captures/gemini/ghost_transparency/REPORT.md`, ambos com erros pontuais corrigidos abaixo.
+Código: `src/core/ghost_lab.cpp` (core, recarrega com F8), opções no mod Practice Mode (*Live gap to ghost*, *Ghost head start*) e no mod Debug Mode (*Ghost cars on screen*, *Ghost spacing*, *Solid ghost car*; até 2026-10-09 as cópias eram *Extra ghost copies* no Practice Mode) e Lua `Ghost.status/clone/setOpaque/setTimeOffset/setHud/setCars`. *Ghost cars on screen* (`Ghost.setCars`) faz pelo menu o que o `dr2hook_ghost_cars.txt` faz na pesquisa, limitado a 15 (o arquivo, se existir, vale por cima). Branch `feat/ghost-live`. Relatórios brutos do Gemini usados aqui (fora do git): `captures/gemini/ghost_visual/REPORT.md` e `captures/gemini/ghost_transparency/REPORT.md`, ambos com erros pontuais corrigidos abaixo.
 
 ### 6.1 Diferença ao vivo (validado)
 

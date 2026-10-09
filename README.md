@@ -25,7 +25,8 @@
 | **Mod loader** | A `dxgi.dll` proxy that loads `dr2hook_core.dll` into the game, with no external injector. **F8** reloads the core while the game runs. |
 | **Lua mods** | Lua 5.4 mods in `mods/<name>/`, with stage events (`onStageLoad`, `onCountdown`, `onStageStart`) and the `Player`, `Race`, `Ghost`, `UI` and `Menu` APIs. See the [modding guide](docs/guides/modding_guide.md). |
 | **Overlay and native menus** | A Dear ImGui overlay (**Insert**), and a **DR2 Hook** entry in the game's own pause and main menus, where each mod's options appear. |
-| **Practice Mode** | The example mod (`mods/practice_mode/`): checkpoints, race-start modes and ghost-car options. |
+| **Practice Mode** | The example mod (`mods/practice_mode/`): checkpoints, race-start modes, the live gap to the ghost and a ghost head start. |
+| **Debug Mode** | The research options (`mods/debug_mode/`): how many ghost cars are on screen (off, or 2 to 15), a solid ghost, and switches that turn the F9 and F11 keys off. |
 | **Free camera, ghosts, fast boot** | Free camera (**F9**). Up to 15 ghost cars plus the player. Skipping the splash screens, and a quick load that shows the loading log instead of the menus. |
 | **DR2Hook Track Editor** | A native C++/OpenGL editor (`tools/viewer3d`) for stages exported from the game and for the Ring: terrain, objects, start grids, replay cameras and the AI line. You can move, rotate, duplicate and delete objects, with undo and autosave. **Testar no jogo** (F5) ports the Ring and opens the game on it. While the game runs, the editor shows where the car and the camera are. [README](tools/viewer3d/README.md) (Portuguese) |
 | **DR2Hook Ring** | A made-up rallycross track built by `tools/synthtrack`: terrain, collision, ~2,300 objects, cameras, grids and a loading screen. It loads in the game through a folder overlay, with no `.nefs` changed. [examples/](examples/README.md) · [how it gets into the game](docs/reverse_engineering/track_loading.md) |
@@ -43,8 +44,8 @@ Copy `dxgi.dll`, `dr2hook_core.dll` and `mods/` next to `dirtrally2.exe`. See [i
 | Insert | Overlay |
 | F5 / F6 / F7 | Practice Mode: save a checkpoint / restore / restore with momentum |
 | F8 | Reload `dr2hook_core.dll` |
-| F9 | Free camera |
-| F11 | Insta crash (terminal-damage research, offline only) |
+| F9 | Free camera (can be turned off in Debug Mode) |
+| F11 | Insta crash (terminal-damage research, offline only; can be turned off in Debug Mode) |
 
 ## Build
 
