@@ -3,6 +3,7 @@
 #include "dr2hook/free_camera.h"
 #include "dr2hook/ghost_lab.h"
 #include "dr2hook/ghost_trace.h"
+#include "dr2hook/hotkeys.h"
 #include "dr2hook/terminal_damage.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
@@ -379,7 +380,13 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       return 1;
     }
 
-    if (dr2hook::FreeCamera::OnWndProc(hwnd, msg, wParam, lParam) != 0) {
+    // Tecla fisica tem scan code; o `key` remoto (PostMessage com lParam 1) nao.
+    const bool physicalKey = ((lParam >> 16) & 0xFF) != 0;
+
+    // F9 desligado no Debug Mode: a tecla fisica so desliga a camera, nunca liga.
+    const bool f9Blocked = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F9 && physicalKey &&
+                           !dr2hook::Hotkeys::freeCamera.load() && !dr2hook::FreeCamera::Enabled();
+    if (!f9Blocked && dr2hook::FreeCamera::OnWndProc(hwnd, msg, wParam, lParam) != 0) {
       return 1;
     }
 
@@ -411,7 +418,7 @@ int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     // F11: insta crash, destroi o carro na hora (dano terminal).
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F11 &&
-        (lParam & (1 << 30)) == 0) {
+        (lParam & (1 << 30)) == 0 && (!physicalKey || dr2hook::Hotkeys::instaCrash.load())) {
       using R = dr2hook::TerminalDamage::Result;
       const R r = dr2hook::TerminalDamage::Crash();
       if (dr2hook::OverlayManager::IsInitialized()) {

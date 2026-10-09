@@ -20,6 +20,8 @@ public:
   static void OnFrame(HWND hwnd);
   // 1 quando a mensagem foi consumida e não deve seguir para o jogo.
   static int OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  // true com a câmera livre ligada.
+  static bool Enabled();
   // Comandos remotos (`cam`): posição do olho e alvo em metros do mundo. A pose só é
   // aplicada com a câmera livre ligada (F9, ou `key f9`).
   static std::string RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz);

@@ -578,6 +578,8 @@ void FreeCamera::OnFrame(HWND hwnd) {
   (void)hwnd;
 }
 
+bool FreeCamera::Enabled() { return g_enabled.load(std::memory_order_relaxed); }
+
 int FreeCamera::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F9 &&
       (lParam & (1 << 30)) == 0) {
@@ -668,6 +670,7 @@ bool FreeCamera::Install(uintptr_t) { return false; }
 void FreeCamera::Shutdown() {}
 void FreeCamera::OnFrame(HWND) {}
 int FreeCamera::OnWndProc(HWND, UINT, WPARAM, LPARAM) { return 0; }
+bool FreeCamera::Enabled() { return false; }
 
 } // namespace dr2hook
 
