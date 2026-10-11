@@ -112,8 +112,7 @@ O cache só é refeito quando a assinatura muda (`kLoaderVersion`, hoje `trackpk
 
 ## Pendente
 
-- Validar no jogo o alfinete do Ring no Brasil com a chave própria. O pacote de 2026-10-11 já leva o `map` do
-  `package.json` e a foto do card; falta olhar a tela de locations.
+- Ver no jogo o card novo do Ring (foto pela câmera do `package.json`).
 - Nome do campo 17 da LOCATION.
 
 Feito em 2026-10-11: o diálogo no viewer3d (Arquivo > Informações da pista). Ele tem 34 países prontos, o clique no
