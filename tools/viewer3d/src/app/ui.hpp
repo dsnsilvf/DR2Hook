@@ -5,6 +5,7 @@
 #pragma once
 
 #include "app/launch.hpp"
+#include "app/track_info.hpp"
 #include "app/track_view.hpp"
 #include "render/camera.hpp"
 
@@ -68,6 +69,8 @@ public:
     bool panels = true;  // barra de ferramentas e painéis (F10; o menu e o status ficam)
     void toggle_help() { show_help_ = !show_help_; }
     void open_about() { about_request_ = true; }
+    // Arquivo > Informações da pista: o package.json do pacote .dr2track (nome, país, alfinete do mapa, foto do card).
+    void open_track_info() { info_.open = true; }
 
     // Jogo (grupo do meio da barra de ferramentas e menu Jogo).
     // Testar no jogo (F5): abre a janela de opções ou, com um teste rodando, a do progresso.
@@ -78,7 +81,7 @@ public:
     void stop_game(TrackView* track);
     // Título da janela: "pista · arquivo * — DR2Hook Editor de Pistas" (o * enquanto houver edições não gravadas).
     static std::string window_title(const TrackView* track);
-    // Capturas (--ui): abre a janela "exibicao", "atalhos" ou "sobre" no primeiro quadro. false se o nome não existe.
+    // Capturas (--ui): abre a janela "exibicao", "atalhos", "sobre" ou "info" no primeiro quadro. false se o nome não existe.
     bool open_on_start(const std::string& what);
 
 private:
@@ -99,6 +102,9 @@ private:
     void modals(TrackView* track);
     void help_window();
     void about_window();
+    void track_info_window(TrackView* track, render::OrbitCamera& cam);
+    void world_map(TrackInfo& info);
+    void card_guide(const TrackView* track) const;
     void poll_launch();
     void launch_modal(TrackView* track);
     void start_launch(TrackView& track);
@@ -197,6 +203,22 @@ private:
         std::string next_what, repo;
     } control_;
     GameWatch game_;
+
+    // Informações da pista (track_info.hpp): o que está na janela e o que está no disco, da pista `dir`.
+    struct InfoWindow {
+        bool open = false;     // pedido do menu (abre e foca no próximo quadro)
+        bool visible = false;  // janela aberta (a guia de recorte do card aparece no 3D)
+        bool guide = true;     // mostrar a guia de recorte do card no 3D
+        std::string dir, error;
+        TrackInfo info, saved;
+        bool exists = false;
+        // mapa-múndi do jogo (build/re/world_map.webp; o world_map_image.py extrai)
+        unsigned map_tex = 0;
+        int map_w = 0, map_h = 0;
+        bool map_tried = false;
+        ChildProcess extract;
+        Progress extract_progress;
+    } info_;
 };
 
 }  // namespace dr2::app

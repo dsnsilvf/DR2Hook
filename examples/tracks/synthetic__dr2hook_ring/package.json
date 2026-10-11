@@ -1,0 +1,22 @@
+{
+ "name": "DR2 Hook Ring",
+ "country": "Brazil",
+ "description": "Pista sintética do DR2 Hook, gerada pelo editor de níveis.",
+ "author": "DR2Hook",
+ "version": "1",
+ "map": {
+  "lat": -15,
+  "lon": -48
+ },
+ "card": {
+  "camera": [
+   0.6,
+   0.5,
+   680,
+   -15,
+   100,
+   -5
+  ],
+  "aspect": 1.77778
+ }
+}

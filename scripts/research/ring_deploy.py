@@ -4,11 +4,14 @@
 As etapas são as do docs/reverse_engineering/track_loading.md §12 (terreno, colisão, objetos, rota, câmeras, vagas, tela
 de carregamento). Cada saída fica em `build/re/ring_deploy/` e só é refeita quando o que ela lê mudou (assinatura
 em `cache.json`: tamanho e data dos arquivos de entrada, conteúdo do edits.json, os scripts e os argumentos). Depois
-copia para a overlay o que mudou e, se pedido, reabre o jogo:
+copia para a overlay o que mudou, gera o pacote `.dr2track` e o instala em `<jogo>/ctracks/` (track_package.py, com
+o `package.json` da pista: nome, país, alfinete do mapa e, se houver, a câmera do card, renderizada pelo viewer3d) e,
+se pedido, reabre o jogo:
 
 - fecha o jogo aberto, apaga um `dr2hook_cmd.txt` velho (ele rodaria no boot), liga o AutoStage
-  (`dr2hook_autostage.ini`: enabled = 1, once = 1, portugal / dr2hook_ring / route_0) e o SplashSkip
-  (`dr2hook_intro.ini`: pular_splash=1; a `dxgi.dll` do jogo precisa tê-lo, ver boot_intro.md §4);
+  (`dr2hook_autostage.ini`: enabled = 1, once = 1, portugal / dr2hook_ring / route_0) e grava o marcador de abertura
+  pelo editor (`dr2hook_editor_launch.txt`, só para esta abertura: sem a tela de boot do DR2Hook, o splash e o vídeo
+  da Codemasters; ver boot_intro.md);
 - abre pela Steam e acompanha o `dr2hook.log` fase por fase (MILESTONES): o jogo iniciou (AutoStage), os dados
   base, a pista (andamento pela contagem de arquivos abertos, comparada com a da última vez) e a largada. As linhas
   do jogo que interessam vão para o log; um crash (`[crash]` no log) para na hora, mesmo com a janela de erro do
@@ -69,7 +72,7 @@ ROUTE_FILES = ("progress_track.xml", "ai_track.xml", "ai_vehicle_track.xml", "ve
 CODE = ("scripts/research", "tools/egodata", "tools/uiview/mesh.py")
 # duração típica (s) quando ainda não há medida: só pesa a barra
 GUESS = {"terrain": 2.0, "collision": 7.5, "objects": 1.0, "route": 1.0, "cameras": 0.3, "grids": 0.2, "loading": 20.0,
-         "copy": 0.3, "close": 1.0, "open": 3.0, "boot": 15.0, "base": 4.0, "load": 4.0, "start": 2.0,
+         "copy": 0.3, "card": 12.0, "package": 8.0, "close": 1.0, "open": 3.0, "boot": 15.0, "base": 4.0, "load": 4.0, "start": 2.0,
          "freecam": 0.5}
 # fases do jogo no dr2hook.log, em ordem: (etapa, texto, marca que fecha a fase). Uma marca só vale depois da
 # anterior (o "LoadTrace: IO" do boot não fecha nada); a da largada fecha todas.
@@ -200,12 +203,19 @@ def set_ini(path: str, values: dict[str, str]) -> None:
         fh.write(text)
 
 
-def force_splash_skip(path: str) -> None:
-    """O editor abre o jogo sempre sem o splash do logo: pular_splash=1 no dr2hook_intro.ini (a dxgi lê `chave=valor`, sem espaços)."""
-    lines = open(path, encoding="utf-8").read().splitlines() if os.path.exists(path) else []
-    lines = [l for l in lines if not l.startswith("pular_splash=")] + ["pular_splash=1"]
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+def mark_editor_launch(game: str) -> None:
+    """Marca esta abertura como vinda do editor: a dxgi consome `dr2hook_editor_launch.txt` (vale por 2 min) e pula a
+    tela de boot do DR2Hook, o splash e o vídeo da Codemasters só nela. Tira um `pular_splash=1` antigo do
+    dr2hook_intro.ini, que deixava o splash de fora em toda abertura."""
+    with open(os.path.join(game, "dr2hook_editor_launch.txt"), "w", encoding="utf-8") as fh:
+        fh.write("editor\n")
+    ini = os.path.join(game, "dr2hook_intro.ini")
+    if os.path.exists(ini):
+        lines = open(ini, encoding="utf-8").read().splitlines()
+        kept = [l for l in lines if l != "pular_splash=1"]
+        if kept != lines:
+            with open(ini, "w", encoding="utf-8") as fh:
+                fh.write("".join(l + "\n" for l in kept))
 
 
 def cmd_answer(out_text: str, command: str) -> str:
@@ -259,6 +269,27 @@ def send_command(game: str, command: str, timeout: float = 4.0) -> str:
                 return answer
         time.sleep(0.05)
     raise RuntimeError("o jogo leu o comando mas não respondeu no dr2hook_cmd.out")
+
+
+CARD_SHOT = f"{OUT}/card/card.ppm"
+PACKAGE = f"{OUT}/package/{TRACK}.dr2track"
+CARD_WIDTH = 2240  # a foto do card sai na proporção da janela do editor e o track_package.py recorta cada imagem
+
+
+def card_camera(path: str) -> dict | None:
+    """A câmera do card no package.json do viewer3d: {"camera": [yaw, pitch, dist, x, y, z], "aspect": l/a}."""
+    try:
+        card = json.load(open(path, encoding="utf-8")).get("card")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(card, dict):
+        return None
+    cam, aspect = card.get("camera"), card.get("aspect", 16 / 9)
+    if not (isinstance(cam, list) and len(cam) == 6 and all(isinstance(v, (int, float)) for v in cam)):
+        return None
+    if not isinstance(aspect, (int, float)) or not 0.5 <= aspect <= 4:
+        aspect = 16 / 9
+    return {"camera": [float(v) for v in cam], "aspect": float(aspect)}
 
 
 class Deploy:
@@ -317,6 +348,15 @@ class Deploy:
                           inputs=track + code + ["build/viewer3d/viewer3d"],
                           outputs=[f"{OVERLAY}/frontend", f"{OVERLAY}/dr2hook/loadcover_{TRACK}_{ROUTE}.ppm"]))
         s.append(Step("copy", "Copiando para a overlay", self.copy, cached=False))
+        info = os.path.join(TRACK_DIR, "package.json")
+        cam = card_camera(os.path.join(ROOT, info))
+        port = [st.key for st in s if st.cached]
+        if cam:
+            s.append(Step("card", "Foto do card (câmera do editor)", lambda: self.render_card(cam),
+                          inputs=track + ["build/viewer3d/viewer3d"], args=[cam], outputs=[CARD_SHOT]))
+        s.append(Step("package", "Pacote da pista (.dr2track em ctracks/)", self.package,
+                      inputs=[info, "scripts/research/track_package.py", "scripts/research/pssg_fragment.py"],
+                      args=[a.game], after=port + (["card"] if cam else []), outputs=[PACKAGE]))
         if not a.no_game:
             s.append(Step("close", "Fechando o jogo aberto", self.close_game, cached=False))
             s.append(Step("open", "Abrindo o jogo (Steam)", self.open_game, cached=False))
@@ -335,6 +375,8 @@ class Deploy:
             sigs[st.key] = st.sig
             have = all(os.path.exists(os.path.join(ROOT, p)) for p in st.outputs)
             st.skip = have and self.cache.get(st.key, {}).get("sig") == st.sig and not self.a.force
+            if st.key == "package":  # o pacote instalado no jogo também tem de estar lá
+                st.skip = st.skip and os.path.exists(os.path.join(self.a.game, "ctracks", f"{TRACK}.dr2track"))
 
     def copy(self) -> None:
         o = OUT
@@ -366,6 +408,27 @@ class Deploy:
             changed += 1
             self.rep.log(f"  {rel}")
         self.rep.log(f"  {changed} de {len(files)} arquivos mudaram na overlay")
+
+    def render_card(self, cam: dict) -> None:
+        w = CARD_WIDTH
+        h = max(16, round(w / cam["aspect"]))
+        out = os.path.join(ROOT, CARD_SHOT)
+        cmd = [os.path.join(ROOT, "build/viewer3d/viewer3d"), "--track", os.path.join(ROOT, TRACK_DIR), "--fresh",
+               "--autosave", "0", "--panels", "0", "--wait-textures", "--frames", "40", "--tex-max-side", "0",
+               "--tex-mb", "3072", "--hide", "lines", "--camera", ",".join(f"{v:.5f}" for v in cam["camera"]),
+               "--shot-size", f"{w}x{h}", "--screenshot", out]
+        p = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace")
+        if p.returncode or not os.path.exists(out):
+            raise RuntimeError("viewer3d não renderizou a foto do card: " + " | ".join(p.stderr.splitlines()[-3:]))
+        self.rep.log(f"  {w}x{h} -> {CARD_SHOT}")
+
+    def package(self) -> None:
+        argv = ["scripts/research/track_package.py", "--overlay", OVERLAY, "--id", TRACK,
+                "--info", os.path.join(TRACK_DIR, "package.json"), "--out", os.path.dirname(PACKAGE),
+                "--install", os.path.join(self.a.game, "ctracks"), "--game", self.a.game]
+        if os.path.exists(os.path.join(ROOT, CARD_SHOT)) and card_camera(os.path.join(ROOT, TRACK_DIR, "package.json")):
+            argv += ["--card", CARD_SHOT]
+        run_script(self.rep, argv)
 
     # ---- jogo
 
@@ -400,7 +463,7 @@ class Deploy:
             pass
         set_ini(os.path.join(g, "dr2hook_autostage.ini"),
                 {"enabled": "1", "once": "1", "location": LOCATION, "track": TRACK, "route": ROUTE})
-        force_splash_skip(os.path.join(g, "dr2hook_intro.ini"))
+        mark_editor_launch(g)
         quick = os.path.join(g, "dr2hook_quickload.ini")
         if self.a.quick:
             cover = os.path.join(ROOT, OVERLAY, "dr2hook", f"loadcover_{TRACK}_{ROUTE}.ppm")

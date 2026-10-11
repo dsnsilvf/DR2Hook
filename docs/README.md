@@ -2,7 +2,7 @@
 
 | Pasta | Conteúdo |
 | --- | --- |
-| [`guides/`](guides/) | Para quem usa e escreve mods: [instalação](guides/install.md), [guia de mods Lua](guides/modding_guide.md) e [canal de comandos remoto](guides/remote_commands.md) |
+| [`guides/`](guides/) | Para quem usa e escreve mods: [instalação](guides/install.md), [guia de mods Lua](guides/modding_guide.md), [canal de comandos remoto](guides/remote_commands.md) e [pistas próprias](guides/custom_tracks.md) |
 | [`architecture/`](architecture/) | Como o loader funciona por dentro: [exports do `dxgi.dll`](architecture/dxgi_exports.md), [harness do tick de física](architecture/physics_tick_harness.md) e a [decisão sobre savestate](architecture/adr_savestate_safety.md) |
 | [`tools/`](tools/) | Ferramentas fora do jogo: [`dr2rec`](tools/dr2rec.md) (caixa-preta de sessão) e [DR2 UI Viewer](tools/uiview.md), com [Car Explorer](tools/car_explorer.md), [Track Explorer](tools/track_explorer.md) e [telas do jogo](tools/ui_screens.md); e a [pista sintética](tools/synthtrack.md) (`tools/synthtrack`) |
 | [`reverse_engineering/`](reverse_engineering/README.md) | Engenharia reversa por subsistema, com grau de evidência em cada afirmação, e as investigações em `investigations/` |

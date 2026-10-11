@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 
 namespace dr2::app {
 
@@ -435,6 +436,7 @@ EditorUi::EditorUi(SDL_Window* window, void* gl_context, bool persist) {
 
 EditorUi::~EditorUi() {
     if (about_tex_) glDeleteTextures(1, &about_tex_);
+    if (info_.map_tex) glDeleteTextures(1, &info_.map_tex);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();  // grava o imgui.ini
@@ -517,6 +519,7 @@ bool EditorUi::open_on_start(const std::string& what) {
     if (what == "exibicao") display_request_ = true;
     else if (what == "atalhos") show_help_ = true;
     else if (what == "sobre") about_request_ = true;
+    else if (what == "info") info_.open = true;
     else return false;
     return true;
 }
@@ -592,6 +595,7 @@ Rect EditorUi::frame(TrackView* track, render::OrbitCamera& cam, float fps) {
     }
     if (show_help_) help_window();
     about_window();
+    track_info_window(track, cam);
     modals(track);
     watch_settings();
     return vp_;
@@ -782,6 +786,8 @@ void EditorUi::menu_bar(TrackView* track, render::OrbitCamera& cam) {
         if (ImGui::MenuItemEx("Gravar edits.json", ICON_SAVE, "Ctrl+S", false, track != nullptr)) track->save();
         if (ImGui::MenuItemEx("Recuperar autosave", ICON_HISTORY, nullptr, false, track && track->has_autosave())) track->recover_autosave();
         if (track) tip("Recuperar autosave", nullptr, "Volta às edições do último autosave (a cada 60 s); fica não gravado até o Ctrl+S");
+        if (ImGui::MenuItemEx("Informações da pista…", ICON_INFO, nullptr, false, track != nullptr)) open_track_info();
+        if (track) tip("Informações da pista", nullptr, "Nome, país, alfinete do mapa e foto do card do pacote .dr2track (package.json)");
         ImGui::Separator();
         if (ImGui::MenuItemEx("Sair", ICON_QUIT, "Ctrl+Q") && ask_quit(track)) quit_request = true;
         ImGui::EndMenu();
@@ -1734,6 +1740,9 @@ void EditorUi::track_inspector(TrackView& track) {
         ImGui::EndTable();
     }
 
+    if (ImGui::Button(ICON_INFO "  Informações da pista…")) open_track_info();
+    tip("Informações da pista", nullptr, "Nome, país, alfinete do mapa e foto do card do pacote .dr2track");
+
     section("Memória de vídeo");
     if (begin_props("##vram")) {
         auto& tex = track.textures();
@@ -1896,6 +1905,269 @@ void EditorUi::about_window() {
     const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
     if (primary_button("Fechar") || enter || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
+}
+
+// ---- Informações da pista (package.json do .dr2track)
+
+namespace {
+
+// Recortes que o track_package.py tira do centro da foto do card (s_$LOC, s_$LOC_l e o painel), largura/altura.
+struct CardCrop {
+    const char* name;
+    float aspect;
+};
+constexpr CardCrop kCardCrops[] = {{"card", 560.0f / 272.0f}, {"card grande", 608.0f / 400.0f}, {"painel", 352.0f / 240.0f}};
+
+}  // namespace
+
+void EditorUi::track_info_window(TrackView* track, render::OrbitCamera& cam) {
+    InfoWindow& W = info_;
+    W.extract.poll(W.extract_progress);
+    if (!track) {
+        W.visible = false;
+        return;
+    }
+    const std::string& dir = track->track().dir;
+    if (W.open || (W.visible && W.dir != dir)) {
+        // abre (ou a pista mudou): relê do disco
+        W.dir = dir;
+        W.error.clear();
+        try {
+            W.saved = TrackInfo::load(dir, &W.exists);
+        } catch (const std::exception& e) {
+            W.saved = TrackInfo{};
+            W.error = std::string("package.json inválido: ") + e.what();
+        }
+        W.info = W.saved;
+        if (W.info.name.empty() && !W.exists) W.info.name = track->track().id;
+    }
+    if (W.open) {
+        ImGui::SetNextWindowFocus();
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        W.visible = true;
+        W.open = false;
+    }
+    if (!W.visible) return;
+    const float s = scale_;
+    ImGui::SetNextWindowSize(ImVec2(std::round(480.0f * s), 0.0f), ImGuiCond_Appearing);
+    const bool dirty = !(W.info == W.saved);
+    const std::string title = std::string(ICON_INFO "  Informações da pista") + (dirty ? " *" : "") + "###InfoPista";
+    if (!ImGui::Begin(title.c_str(), &W.visible, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
+        ImGui::End();
+        return;
+    }
+    TrackInfo& I = W.info;
+    auto text_field = [](const char* label, std::string& value, bool multiline = false) {
+        char buf[512];
+        std::snprintf(buf, sizeof buf, "%s", value.c_str());
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool changed = multiline ? ImGui::InputTextMultiline(label, buf, sizeof buf, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 3.2f))
+                                       : ImGui::InputText(label, buf, sizeof buf);
+        if (changed) value = buf;
+    };
+
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("O que o jogo mostra no card da pista e na tela de locations. Fica em %s, que vai no pacote .dr2track "
+                        "do Testar no jogo (F5).", near_path(TrackInfo::path(dir)).c_str());
+    ImGui::PopTextWrapPos();
+    if (!W.error.empty()) ImGui::TextColored(kRed, "%s  %s", ICON_ALERT, W.error.c_str());
+
+    section("Card");
+    if (begin_props("##info")) {
+        auto row = [](const char* key) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", key);
+            ImGui::TableNextColumn();
+        };
+        row("Nome");
+        text_field("##nome", I.name);
+        row("País");
+        {
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo("##pais", I.country.empty() ? "(escolha ou digite abaixo)" : I.country.c_str())) {
+                for (int k = 0; k < kCountryCount; ++k) {
+                    const CountryPreset& c = kCountries[k];
+                    if (ImGui::Selectable(c.name, I.country == c.name)) {
+                        I.country = c.name;
+                        I.has_map = true;  // o alfinete vai ao país; um clique no mapa acerta o lugar
+                        I.lat = c.lat;
+                        I.lon = c.lon;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            text_field("##pais_texto", I.country);
+            tip("País", nullptr, "O texto que aparece no card (em inglês, como os do jogo). Escolher na lista também põe o alfinete no país.");
+        }
+        row("Descrição");
+        text_field("##desc", I.description, true);
+        row("Autor");
+        text_field("##autor", I.author);
+        row("Versão");
+        text_field("##versao", I.version);
+        ImGui::EndTable();
+    }
+
+    section("Mapa-múndi");
+    world_map(I);
+
+    section("Foto do card");
+    ImGui::PushTextWrapPos(0.0f);
+    if (I.has_card)
+        ImGui::TextDisabled("Câmera marcada (vista %.2f:1). As faixas no 3D mostram o que cada imagem do jogo recorta do centro.", I.card_aspect);
+    else
+        ImGui::TextDisabled("Sem câmera: o pacote usa a foto aérea da carga. Enquadre a pista no 3D e marque a vista.");
+    ImGui::PopTextWrapPos();
+    if (ImGui::Button(ICON_CAMERAS "  Usar a vista atual")) {
+        const float v[6] = {cam.yaw, cam.pitch, cam.dist, cam.target.x, cam.target.y, cam.target.z};
+        std::copy(v, v + 6, I.card);
+        I.card_aspect = vp_.h > 1.0f ? vp_.w / vp_.h : 16.0f / 9.0f;
+        I.has_card = true;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!I.has_card);
+    if (ImGui::Button("Olhar por ela")) {
+        cam.yaw = I.card[0], cam.pitch = I.card[1], cam.dist = I.card[2];
+        cam.target = glm::vec3(I.card[3], I.card[4], I.card[5]);
+    }
+    tip("Olhar por ela", nullptr, "Põe a câmera do 3D na do card (a proporção da vista pode ser outra)");
+    ImGui::SameLine();
+    if (ImGui::Button("Tirar")) I.has_card = false;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::Checkbox("Guia no 3D", &W.guide);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::BeginDisabled(!dirty && W.exists);
+    if (primary_button(ICON_SAVE "  Gravar")) {
+        try {
+            I.save(dir);
+            W.saved = I;
+            W.exists = true;
+            W.error.clear();
+            show_message("Gravado " + near_path(TrackInfo::path(dir)));
+        } catch (const std::exception& e) {
+            W.error = std::string("não gravei: ") + e.what();
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!dirty);
+    if (ImGui::Button(ICON_UNDO "  Desfazer mudanças")) I = W.saved;
+    ImGui::EndDisabled();
+    if (dirty) {
+        ImGui::SameLine();
+        ImGui::TextColored(kYellow, "não gravado");
+    }
+    ImGui::End();
+}
+
+void EditorUi::world_map(TrackInfo& I) {
+    InfoWindow& W = info_;
+    const std::string repo = find_repo(W.dir);
+    const std::string file = repo.empty() ? std::string() : repo + "/build/re/world_map.webp";
+    if (!W.map_tex && !W.map_tried && !file.empty() && !W.extract.running()) {
+        W.map_tried = true;
+        std::ifstream in(file, std::ios::binary);
+        const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        int w = 0, h = 0;
+        if (uint8_t* rgba = data.empty() ? nullptr : WebPDecodeRGBA(data.data(), data.size(), &w, &h)) {
+            glGenTextures(1, &W.map_tex);
+            glBindTexture(GL_TEXTURE_2D, W.map_tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            WebPFree(rgba);
+            W.map_w = w, W.map_h = h;
+        }
+    }
+
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float aspect = W.map_w > 0 ? static_cast<float>(W.map_h) / static_cast<float>(W.map_w) : 272.0f / 448.0f;
+    const ImVec2 size(width, std::round(width * aspect));
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::InvisibleButton("##mapa", size);
+    const bool hovered = ImGui::IsItemHovered();
+    dl->AddRectFilled(at, at + size, IM_COL32(28, 34, 44, 255));
+    if (W.map_tex) dl->AddImage(static_cast<ImTextureID>(W.map_tex), at, at + size, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(150, 160, 175, 255));
+    dl->AddRect(at, at + size, raw(kLine));
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const ImVec2 m = ImGui::GetMousePos();
+        map_latlon(std::clamp((m.x - at.x) / size.x, 0.0f, 1.0f), std::clamp((m.y - at.y) / size.y, 0.0f, 1.0f), &I.lat, &I.lon);
+        I.has_map = true;
+    }
+    if (I.has_map) {
+        float u = 0, v = 0;
+        map_uv(I.lat, I.lon, &u, &v);
+        const ImVec2 p(at.x + u * size.x, at.y + v * size.y);
+        dl->PushClipRect(at, at + size, true);
+        dl->AddLine(p, ImVec2(p.x, p.y - 12.0f * scale_), raw(kText), 2.0f * scale_);
+        dl->AddCircleFilled(ImVec2(p.x, p.y - 12.0f * scale_), 5.0f * scale_, raw(kRed));
+        dl->AddCircle(ImVec2(p.x, p.y - 12.0f * scale_), 5.0f * scale_, IM_COL32(255, 255, 255, 220), 0, 1.5f * scale_);
+        dl->PopClipRect();
+    }
+    if (!W.map_tex) {
+        const char* msg = W.extract.running() ? "extraindo o mapa do jogo…" : "sem build/re/world_map.webp";
+        const ImVec2 ts = ImGui::CalcTextSize(msg);
+        dl->AddText(at + (size - ts) * 0.5f, raw(kTextDim), msg);
+    }
+    if (hovered) {
+        double lat = 0, lon = 0;
+        const ImVec2 m = ImGui::GetMousePos();
+        map_latlon((m.x - at.x) / size.x, (m.y - at.y) / size.y, &lat, &lon);
+        ImGui::SetTooltip("%.1f°, %.1f°  (clique para pôr o alfinete)", lat, lon);
+    }
+    if (I.has_map) {
+        ImGui::TextDisabled("Alfinete em %.2f°, %.2f°", I.lat, I.lon);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Tirar##mapa")) I.has_map = false;
+    } else {
+        ImGui::TextDisabled("Sem alfinete: a pista não aparece no mapa da tela de locations.");
+    }
+    if (!W.map_tex && !repo.empty()) {
+        if (W.extract.running()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("…");
+        } else {
+            if (W.map_tried && W.extract_progress.state != Progress::State::Running) W.map_tried = false;  // acabou: tenta ler de novo
+            if (ImGui::SmallButton("Extrair do jogo")) {
+                W.extract_progress = Progress{};
+                std::string err;
+                if (!W.extract.start({"python3", "-u", repo + "/scripts/research/world_map_image.py"}, err)) W.error = err;
+                W.map_tried = true;
+            }
+            tip("Extrair do jogo", nullptr, "Roda scripts/research/world_map_image.py: copia o mapa-múndi do jogo para build/re (fora do repositório)");
+        }
+    }
+}
+
+// Faixas do recorte do card no 3D, enquanto a janela de informações está aberta: o que cada imagem do jogo tira do
+// centro da foto (renderizada na proporção da vista em que a câmera foi marcada).
+void EditorUi::card_guide(const TrackView* track) const {
+    if (!track || !info_.visible || !info_.guide) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList(ImGui::GetMainViewport());
+    const Rect& vp = vp_;
+    const float va = vp.w / std::max(1.0f, vp.h);
+    dl->PushClipRect(ImVec2(vp.x, vp.y), ImVec2(vp.x + vp.w, vp.y + vp.h), true);
+    const ImU32 cols[] = {IM_COL32(255, 210, 80, 220), IM_COL32(120, 200, 255, 200), IM_COL32(160, 255, 160, 170)};
+    for (int k = 0; k < 3; ++k) {
+        const float a = kCardCrops[k].aspect;
+        const float w = a > va ? vp.w : vp.h * a, h = a > va ? vp.w / a : vp.h;
+        const ImVec2 lo(vp.x + (vp.w - w) * 0.5f, vp.y + (vp.h - h) * 0.5f);
+        dl->AddRect(lo, ImVec2(lo.x + w, lo.y + h), cols[k], 0.0f, 0, 1.5f);
+        // o painel tem quase a proporção do card grande: o nome vai no canto da direita
+        const float tx = k == 2 ? lo.x + w - 6.0f - ImGui::CalcTextSize(kCardCrops[k].name).x : lo.x + 6.0f;
+        dl->AddText(ImVec2(tx, lo.y + 4.0f), cols[k], kCardCrops[k].name);
+    }
+    dl->PopClipRect();
 }
 
 void EditorUi::help_window() {
@@ -2346,6 +2618,7 @@ void EditorUi::gizmo(TrackView& track, const render::OrbitCamera& cam, const Rec
 
 void EditorUi::render(TrackView* track, const render::OrbitCamera& cam, const glm::mat4& view_proj, const Rect& vp) {
     const int sel = track ? track->selected() : -1;
+    card_guide(track);
     ImDrawList* dl = ImGui::GetBackgroundDrawList(ImGui::GetMainViewport());  // atrás dos painéis, no 3D
     if (track && sel >= 0) {
         // caixa local do tipo, transformada, em todas as ferramentas: a seleção se vê mesmo de longe

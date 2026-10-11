@@ -43,8 +43,9 @@ O caminho do AutoStage (benchmark, carga rápida do editor) não abre vídeo nen
   avisos legais sem erro nem crash;
 - loga cada vídeo aberto: `IntroSkip: video <caminho> (flags 0x…) -> <HBINK>, +<ms desde o core>`.
 
-Vem ligado por padrão. Para desligar, crie `dr2hook_intro.ini` na pasta do jogo com `pular_logo=0`. O hook sai no
-`Shutdown` do core (F8).
+Desde 2026-10-11 só pula numa abertura pelo editor (§6); numa abertura normal o vídeo toca e o hook só loga
+(`IntroSkip: ativo (so loga; o video toca)`). `pular_logo=1` no `dr2hook_intro.ini` força o pulo sempre, e
+`pular_logo=0` nunca pula. O hook sai no `Shutdown` do core (F8).
 
 ## 4. SplashSkip (dxgi)
 
@@ -60,12 +61,64 @@ instalado no `DLL_PROCESS_ATTACH`. Ele troca no IAT do exe os slots do `ShowWind
 `UpdateLayeredWindow` (`0x109fae0`). Uma janela layered de 512x512 nunca é mostrada e as pinturas dela viram
 no-op.
 
-- Log: `SplashSkip: ativo.` e `SplashSkip: splash do logo escondido no ShowWindow (janela …)`.
+- Log: `SplashSkip: ativo (pula o splash).` e `SplashSkip: splash do logo escondido no ShowWindow (janela …)`.
 - Validado em 2026-10-08: a janela nunca é mapeada.
 - O tempo da abertura não muda: no lugar do logo, fica a área de trabalho por ~2 s.
-- Para desligar, use `pular_splash=0` no `dr2hook_intro.ini`.
+- Desde 2026-10-11 só esconde o splash numa abertura pelo editor (§6). Numa abertura normal o mesmo hook só
+  segura o `ShowWindow` do splash até a tela de boot do DR2Hook fechar (`SplashSkip: só espera a tela de boot`),
+  e o splash aparece inteiro depois dela. `pular_splash=1` força o pulo sempre.
 
-## 5. O que falta
+## 5. Tela de boot do DR2Hook (dxgi)
+
+`src/core/boot_screen.cpp`: uma janela GDI própria de 800x450, sem borda, centrada, mostrada antes do splash do
+DR2. Textos em inglês.
+
+- **Conteúdo:** logo (`docs/assets/logo.png`, embutido por `scripts/research/boot_screen_assets.py` em
+  `boot_screen_assets.inc`), a etapa atual, uma barra vermelha com a porcentagem e um feed das últimas 4 linhas
+  (✓ etapa concluída, ! problema). Versão no canto, rodapé "DR2Hook — preparing DiRT Rally 2.0". O cursor fica
+  no de "trabalhando" (`IDC_APPSTARTING`).
+- **Quem alimenta:** a montagem do cache de pistas (`track_packages.cpp`, eventos `BuildEvent::Step/Done/Problem`
+  do `src/trackpkg/builder.cpp`) e a carga do core (`BootScreenCoreDone`, com a contagem de mods Lua). Quando as
+  pistas acabam, a barra enche e a etapa vira "Loading the DR2Hook core..." até o core avisar.
+- **Fim:** com os dois prontos, mostra o resumo ("All set. Starting DiRT Rally 2.0...", barra verde) por 2 s, ou
+  4 s se houve problema, e fecha. Limites: 120 s para as pistas (o mesmo da espera no `boot_data.xml`) e 20 s
+  para o core.
+- **Ordem com o jogo:** a thread principal do jogo espera a tela no hook do `ShowWindow` do splash (§4). As telas
+  do DR2 (splash, logo, avisos) vêm depois, inteiras: o DR2Hook não tira nada do jogo numa abertura normal.
+- Log: `BootScreen: aberta` … `BootScreen: fechada depois de N ms`; desligada: `BootScreen: desligada (…)`.
+- Validado em 2026-10-11 (abertura pela Steam): ~2,2 s com o cache refeito, core sem deadlock.
+
+Para conferir o desenho sem print (a janela do jogo é Wayland nativa e não dá para capturar de fora),
+`salvar_tela_boot=1` no `dr2hook_intro.ini` grava `dr2hook_boot_progress.bmp` (barra na metade ou pistas
+prontas) e `dr2hook_boot_final.bmp` (o resumo) na pasta do jogo.
+
+## 6. Abertura pelo editor
+
+O botão Testar no jogo (F5) do viewer3d roda `scripts/research/ring_deploy.py`, que grava
+`dr2hook_editor_launch.txt` na pasta do jogo logo antes de abri-lo (`mark_editor_launch`). A dxgi consome o
+arquivo no `DLL_PROCESS_ATTACH` (`src/core/editor_launch.cpp`):
+
+- apaga o arquivo e só aceita se ele tiver menos de 2 min, para uma abertura que falhou não valer na próxima;
+- marca `DR2HOOK_EDITOR_LAUNCH=1` no ambiente do processo, que o core também lê (`IsEditorLaunch()`).
+
+Nessa abertura o boot fica curto: sem a tela do DR2Hook, sem o splash e sem o vídeo da Codemasters. Validado em
+2026-10-11: `BootScreen: desligada (aberto pelo editor)`, `SplashSkip: ativo (pula o splash)`,
+`IntroSkip: ativo (pula o logo)`, e a especial largou com câmera livre.
+
+### `dr2hook_intro.ini`
+
+Na pasta do jogo, linhas `chave=0|1`. Sem a chave, vale o padrão da coluna.
+
+| Chave | Padrão | Efeito |
+|---|---|---|
+| `pular_tela_boot` | 1 pelo editor, 0 senão | não mostra a tela de boot do DR2Hook |
+| `pular_splash` | 1 pelo editor, 0 senão | esconde o splash de 512x512 do DR2 |
+| `pular_logo` | 1 pelo editor, 0 senão | pula o vídeo `studio_logo.bk2` |
+| `salvar_tela_boot` | 0 | grava os quadros da tela de boot em BMP (§5) |
+
+O `ring_deploy.py` tira um `pular_splash=1` antigo do arquivo, que deixava o splash de fora em toda abertura.
+
+## 7. O que falta
 
 - **Avisos legais (~5,2 s):** achar a tela e o temporizador (o `StateLegal…` / frontend em `game_1.dat`, ver
   [UI Data](ui_data.md)). Como a duração não muda quando o vídeo some, deve ser só tempo fixo.

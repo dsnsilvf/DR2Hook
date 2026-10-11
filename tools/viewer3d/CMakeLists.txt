@@ -114,7 +114,7 @@ dr2_embed_fonts(${DR2_FONTS_CPP}
     Lucide assets/fonts/Lucide.ttf
     AboutImage assets/about/about.webp)
 
-add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp src/app/ui.cpp src/app/launch.cpp ${DR2_FONTS_CPP})
+add_executable(viewer3d src/app/main.cpp src/app/track_view.cpp src/app/ui.cpp src/app/launch.cpp src/app/track_info.cpp ${DR2_FONTS_CPP})
 target_link_libraries(viewer3d PRIVATE dr2render dr2edit imgui SDL3::SDL3 PkgConfig::WEBP)
 
 add_executable(camera_test tests/camera_test.cpp)
