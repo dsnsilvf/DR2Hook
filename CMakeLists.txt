@@ -75,6 +75,18 @@ add_library(dxgi SHARED
     src/core/pssg_patch.cpp
     src/core/vehicle_system_patch.cpp
     src/core/splash_skip.cpp
+    src/core/boot_screen.cpp
+    src/core/editor_launch.cpp
+    src/core/track_packages.cpp
+    src/trackpkg/aes.cpp
+    src/trackpkg/builder.cpp
+    src/trackpkg/ctpk.cpp
+    src/trackpkg/fsutil.cpp
+    src/trackpkg/json.cpp
+    src/trackpkg/nefs.cpp
+    src/trackpkg/package.cpp
+    src/trackpkg/pssg.cpp
+    vendor/miniz/miniz.c
     src/core/pause_menu.cpp
     src/core/native_screen.cpp
     src/core/ui_data.cpp
@@ -86,6 +98,10 @@ add_library(dxgi SHARED
     vendor/minhook/src/hde/hde32.c
     vendor/minhook/src/hde/hde64.c
 )
+
+# miniz (zip dos pacotes .dr2track e deflate dos pacotes do jogo) é C.
+set_source_files_properties(vendor/miniz/miniz.c PROPERTIES LANGUAGE C)
+target_include_directories(dxgi PRIVATE vendor/miniz)
 
 # Módulo recarregável em runtime (F8). A dxgi.dll carrega uma cópia deste arquivo.
 add_library(dr2hook_core SHARED
@@ -105,7 +121,9 @@ add_library(dr2hook_core SHARED
     src/core/net_dialog.cpp
     src/core/session_audio.cpp
     src/core/intro_skip.cpp
+    src/core/editor_launch.cpp
     src/core/live_link.cpp
+    src/core/location_tabs.cpp
     src/core/load_view.cpp
     src/ui/overlay.cpp
     src/script/lua_engine.cpp

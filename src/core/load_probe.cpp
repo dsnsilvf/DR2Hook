@@ -1,4 +1,5 @@
 #include "dr2hook/load_probe.h"
+#include "dr2hook/track_packages.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/logger.h"
 
@@ -514,7 +515,7 @@ PssgLoadFn g_origPssgLoad = nullptr;
 CreateObjFn g_origCreateObj = nullptr;
 SceneFrameFn g_origSceneFrame = nullptr;
 std::atomic<int> g_pvsLogged{0};
-void *g_exeTargets[10] = {};
+void *g_exeTargets[8] = {};
 
 // Preparo da cena por quadro (0x1403c7aa0, rcx = cena): copia o modo de PVS de cena+0x1734 para
 // a vista. Gravar o campo antes força o modo em todas as cenas.
@@ -738,35 +739,6 @@ void DetourCatalogueLoad(void *self) {
   g_origCatalogueLoad(self);
 }
 
-const char *AliasTrack(const char *track) {
-  if (track == nullptr || !Readable(track, 1)) return track;
-  for (const auto &a : g_cfg.trackAlias)
-    if (_stricmp(track, a.first.c_str()) == 0) return a.second.c_str();
-  return track;
-}
-
-// Pacote da location pronto? (0x1405df3c0: gerenciador, location, pista ou nulo = "tiles")
-using LocReadyFn = bool (*)(void *, const char *, const char *);
-LocReadyFn g_origLocReady = nullptr;
-
-bool DetourLocReady(void *mgr, const char *location, const char *track) {
-  return g_origLocReady(mgr, location, AliasTrack(track));
-}
-
-// Nome e descritor do pacote da location (0x1405dcea0): "%s__%s.nefs" com location e pista nas
-// posições 5 e 6.
-using LocNameFn = int (*)(void *, void *, void *, void *, const char *, const char *);
-LocNameFn g_origLocName = nullptr;
-
-int DetourLocName(void *mgr, void *name, void *desc, void *flag, const char *location, const char *track) {
-  const char *alias = AliasTrack(track);
-  if (alias != track) {
-    Logger::Info(std::string("LoadProbe: pacote da location ") + SafeStr(location, 32) + "__" + SafeStr(track, 48) +
-                 " -> " + alias);
-  }
-  return g_origLocName(mgr, name, desc, flag, location, alias);
-}
-
 bool HookExe(uintptr_t rva, const char *prologue, void *detour, void **original, void **target) {
   auto *fn = reinterpret_cast<uint8_t *>(g_exeBase + rva);
   for (size_t i = 0; prologue[i * 3] != 0; ++i) {
@@ -804,13 +776,8 @@ int InstallExeHooks() {
     ok += HookExe(0x26bf00, "48 8b c4 55 48 8d a8 08 fd ff ff 48 81 ec f0 03 00 00",
                   reinterpret_cast<void *>(&DetourCatalogueLoad), reinterpret_cast<void **>(&g_origCatalogueLoad),
                   &g_exeTargets[7]);
-  if (!g_cfg.trackAlias.empty()) {
-    ok += HookExe(0x5df3c0, "48 8b c4 56 48 81 ec 50 01 00 00", reinterpret_cast<void *>(&DetourLocReady),
-                  reinterpret_cast<void **>(&g_origLocReady), &g_exeTargets[8]);
-    ok += HookExe(0x5dcea0, "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57",
-                  reinterpret_cast<void *>(&DetourLocName), reinterpret_cast<void **>(&g_origLocName),
-                  &g_exeTargets[9]);
-  }
+  // O pacote da location trocado fica com o TrackPackages (mesmos hooks).
+  for (const auto &a : g_cfg.trackAlias) AddTrackAlias(a.first, a.second);
   return ok;
 }
 

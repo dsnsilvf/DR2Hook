@@ -1,6 +1,7 @@
 #include "dr2hook/native_screen.h"
 #include "dr2hook/host.h"
 #include "dr2hook/pause_menu.h"
+#include "dr2hook/track_packages.h"
 #include "dr2hook/ui_patch.h"
 
 #include <MinHook.h>
@@ -720,12 +721,16 @@ bool MenuText(const std::string &key, std::string &text) {
   return true;
 }
 
-// Textos fixos de dr2hook_texts.ini (`chave = texto`, uma por linha), para
-// pistas próprias: o catálogo gerado aponta nome da location e da rota para
-// chaves lng_dr2hook_*. Lido uma vez, na primeira busca.
+// Textos das pistas próprias: o catálogo gerado aponta nome da location e da
+// rota para chaves lng_dr2hook_*. Vêm dos pacotes de ctracks/ e de
+// dr2hook_texts.ini (`chave = texto`, uma por linha; vale sobre o do pacote).
+// Lidos uma vez, na primeira busca.
 const std::unordered_map<std::string, std::string> &FileTexts() {
   static const auto texts = [] {
     std::unordered_map<std::string, std::string> out;
+    for (const auto &[key, text] : TrackPackageTexts()) {
+      out[key] = text;
+    }
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::wstring path(exe);

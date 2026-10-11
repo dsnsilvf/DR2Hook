@@ -1,4 +1,5 @@
 #include "dr2hook/intro_skip.h"
+#include "dr2hook/editor_launch.h"
 #include "dr2hook/logger.h"
 
 #include <cstdio>
@@ -22,7 +23,7 @@ namespace {
 using BinkOpenFn = void *(__stdcall *)(const char *, unsigned);
 BinkOpenFn g_origOpen = nullptr;
 void *g_target = nullptr;
-bool g_skipLogo = true;
+bool g_skipLogo = false;
 ULONGLONG g_since = 0;
 
 constexpr unsigned kFileHandle = 0x00800000;
@@ -46,18 +47,8 @@ void *__stdcall DetourBinkOpen(const char *name, unsigned flags) {
   return bink;
 }
 
-void ReadConfig() {
-  std::ifstream in("dr2hook_intro.ini");
-  std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    if (line.rfind("pular_logo=", 0) == 0) {
-      g_skipLogo = line.substr(11) != "0";
-    }
-  }
-}
+// O vídeo da Codemasters só é pulado numa abertura pelo editor ou com pular_logo=1.
+void ReadConfig() { g_skipLogo = IntroOption("pular_logo", IsEditorLaunch()); }
 
 #endif
 
@@ -93,7 +84,7 @@ void IntroSkip::Install() {
   }
   g_target = open;
   Logger::Info(g_skipLogo ? "IntroSkip: ativo (pula o logo)."
-                          : "IntroSkip: ativo (so loga; pular_logo=0).");
+                          : "IntroSkip: ativo (so loga; o video toca).");
 #endif
 }
 

@@ -1,5 +1,7 @@
 #include "dr2hook/auto_stage.h"
+#include "dr2hook/boot_screen.h"
 #include "dr2hook/common.h"
+#include "dr2hook/editor_launch.h"
 #include "dr2hook/hooks.h"
 #include "dr2hook/load_trace.h"
 #include "dr2hook/load_probe.h"
@@ -11,12 +13,33 @@
 #include "dr2hook/pssg_patch.h"
 #include "dr2hook/race_events.h"
 #include "dr2hook/splash_skip.h"
+#include "dr2hook/track_packages.h"
 #include "dr2hook/ui_data.h"
 #include "dr2hook/vehicle_system_patch.h"
+
+#include <string>
+
+// Mods Lua na tela de boot: pastas de mods/ com mod.json (o ModManager do core é quem os carrega).
+static int CountLuaMods() {
+  int count = 0;
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileW(L"mods\\*", &fd);
+  if (h == INVALID_HANDLE_VALUE) return 0;
+  do {
+    if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || fd.cFileName[0] == L'.') continue;
+    const std::wstring manifest = std::wstring(L"mods\\") + fd.cFileName + L"\\mod.json";
+    count += GetFileAttributesW(manifest.c_str()) != INVALID_FILE_ATTRIBUTES;
+  } while (FindNextFileW(h, &fd));
+  FindClose(h);
+  return count;
+}
 
 DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   dr2hook::SetHostModule(static_cast<HMODULE>(lpParam));
   dr2hook::Logger::Init("dr2hook.log");
+  if (dr2hook::IsEditorLaunch()) dr2hook::Logger::Info("Aberto pelo editor (dr2hook_editor_launch.txt).");
+  dr2hook::StartBootScreen();
+  dr2hook::StartTrackPackages();
   dr2hook::StartUiDataLog();
   dr2hook::LogAutoStageStatus();
   dr2hook::LogPssgPatchStatus();
@@ -27,6 +50,11 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
   if (dr2hook::GetOriginalProc("CreateDXGIFactory") != nullptr) {
     if (!dr2hook::LoadCore()) {
       dr2hook::HostLog("DR2Hook Core falhou ao carregar dr2hook_core.dll.");
+      dr2hook::BootScreenCoreDone(false, "DR2Hook core failed to load (see dr2hook.log)");
+    } else {
+      const int mods = CountLuaMods();
+      dr2hook::BootScreenCoreDone(true, "DR2Hook core loaded \xc2\xb7 " + std::to_string(mods) + " Lua mod" +
+                                            (mods == 1 ? "" : "s"));
     }
     if (dr2hook::InitializeHooks()) {
       dr2hook::HostLog("Hooks principais inicializados com sucesso.");
@@ -40,6 +68,7 @@ DWORD WINAPI DR2Hook_InitThread(LPVOID lpParam) {
     }
   } else {
     dr2hook::HostLog("DR2Hook falhou ao inicializar o proxy DXGI.");
+    dr2hook::BootScreenCoreDone(false, "DXGI proxy failed to start (see dr2hook.log)");
   }
 
   return 0;
@@ -50,11 +79,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
   switch (ul_reason_for_call) {
   case DLL_PROCESS_ATTACH: {
     DisableThreadLibraryCalls(hModule);
+    dr2hook::DetectEditorLaunch();
+    dr2hook::InstallBootScreen();
     dr2hook::InstallUiDataHook(hModule);
     dr2hook::InstallAutoStageHook();
     dr2hook::InstallPssgPatch();
     dr2hook::InstallVehicleSystemSizePatch();
     dr2hook::InstallSplashSkip();
+    dr2hook::InstallTrackPackages();
     HANDLE hThread =
         CreateThread(nullptr, 0, DR2Hook_InitThread, hModule, 0, nullptr);
     if (hThread != nullptr) {

@@ -15,6 +15,7 @@
 #include "dr2hook/load_view.h"
 #include "dr2hook/intro_skip.h"
 #include "dr2hook/live_link.h"
+#include "dr2hook/location_tabs.h"
 #include "dr2hook/session_audio.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
@@ -258,6 +259,8 @@ int Core_Initialize(int truncateLog) {
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::IntroSkip::Install();
     dr2hook::LiveLink::Install();
+    dr2hook::LocationTabs::Install(
+        reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
 
     dr2hook::PhysicsTickHarness::LoadConfiguration();
     if (dr2hook::PhysicsTickHarness::IsInstrumentationEnabled()) {
@@ -284,6 +287,7 @@ void Core_Shutdown() {
     StopLoadCover("core descarregado");
     dr2hook::IntroSkip::Shutdown();
     dr2hook::LiveLink::Shutdown();
+    dr2hook::LocationTabs::Shutdown();
     dr2hook::SessionAudio::Shutdown();
     dr2hook::LoadView::Shutdown();
     dr2hook::OverlayManager::Shutdown();
