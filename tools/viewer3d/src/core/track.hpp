@@ -145,6 +145,11 @@ struct Track {
 // Lê <dir>/track.json. Lança std::runtime_error se faltar campo obrigatório.
 Track read_track(const std::string& dir);
 
+// routes[i].replay de um track.json (ou a seção "replay" do edits.json) e o caminho de volta: câmeras e zonas, no
+// mesmo formato (os prismas `bounds` não são editados e ficam de fora). Floats com 4 casas.
+Replay read_replay(const json::Value& rep);
+std::string replay_json(const Replay& rep);
+
 // Caixa (lo, hi) de todos os pontos da IA e dos portões de todas as rotas; false se não houver ponto.
 bool route_bounds(const Track& track, Vec3& lo, Vec3& hi);
 

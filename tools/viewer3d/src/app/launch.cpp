@@ -1,4 +1,5 @@
 #include "app/launch.hpp"
+#include "core/i18n.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -14,6 +15,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+using dr2::i18n::tr;
+
 extern char** environ;
 #endif
 
@@ -26,7 +29,7 @@ GameWatch::~GameWatch() = default;
 
 ChildProcess::~ChildProcess() = default;
 bool ChildProcess::start(const std::vector<std::string>&, std::string& error) {
-    error = "Testar no jogo só existe no Linux por enquanto";
+    error = tr("Testar no jogo só existe no Linux por enquanto");
     return false;
 }
 void ChildProcess::poll(Progress&) {}
@@ -40,7 +43,7 @@ ChildProcess::~ChildProcess() {
 
 bool ChildProcess::start(const std::vector<std::string>& argv, std::string& error) {
     if (running() || argv.empty()) {
-        error = running() ? "já tem um teste rodando" : "nada para rodar";
+        error = running() ? tr("já tem um teste rodando") : tr("nada para rodar");
         return false;
     }
     int fds[2];

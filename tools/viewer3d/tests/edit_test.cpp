@@ -408,6 +408,44 @@ void test_ground_fit() {
     check(det < 0, "mantém o espelho");
 }
 
+void test_replay_edits() {
+    Track track = make_track();
+    Route& route = track.routes[0];
+    route.replay.cameras.push_back({"camera_r0_spectator_001", "trackside", "", 40, {1, 2, 3}, {4, 5, 6}, {}, {}, 0});
+    route.replay.zones.push_back({"Box001", 10, {0, 0, 0}, {0, 0, 5}, 0, {{"camera_r0_spectator_001", 0.7}, {"onboard_front", 0.3}}});
+    route.replay.bounds.push_back({"b", {}, 0, 3});
+    const Replay original = route.replay;
+    Instances inst = make_instances(2);
+    std::size_t count = 0;
+    std::string text = edit::edits_json(track, {{&route, &inst, &original}}, &count);
+    check(count == 0 && text.find("\"replay\"") == std::string::npos, "replay: igual ao arquivo, sem seção");
+    check(replay_json(edit::apply_replay(json::parse(text), route, route.replay) ? route.replay : original) ==
+              replay_json(original), "replay: sem seção, nada muda");
+
+    edit::History hist;
+    Replay before = route.replay;
+    route.replay.cameras.push_back({"camera_r0_spectator_002", "trackside", "criada no editor", 80.5, {7, 8, 9}, {1, 1, 1}, {}, {}, 0});
+    route.replay.zones.push_back({"Box002", 40.5, {1, 0, 0}, {1, 0, 5}, 2, {{"camera_r0_spectator_002", 1.0}}});
+    check(hist.commit_replay("Nova", before, route.replay), "replay: passo no histórico");
+    check(!hist.commit_replay("Nada", route.replay, route.replay), "replay: sem mudança, sem passo");
+    text = edit::edits_json(track, {{&route, &inst, &original}}, &count);
+    check(count == 1, "replay: a rota mudada conta uma edição");
+    const json::Value doc = json::parse(text);
+    check(doc["replay"].size() == 1 && doc["replay"][0]["route"].as_string() == "route_0", "replay: seção com a rota");
+    check(edit::routes_in_edits(doc).size() == 1, "replay: rota listada");
+    Replay back = original;
+    check(edit::apply_replay(doc, route, back), "replay: aplica");
+    check(back.cameras.size() == 2 && back.cameras[1].name == "camera_r0_spectator_002" && back.cameras[1].s == 80.5 &&
+              back.cameras[1].role == "criada no editor", "replay: câmera nova volta");
+    check(back.zones.size() == 2 && back.zones[1].lap == 2 && back.zones[0].sw[1].camera == "onboard_front" &&
+              back.zones[0].sw[0].p == 0.7, "replay: zonas e trocas voltam");
+    check(back.bounds.size() == 1, "replay: prismas ficam os do arquivo");
+    check(replay_json(back) == replay_json(route.replay), "replay: ida e volta igual");
+
+    check(hist.undo(inst, &route.replay) && route.replay.cameras.size() == 1, "replay: desfazer tira a câmera");
+    check(hist.redo(inst, &route.replay) && route.replay.cameras.size() == 2, "replay: refazer devolve");
+}
+
 }  // namespace
 
 int main() {
@@ -421,6 +459,7 @@ int main() {
     test_apply_edits();
     test_big();
     test_ground_fit();
+    test_replay_edits();
     std::printf("edit_test OK (%d verificações)\n", checks);
     return 0;
 }

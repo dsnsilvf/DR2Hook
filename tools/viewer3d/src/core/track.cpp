@@ -3,6 +3,7 @@
 #include "core/io.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 
@@ -26,6 +27,8 @@ std::vector<Vec3> points(const json::Value& v, std::string_view key) {
         for (const json::Value& p : a->as_array()) out.push_back(vec3(p));
     return out;
 }
+
+}  // namespace
 
 Replay read_replay(const json::Value& rep) {
     Replay out;
@@ -72,6 +75,56 @@ Replay read_replay(const json::Value& rep) {
     }
     return out;
 }
+
+namespace {
+
+std::string num(double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.4f", v);
+    std::string t = buf;
+    while (t.back() == '0') t.pop_back();
+    if (t.back() == '.') t.pop_back();
+    return t == "-0" ? "0" : t;
+}
+
+std::string vec(const Vec3& v) { return "[" + num(v[0]) + "," + num(v[1]) + "," + num(v[2]) + "]"; }
+
+std::string vecs(const std::vector<Vec3>& pts) {
+    std::string out = "[";
+    for (std::size_t k = 0; k < pts.size(); ++k) out += (k ? "," : "") + vec(pts[k]);
+    return out + "]";
+}
+
+}  // namespace
+
+std::string replay_json(const Replay& rep) {
+    std::string out = "{\"cameras\":[";
+    for (std::size_t i = 0; i < rep.cameras.size(); ++i) {
+        const ReplayCamera& c = rep.cameras[i];
+        out += std::string(i ? "," : "") + "\n {\"name\":" + json::quote(c.name) + ",\"kind\":" + json::quote(c.kind);
+        if (!c.role.empty()) out += ",\"role\":" + json::quote(c.role);
+        if (c.s >= 0) out += ",\"s\":" + num(c.s);
+        out += ",\"pos\":" + vec(c.pos) + ",\"aim\":" + vec(c.aim);
+        if (!c.path.empty()) out += ",\"path\":" + vecs(c.path);
+        if (!c.target.empty()) out += ",\"target\":" + vecs(c.target);
+        if (c.duration > 0) out += ",\"duration\":" + num(c.duration);
+        out += "}";
+    }
+    out += "],\"zones\":[";
+    for (std::size_t i = 0; i < rep.zones.size(); ++i) {
+        const ReplayZone& z = rep.zones[i];
+        out += std::string(i ? "," : "") + "\n {\"name\":" + json::quote(z.name) + ",\"s\":" + num(z.s) + ",\"l\":" + vec(z.l) +
+               ",\"r\":" + vec(z.r);
+        if (z.lap > 0) out += ",\"lap\":" + std::to_string(z.lap);
+        out += ",\"switch\":[";
+        for (std::size_t k = 0; k < z.sw.size(); ++k)
+            out += std::string(k ? "," : "") + "{\"camera\":" + json::quote(z.sw[k].camera) + ",\"p\":" + num(z.sw[k].p) + "}";
+        out += "]}";
+    }
+    return out + "]}";
+}
+
+namespace {
 
 GridSlot read_slot(const json::Value& v) {
     GridSlot slot;

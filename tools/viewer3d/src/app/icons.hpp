@@ -50,11 +50,33 @@
 #define ICON_WARNING       "\xee\x86\x93"  // U+E193
 #define ICON_CHECK         "\xee\x81\xac"  // U+E06C
 #define ICON_INFO          "\xee\x83\xb9"  // U+E0F9
+#define ICON_LOCK          "\xee\x84\x8b"  // U+E10B
+#define ICON_UNLOCK        "\xee\x84\x8c"  // U+E10C
+#define ICON_CONSOLE       "\xee\x86\x81"  // U+E181
+#define ICON_SETTINGS      "\xee\x85\x94"  // U+E154
+#define ICON_PALETTE       "\xee\x84\xa9"  // U+E129
+#define ICON_GRID          "\xee\x83\xa9"  // U+E0E9
+#define ICON_COMMAND       "\xee\x82\x9a"  // U+E09A
+#define ICON_VIEW_TEXTURED "\xee\x83\xb6"  // U+E0F6
+#define ICON_VIEW_SOLID    "\xee\x94\xa5"  // U+E525
+#define ICON_VIEW_WIRE     "\xee\x87\x8b"  // U+E1CB
+#define ICON_TRACK         "\xee\x8a\x98"  // U+E298
+#define ICON_MARQUEE       "\xee\x94\x89"  // U+E509
+#define ICON_PROJECT       "\xee\x8c\xbc"  // U+E33C
+#define ICON_FOLDER        "\xee\x83\x97"  // U+E0D7
+#define ICON_FILE          "\xee\x83\x80"  // U+E0C0
+#define ICON_SOUND         "\xee\x86\xab"  // U+E1AB
+#define ICON_CHECKLIST     "\xee\x88\x99"  // U+E219
+#define ICON_EXTERNAL      "\xee\x82\xb9"  // U+E0B9
+#define ICON_REFRESH       "\xee\x85\x85"  // U+E145
+#define ICON_GENERAL       "\xee\x85\xa2"  // U+E162
+#define ICON_SUN           "\xee\x85\xb8"  // U+E178
+#define ICON_WRENCH        "\xee\x86\xb1"  // U+E1B1
 
 namespace dr2::app::icons {
 
 // Faixas que o ImGui lê das fontes (pares inclusivos, zero no fim).
-inline constexpr ImWchar kTextRanges[] = {0x0020, 0x007E, 0x00A0, 0x00FF, 0x2013, 0x2014, 0x2018, 0x201E, 0x2022, 0x2022, 0x2026, 0x2026, 0x2190, 0x2193, 0x2212, 0x2212, 0};
+inline constexpr ImWchar kTextRanges[] = {0x0020, 0x007E, 0x00A0, 0x00FF, 0x0100, 0x017F, 0x2013, 0x2014, 0x2018, 0x201E, 0x2022, 0x2022, 0x2026, 0x2026, 0x2190, 0x2193, 0x2212, 0x2212, 0};
 inline constexpr ImWchar kIconRanges[] = {0xE061, 0xE53E, 0};
 
 }  // namespace dr2::app::icons

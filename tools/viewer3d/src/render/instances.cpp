@@ -118,7 +118,7 @@ void InstanceRenderer::regroup(const Instances& inst) {
 bool InstanceRenderer::passes(const Instances& inst, std::size_t i, const glm::vec3& target, float draw_dist,
                               const Layers& layers) const {
     const Type& ty = types_[inst.type[i]];
-    if (ty.empty || !layers.on(ty.layer) || inst.hidden[i]) return false;
+    if (ty.empty || !layers.on(ty.layer) || inst.hidden[i] || inst.flag(i, Instances::kVeiled)) return false;
     if (ty.layer == Layer::Dist) return true;
     const float* m = inst.matrix(i);
     const float dx = m[9] - target.x, dz = m[11] - target.z;

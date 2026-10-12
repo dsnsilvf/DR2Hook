@@ -9,7 +9,7 @@ O viewer3d embute estas fontes no executável: o CMake lê os `.ttf` e gera `emb
 
 As três são recortes feitos pelo [`subset_fonts.py`](subset_fonts.py) (fontTools):
 
-- **Inter**: só o texto dos painéis (Latim-1, aspas, travessões, setas e o sinal de menos);
+- **Inter**: só o texto dos painéis (Latim-1 e Latim estendido A, aspas, travessões, setas e o sinal de menos);
 - **Lucide**: só os ícones que o editor usa.
 
 O script também gera `src/app/icons.hpp`, com as macros `ICON_*` e as faixas que o ImGui lê. Para acrescentar um ícone ([catálogo](https://lucide.dev/icons/)), ponha o nome dele em `ICONS` no script e rode-o de novo com as fontes originais extraídas:

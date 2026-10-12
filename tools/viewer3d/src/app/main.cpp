@@ -11,7 +11,8 @@
 // --grid-check imprime a folga de cada vaga de largada até o terreno e sai com 1 se alguma está dentro do chão.
 // --car DIR é o carro do jogo ao vivo (saída de tools/uiview/car/viewer_car.py); sem ele, o primeiro de
 // <pasta do viewer3d>/cars/ que tiver car.bin, e sem nenhum, a caixa.
-// --launch abre a janela do Testar no jogo (F5) ao começar (para capturas; o teste só começa com Enter).
+// --launch abre a janela do Testar no jogo (F5) ao começar (para capturas; o teste só começa com Enter);
+// --launch-tab escolhe a aba dela (geral, veiculo, acerto, condicoes ou jogo); --launch-car, o carro e o acerto.
 // --select IDX começa com a instância IDX selecionada e enquadrada; --tool select|move|rotate escolhe a ferramenta;
 // --ui exibicao|atalhos|sobre abre essa janela ao começar (capturas); --drag X0,Y0,X1,Y1 arrasta com o botão esquerdo de
 // um ponto a outro (eventos do SDL, como o mouse de verdade: testa o gizmo) e escreve o que entrou no histórico;
@@ -21,8 +22,10 @@
 // (track.json, terrain_<n>.bin, ...). Com --frames, roda N quadros, imprime
 // "OK renderer=... gl=... frames=N fps=..." e sai com 0. Com --screenshot, grava o último quadro em PPM.
 
+#include "app/pad.hpp"
 #include "app/track_view.hpp"
 #include "app/ui.hpp"
+#include "core/i18n.hpp"
 #include "render/camera.hpp"
 #include "render/gl.hpp"
 
@@ -41,6 +44,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+using dr2::i18n::tr;
 
 namespace {
 
@@ -69,6 +74,8 @@ struct Options {
     const char* look = nullptr;  // nome de câmera do replay ou de vaga de largada: começa vendo por ela
     bool grid_check = false;     // imprime a folga das vagas de largada até o terreno e sai
     bool launch = false;         // abre a janela do Testar no jogo (F5) ao começar
+    const char* launch_tab = nullptr;  // aba dela (--launch-tab)
+    const char* launch_car = nullptr;  // carro e acerto dela (--launch-car)
     long select = -1;            // instância selecionada (e enquadrada) ao começar
     const char* tool = nullptr;  // ferramenta ao começar: select, move ou rotate
     const char* ui = nullptr;    // janela aberta ao começar (capturas): exibicao ou atalhos
@@ -84,7 +91,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
             char* end = nullptr;
             opt.frames = std::strtol(argv[++i], &end, 10);
             if (*end != '\0' || opt.frames < 1) {
-                std::fprintf(stderr, "--frames precisa de um inteiro >= 1\n");
+                std::fprintf(stderr, tr("--frames precisa de um inteiro >= 1\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
@@ -98,7 +105,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--camera") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &opt.camera[0], &opt.camera[1], &opt.camera[2], &opt.camera[3],
                             &opt.camera[4], &opt.camera[5]) != 6) {
-                std::fprintf(stderr, "--camera precisa de yaw,pitch,dist,x,y,z\n");
+                std::fprintf(stderr, tr("--camera precisa de yaw,pitch,dist,x,y,z\n"));
                 return false;
             }
             const float* c = opt.camera;
@@ -107,7 +114,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
             using Cam = dr2::render::OrbitCamera;
             if (!finite || c[2] < Cam::kDistMin || c[2] > Cam::kDistMax || c[1] < Cam::kPitchMin || c[1] > Cam::kPitchMax ||
                 std::fabs(c[3]) > 1e6f || std::fabs(c[4]) > 1e6f || std::fabs(c[5]) > 1e6f) {
-                std::fprintf(stderr, "--camera: dist de %g a %g, pitch de %g a %g, alvo com |x|,|y|,|z| <= 1e6\n",
+                std::fprintf(stderr, tr("--camera: dist de %g a %g, pitch de %g a %g, alvo com |x|,|y|,|z| <= 1e6\n"),
                              static_cast<double>(Cam::kDistMin), static_cast<double>(Cam::kDistMax),
                              static_cast<double>(Cam::kPitchMin), static_cast<double>(Cam::kPitchMax));
                 return false;
@@ -118,13 +125,13 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--terrain-dist") == 0 && i + 1 < argc) {
             opt.terrain_dist = std::strtof(argv[++i], nullptr);
             if (!std::isfinite(opt.terrain_dist) || opt.terrain_dist < 0.0f) {
-                std::fprintf(stderr, "--terrain-dist precisa de metros >= 0 (0 = sem limite)\n");
+                std::fprintf(stderr, tr("--terrain-dist precisa de metros >= 0 (0 = sem limite)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--tex-mb") == 0 && i + 1 < argc) {
             const double mb = std::strtod(argv[++i], nullptr);
             if (!std::isfinite(mb) || mb < 16) {
-                std::fprintf(stderr, "--tex-mb precisa de megabytes >= 16 (limite de VRAM das texturas)\n");
+                std::fprintf(stderr, tr("--tex-mb precisa de megabytes >= 16 (limite de VRAM das texturas)\n"));
                 return false;
             }
             opt.tex.budget_bytes = static_cast<std::size_t>(mb * 1048576.0);
@@ -137,7 +144,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--shot-size") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &opt.shot_w, &opt.shot_h) != 2 || opt.shot_w < 16 || opt.shot_h < 16 ||
                 opt.shot_w > 16384 || opt.shot_h > 16384) {
-                std::fprintf(stderr, "--shot-size precisa de LxA, de 16 a 16384 (ex.: 4608x2592)\n");
+                std::fprintf(stderr, tr("--shot-size precisa de LxA, de 16 a 16384 (ex.: 4608x2592)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) {
@@ -158,27 +165,42 @@ bool parse_args(int argc, char** argv, Options& opt) {
             opt.grid_check = true;
         } else if (std::strcmp(argv[i], "--launch") == 0) {
             opt.launch = true;
+        } else if (std::strcmp(argv[i], "--launch-tab") == 0 && i + 1 < argc) {
+            opt.launch = true;
+            opt.launch_tab = argv[++i];
+        } else if (std::strcmp(argv[i], "--launch-car") == 0 && i + 1 < argc) {
+            opt.launch = true;
+            opt.launch_car = argv[++i];
         } else if (std::strcmp(argv[i], "--select") == 0 && i + 1 < argc) {
             char* end = nullptr;
             opt.select = std::strtol(argv[++i], &end, 10);
             if (*end != '\0' || opt.select < 0) {
-                std::fprintf(stderr, "--select precisa do índice de uma instância (>= 0)\n");
+                std::fprintf(stderr, tr("--select precisa do índice de uma instância (>= 0)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--drag") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%f,%f,%f,%f", &opt.drag[0], &opt.drag[1], &opt.drag[2], &opt.drag[3]) != 4 || opt.drag[0] < 0) {
-                std::fprintf(stderr, "--drag precisa de x0,y0,x1,y1 (pontos da janela)\n");
+                std::fprintf(stderr, tr("--drag precisa de x0,y0,x1,y1 (pontos da janela)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--click") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%f,%f", &opt.click[0], &opt.click[1]) != 2 || opt.click[0] < 0 || opt.click[1] < 0) {
-                std::fprintf(stderr, "--click precisa de x,y (pontos da janela)\n");
+                std::fprintf(stderr, tr("--click precisa de x,y (pontos da janela)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--tool") == 0 && i + 1 < argc) {
             opt.tool = argv[++i];
             if (std::strcmp(opt.tool, "select") != 0 && std::strcmp(opt.tool, "move") != 0 && std::strcmp(opt.tool, "rotate") != 0) {
-                std::fprintf(stderr, "--tool precisa de select, move ou rotate\n");
+                std::fprintf(stderr, tr("--tool precisa de select, move ou rotate\n"));
+                return false;
+            }
+        } else if (std::strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
+            const std::string_view v = argv[++i];
+            dr2::i18n::Lang l;
+            if (v == "auto") dr2::app::lock_language(0);
+            else if (dr2::i18n::parse_code(v, l)) dr2::app::lock_language(l == dr2::i18n::Lang::Pt ? 1 : 2);
+            else {
+                std::fprintf(stderr, tr("--lang precisa de pt, en ou auto\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--ui") == 0 && i + 1 < argc) {
@@ -190,7 +212,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--autosave") == 0 && i + 1 < argc) {
             opt.autosave = std::strtod(argv[++i], nullptr);
             if (!std::isfinite(opt.autosave) || opt.autosave < 0) {
-                std::fprintf(stderr, "--autosave precisa de segundos >= 0 (0 = desligado)\n");
+                std::fprintf(stderr, tr("--autosave precisa de segundos >= 0 (0 = desligado)\n"));
                 return false;
             }
         } else if (std::strcmp(argv[i], "--fresh") == 0) {
@@ -198,16 +220,16 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (std::strcmp(argv[i], "--panels") == 0 && i + 1 < argc) {
             opt.panels = std::atoi(argv[++i]) != 0;
         } else {
-            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines,replay,grids] [--look CÂMERA|VAGA] [--grid-check] [--launch] [--select IDX] [--click X,Y] [--drag X0,Y0,X1,Y1] [--tool select|move|rotate] [--ui exibicao|atalhos|sobre] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--car DIR] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
+            std::fprintf(stderr, "uso: viewer3d [--track DIR] [--frames N] [--screenshot arq.ppm] [--vsync 0|1] [--panels 0|1] [--fresh] [--terrain-dist M] [--walk M] [--tex-mb M] [--tex-max-side PX] [--tex-threads N] [--wait-textures] [--hide terrain,obj,tree,dist,lines,replay,grids] [--look CÂMERA|VAGA] [--grid-check] [--launch [--launch-tab geral|veiculo|acerto|condicoes|jogo] [--launch-car ID[:nome=valor,...]]] [--select IDX] [--click X,Y] [--drag X0,Y0,X1,Y1] [--tool select|move|rotate] [--lang pt|en|auto] [--ui exibicao|atalhos|sobre|info|prefs|comandos|paleta|pista] [--shot-size LxA] [--probe-rays arq] [--ground-check arq] [--align-check arq] [--settle-list arq [--settle-redo]] [--touch-test IDX,dx,dy,dz[,commit]] [--autosave S] [--car DIR] [--camera yaw,pitch,dist,x,y,z] [--out edits.json]\n");
             return false;
         }
     }
     if (opt.shot_w > 0 && !opt.screenshot) {
-        std::fprintf(stderr, "--shot-size precisa de --screenshot\n");
+        std::fprintf(stderr, tr("--shot-size precisa de --screenshot\n"));
         return false;
     }
     if (opt.screenshot && opt.frames < 1) {
-        std::fprintf(stderr, "--screenshot precisa de --frames\n");
+        std::fprintf(stderr, tr("--screenshot precisa de --frames\n"));
         return false;
     }
     return true;
@@ -224,14 +246,14 @@ const char* gl_string(GLenum name) {
 class Platform {
 public:
     explicit Platform(int vsync) {
-        if (!SDL_Init(SDL_INIT_VIDEO)) throw sdl_error("SDL_Init");
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) throw sdl_error("SDL_Init");  // controle e volante: pad.hpp
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-        window_ = SDL_CreateWindow("DR2Hook Editor de Pistas", 1440, 810, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        window_ = SDL_CreateWindow(tr("DR2Hook Editor de Pistas"), 1440, 810, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!window_) {
             auto err = sdl_error("SDL_CreateWindow");
             release();
@@ -394,8 +416,11 @@ struct Drag {
     bool active = false;
     bool pan = false;
     bool edit = false;
+    bool marquee = false;  // arrastar no vazio: retângulo de seleção (vira órbita no clássico, sem Ctrl)
+    bool add = false;      // Ctrl no clique: soma à seleção (ou tira)
     Uint8 button = 0;
     float moved = 0;
+    float x0 = 0, y0 = 0;  // onde o botão desceu (janela)
 };
 
 // Estado do teclado que não é da câmera nem da pista.
@@ -453,22 +478,61 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
             if (ui.ask_quit(track)) return false;
             break;
         }
-        if (track && track->key(event.key.key, event.key.mod, cam)) break;
+        if (event.key.key == SDLK_P && (event.key.mod & SDL_KMOD_CTRL)) {
+            ui.open_commands();
+            break;
+        }
+        if (event.key.key == SDLK_COMMA && (event.key.mod & SDL_KMOD_CTRL)) {
+            ui.open_prefs();
+            break;
+        }
+        if (track && !(event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))) {
+            const bool flying = ui.unity_keys() && drag.active && drag.button == SDL_BUTTON_RIGHT;
+            if (event.key.key == SDLK_Z && !flying) {
+                ui.cycle_view_mode();  // texturas → sólido → aramado
+                break;
+            }
+            if (event.key.key == SDLK_G && (event.key.mod & SDL_KMOD_SHIFT)) {
+                ui.toggle_grid();  // G sozinho: portões
+                break;
+            }
+        }
+        if (track) {
+            track->unity_keys = ui.unity_keys();
+            // estilo Unity: com o botão direito apertado, WASD/Q/E andam a câmera em vez de trocar a ferramenta
+            const bool flying = ui.unity_keys() && drag.active && drag.button == SDL_BUTTON_RIGHT;
+            const SDL_Keycode k = event.key.key;
+            if (flying && (k == SDLK_W || k == SDLK_A || k == SDLK_S || k == SDLK_D || k == SDLK_Q || k == SDLK_E)) break;
+            if (track->key(k, event.key.mod, cam)) break;
+        }
         if (event.key.key == SDLK_F) cam.reset();
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         if (drag.active || ui_took) break;
         const float x = event.button.x, y = event.button.y;
-        if (!vp.contains(x, y)) break;
+        if (!vp.contains(x, y) || ui.over_view_cube(x, y)) break;
         drag = Drag{};
         drag.button = event.button.button;
+        drag.x0 = x;
+        drag.y0 = y;
+        const SDL_Keymod mod = SDL_GetModState();
+        const bool ctrl = (mod & SDL_KMOD_CTRL) != 0, alt = (mod & SDL_KMOD_ALT) != 0;
+        const bool unity = ui.unity_keys();
         if (event.button.button == SDL_BUTTON_LEFT) {
             drag.active = true;
-            // com Mover/Girar sobre um objeto, Shift é subir e descer; fora de objeto, Shift é pan (o clique no
-            // gizmo não chega aqui: o ImGui fica com ele)
-            if (track) drag.edit = track->begin_edit(x - vp.x, y - vp.y, vp.w, vp.h, cam, shift);
-            drag.pan = shift && !drag.edit;
-        } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
+            drag.add = ctrl;
+            if (unity && alt) break;  // Alt + esquerdo orbita, como na Unity
+            // com Mover/Girar sobre um objeto, Shift é subir e descer (o clique no gizmo não chega aqui: o ImGui fica
+            // com ele)
+            if (track && !ctrl) drag.edit = track->begin_edit(x - vp.x, y - vp.y, vp.w, vp.h, cam, shift);
+            if (drag.edit) break;
+            // fora de objeto: Unity = retângulo; clássico = orbitar (Shift: pan; Ctrl: retângulo)
+            if (track && (unity || ctrl)) drag.marquee = true;
+            else drag.pan = shift;
+        } else if (event.button.button == SDL_BUTTON_RIGHT) {
+            drag.active = true;
+            drag.pan = !unity || shift;  // Unity: o direito orbita (Shift: pan); clássico: pan
+        } else if (event.button.button == SDL_BUTTON_MIDDLE) {
             drag.active = true;
             drag.pan = true;
         }
@@ -478,13 +542,20 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
         if (!drag.active || event.button.button != drag.button) break;
         if (drag.edit) track->end_edit();
         else if (track && drag.button == SDL_BUTTON_LEFT && drag.moved < 5)
-            track->click(event.button.x - vp.x, event.button.y - vp.y, vp.w, vp.h, cam);
+            track->click(event.button.x - vp.x, event.button.y - vp.y, vp.w, vp.h, cam, drag.add);
+        else if (track && drag.marquee) {
+            const std::size_t n = track->select_rect(drag.x0 - vp.x, drag.y0 - vp.y, event.button.x - vp.x, event.button.y - vp.y,
+                                                     vp.w, vp.h, cam, drag.add);
+            if (n) track->set_status(std::to_string(track->selection_count()) + (track->selection_count() == 1 ? tr(" selecionada") : tr(" selecionadas")));
+        }
+        ui.set_marquee(false);
         drag = Drag{};
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (!drag.active) break;
         drag.moved += std::fabs(event.motion.xrel) + std::fabs(event.motion.yrel);
         if (drag.edit) track->edit_drag(event.motion.x - vp.x, event.motion.y - vp.y, vp.w, vp.h, cam, shift);
+        else if (drag.marquee) ui.set_marquee(drag.moved >= 5, drag.x0, drag.y0, event.motion.x, event.motion.y);
         else if (drag.pan) cam.pan(event.motion.xrel, event.motion.yrel);
         else cam.orbit(event.motion.xrel, event.motion.yrel);
         break;
@@ -498,15 +569,52 @@ bool handle_event(const SDL_Event& event, dr2::render::OrbitCamera& cam, Drag& d
     return true;
 }
 
-// WASD a cada quadro, pelo estado do teclado (segurar a tecla anda continuamente).
+// WASD e setas a cada quadro, pelo estado do teclado (segurar a tecla anda continuamente). No estilo Unity, WASD só
+// com o botão direito apertado (as letras soltas são atalhos); as setas andam sempre.
 void walk_keys(dr2::render::OrbitCamera& cam, float dt, const Input& input, const dr2::app::EditorUi& ui) {
     if (SDL_GetModState() & SDL_KMOD_CTRL) return;  // Ctrl+S, Ctrl+Z…: atalhos, não andar
     if (ui.wants_keyboard()) return;                // digitando num campo
     const bool* keys = SDL_GetKeyboardState(nullptr);
     auto down = [&](SDL_Scancode k) { return keys[k] && !input.chord[k] ? 1.0f : 0.0f; };
-    const float ahead = down(SDL_SCANCODE_W) - down(SDL_SCANCODE_S);
-    const float side = down(SDL_SCANCODE_D) - down(SDL_SCANCODE_A);
+    const bool letters = !ui.unity_keys() || (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
+    auto wasd = [&](SDL_Scancode k) { return letters ? down(k) : 0.0f; };
+    const float ahead = wasd(SDL_SCANCODE_W) - wasd(SDL_SCANCODE_S) + down(SDL_SCANCODE_UP) - down(SDL_SCANCODE_DOWN);
+    const float side = wasd(SDL_SCANCODE_D) - wasd(SDL_SCANCODE_A) + down(SDL_SCANCODE_RIGHT) - down(SDL_SCANCODE_LEFT);
     if (ahead != 0.0f || side != 0.0f) cam.walk(ahead, side, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0, dt);
+}
+
+// Controle ou volante a cada quadro. Na câmera (o padrão): analógico esquerdo anda, direito (ou o giro do volante)
+// gira, gatilhos dão zoom; A seleciona o que está na mira (o centro do 3D), B tira a seleção, Y enquadra, X troca a
+// ferramenta, D-pad ← → gira 15°, LB/RB desfazem e refazem, Start abre os comandos. Back troca para os painéis
+// (navegação do ImGui, se ligada nas Preferências) e volta.
+void pad_control(dr2::app::Pads& pads, dr2::render::OrbitCamera& cam, float dt, dr2::app::TrackView* track, dr2::app::EditorUi& ui,
+                 const dr2::app::Rect& vp) {
+    pads.poll();
+    const dr2::app::PadState& p = pads.now();
+    const dr2::app::PadState& hit = pads.pressed();
+    if (!p.connected) return;
+    if (hit.back && ui.gamepad_nav()) ui.toggle_pad_panels();
+    if (ui.pad_panels()) return;
+    if (hit.start) {
+        ui.open_commands();
+        if (ui.gamepad_nav()) ui.toggle_pad_panels();  // a lista se navega como um painel
+        return;
+    }
+    if (ui.wants_keyboard()) return;  // digitando num campo
+    if (p.lx != 0.0f || p.ly != 0.0f) cam.walk(-p.ly, p.lx, false, dt);
+    if (p.rx != 0.0f || p.ry != 0.0f) cam.orbit(p.rx * 420.0f * dt, p.ry * 300.0f * dt);
+    if (p.rt != p.lt) cam.zoom((p.rt - p.lt) * 10.0f * dt);
+    if (!track) return;
+    if (hit.a) track->click(vp.w * 0.5f, vp.h * 0.5f, vp.w, vp.h, cam);
+    if (hit.b) track->deselect();
+    if (hit.y) {
+        if (track->selected() >= 0) track->frame_selected(cam);
+        else track->frame_route(cam);
+    }
+    if (hit.x) track->set_tool(static_cast<dr2::app::TrackView::Tool>((static_cast<int>(track->tool()) + 1) % 3));
+    if (hit.left || hit.right) track->turn_selected(hit.right ? 15.0f : -15.0f);
+    if (hit.l1) track->undo();
+    if (hit.r1) track->redo();
 }
 
 std::string car_dir(const Options& opt) {
@@ -542,14 +650,14 @@ void open_track(const std::string& dir, const Options& opt, std::unique_ptr<dr2:
         open(dir, same && opt.out ? opt.out : "");
         ui.show_message("");
     } catch (const std::exception& e) {
-        const std::string why = "não abriu " + dir + ": " + e.what();
+        const std::string why = tr("não abriu ") + dir + ": " + e.what();
         std::fprintf(stderr, "viewer3d: %s\n", why.c_str());
         if (!old_dir.empty()) {
             try {
                 open(old_dir, old_out);
-                if (old_unsaved) track->recover(old_edits, "a sessão antes de abrir " + dir);
+                if (old_unsaved) track->recover(old_edits, tr("a sessão antes de abrir ") + dir);
             } catch (const std::exception& e2) {
-                std::fprintf(stderr, "viewer3d: nem a anterior reabriu: %s\n", e2.what());
+                std::fprintf(stderr, tr("viewer3d: nem a anterior reabriu: %s\n"), e2.what());
             }
         }
         if (!track && !scene) scene = std::make_unique<TestScene>(cam.target);
@@ -589,13 +697,13 @@ int run(const Options& opt) {
         const int i = track ? track->route().replay.find(opt.look) : -1;
         const dr2::SlotRef slot = track ? track->route().find_slot(opt.look) : dr2::SlotRef{};
         if (!(i >= 0 ? track->look_through(i, cam) : slot && track->look_from_slot(slot, cam))) {
-            std::fprintf(stderr, "--look: \"%s\" não é câmera do replay nem vaga de largada desta rota\n", opt.look);
+            std::fprintf(stderr, tr("--look: \"%s\" não é câmera do replay nem vaga de largada desta rota\n"), opt.look);
             return 1;
         }
     }
     if (opt.select >= 0) {
         if (!track || static_cast<std::size_t>(opt.select) >= track->instances().n) {
-            std::fprintf(stderr, "--select: %ld não é instância desta rota\n", opt.select);
+            std::fprintf(stderr, tr("--select: %ld não é instância desta rota\n"), opt.select);
             return 1;
         }
         track->select(static_cast<int>(opt.select));
@@ -614,12 +722,12 @@ int run(const Options& opt) {
     if (opt.probe_rays) {
         // teste da sonda de raio: uma linha por raio, "ox oy oz dx dy dz"; imprime a distância ou "none"
         if (!track) {
-            std::fprintf(stderr, "--probe-rays precisa de --track\n");
+            std::fprintf(stderr, tr("--probe-rays precisa de --track\n"));
             return 1;
         }
         std::FILE* f = std::fopen(opt.probe_rays, "r");
         if (!f) {
-            std::fprintf(stderr, "não abriu %s\n", opt.probe_rays);
+            std::fprintf(stderr, tr("não abriu %s\n"), opt.probe_rays);
             return 1;
         }
         float v[6];
@@ -636,12 +744,12 @@ int run(const Options& opt) {
         // teste do alinhar: por instância, sobe 3 m (o alinhar tem de trazer de volta), alinha e imprime
         // "i em_pé x0 x1 z0 z1 m0..m11 tipo"; "i skip tipo" se o tipo não alinha ou não há terreno
         if (!track) {
-            std::fprintf(stderr, "--align-check precisa de --track\n");
+            std::fprintf(stderr, tr("--align-check precisa de --track\n"));
             return 1;
         }
         std::FILE* f = std::fopen(opt.align_check, "r");
         if (!f) {
-            std::fprintf(stderr, "não abriu %s\n", opt.align_check);
+            std::fprintf(stderr, tr("não abriu %s\n"), opt.align_check);
             return 1;
         }
         unsigned idx;
@@ -678,7 +786,7 @@ int run(const Options& opt) {
     if (opt.grid_check) {
         // por vaga: "grade/vaga x y z folga_centro folga_rodas" (ou "sem-terreno"); sai com 1 se alguma afunda
         if (!track) {
-            std::fprintf(stderr, "--grid-check precisa de --track\n");
+            std::fprintf(stderr, tr("--grid-check precisa de --track\n"));
             return 1;
         }
         int bad = 0;
@@ -701,12 +809,12 @@ int run(const Options& opt) {
         // teste do assentar e da oclusão: por instância, "i x z y_antes y_depois pick_de_cima pick_de_baixo".
         // Cima: raio 40 m acima, vertical, até o centro. Baixo: 30 m abaixo do centro, para cima (o terreno, se existe, tapa).
         if (!track) {
-            std::fprintf(stderr, "--ground-check precisa de --track\n");
+            std::fprintf(stderr, tr("--ground-check precisa de --track\n"));
             return 1;
         }
         std::FILE* f = std::fopen(opt.ground_check, "r");
         if (!f) {
-            std::fprintf(stderr, "não abriu %s\n", opt.ground_check);
+            std::fprintf(stderr, tr("não abriu %s\n"), opt.ground_check);
             return 1;
         }
         unsigned idx;
@@ -729,7 +837,7 @@ int run(const Options& opt) {
     if (opt.settle_list && track) {
         std::FILE* f = std::fopen(opt.settle_list, "r");
         if (!f) {
-            std::fprintf(stderr, "não abriu %s\n", opt.settle_list);
+            std::fprintf(stderr, tr("não abriu %s\n"), opt.settle_list);
             return 1;
         }
         unsigned idx;
@@ -751,13 +859,28 @@ int run(const Options& opt) {
     dr2::app::EditorUi ui(window, platform.context(), opt.frames < 0);  // capturas (--frames) sempre no layout padrão
     ui.panels = opt.panels;
     if (opt.launch) ui.open_launch(track.get());
+    {
+        const char* base = SDL_GetBasePath();
+        ui.set_cars_root(std::string(base ? base : "./") + "cars", opt.car != nullptr);
+    }
+    if (opt.launch_tab && !ui.launch_tab_on_start(opt.launch_tab)) {
+        std::fprintf(stderr, tr("--launch-tab: \"%s\" não existe (geral, veiculo, acerto, condicoes ou jogo)\n"), opt.launch_tab);
+        return 1;
+    }
+    if (opt.launch_car && !ui.launch_car_on_start(opt.launch_car)) {
+        std::fprintf(stderr, tr("--launch-car: o acerto depois do \":\" tem que ser nome=valor,nome=valor\n"));
+        return 1;
+    }
     if (opt.ui && !ui.open_on_start(opt.ui)) {
-        std::fprintf(stderr, "--ui: \"%s\" não existe (exibicao ou atalhos)\n", opt.ui);
+        std::fprintf(stderr, tr("--ui: \"%s\" não existe (exibicao, atalhos, sobre, info, prefs, comandos, paleta, pista, teste, modelos, projeto, sons ou config)\n"), opt.ui);
         return 1;
     }
     glEnable(GL_DEPTH_TEST);  // sem culling: o enrolamento dos arquivos do jogo não é normalizado
     dr2::gl::check("criação da cena");
 
+    dr2::app::Pads pads;
+    pads.open_all();
+    ui.pads = &pads;
     Drag drag;
     Input input;
     dr2::app::Rect vp;
@@ -775,18 +898,24 @@ int run(const Options& opt) {
 
     while (running) {
         SDL_Event event;
-        while (SDL_PollEvent(&event))
+        while (SDL_PollEvent(&event)) {
+            pads.event(event);
             if (!handle_event(event, cam, drag, track.get(), ui, vp, input)) running = false;
+        }
         const Uint64 frame_t = SDL_GetPerformanceCounter();
         const double frame_ms = static_cast<double>(frame_t - last_t) * 1000.0 / static_cast<double>(freq);
         if (frames > 10 && frame_ms > worst_ms) worst_ms = frame_ms, worst_frame = frames;
         const float dt = std::min(0.1f, static_cast<float>(frame_t - last_t) / static_cast<float>(freq));
         last_t = frame_t;
         walk_keys(cam, dt, input, ui);
+        pad_control(pads, cam, dt, track.get(), ui, vp);
         if (opt.walk != 0.0f) cam.target.x += opt.walk;
 
         if (track && opt.autosave > 0) track->autosave_tick(opt.autosave);
-        if (track) track->live_tick(cam);
+        if (track) {
+            track->set_sync_camera(ui.camera_sync());
+            track->live_tick(cam);
+        }
         // painéis primeiro: dizem quanto sobra para o 3D
         ui.viewport_drag = drag.active;
         vp = ui.frame(track.get(), cam, fps);
@@ -828,6 +957,7 @@ int run(const Options& opt) {
             ++step;
         }
         if (ui.quit_request) running = false;
+        if (track) track->thumb_tick();  // miniaturas da paleta, num framebuffer próprio (mexe no glViewport)
 
         int w = 0, h = 0, ww = 1, wh = 1;
         SDL_GetWindowSizeInPixels(window, &w, &h);
@@ -951,6 +1081,7 @@ int run(const Options& opt) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    dr2::app::apply_language(0);  // do sistema até o imgui.ini (Idioma=) ou o --lang dizer outro
     Options opt;
     if (!parse_args(argc, argv, opt)) return 1;
     try {

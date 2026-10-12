@@ -14,11 +14,14 @@ namespace dr2::edit {
 struct RouteEdits {
     const Route* route;
     const Instances* inst;
+    const Replay* replay0 = nullptr;  // replay do arquivo: se o da rota difere, vai inteiro na seção "replay"
 };
 
 // Uma entrada por instância movida ou apagada, e uma por cópia visível (added, src = idnum copiado,
 // index = -1), de todas as rotas dadas (como tvEditList, que junta as rotas abertas).
-// Floats com "%.9g": ida e volta exata de float32.
+// Floats com "%.9g": ida e volta exata de float32. Câmeras do replay mudadas: seção opcional
+// "replay": [{"route", "cameras", "zones"}] com o replay inteiro da rota (formato do track.json, sem os prismas);
+// cada rota assim conta como uma edição.
 std::string edits_json(const Track& track, const std::vector<RouteEdits>& routes, std::size_t* count = nullptr);
 inline std::string edits_json(const Track& track, const Route& route, const Instances& inst, std::size_t* count = nullptr) {
     return edits_json(track, std::vector<RouteEdits>{{&route, &inst}}, count);
@@ -36,7 +39,11 @@ struct ApplyReport {
 // não é um "dr2-track-edits" v1 desta pista.
 void apply_edits(const json::Value& doc, const Track& track, const Route& route, Instances& inst, ApplyReport& report);
 
-// Rotas com alguma entrada no edits.json.
+// Câmeras e zonas do replay da rota `route` no edits.json, por cima de `replay` (os prismas ficam); false se o
+// edits.json não muda o replay dessa rota.
+bool apply_replay(const json::Value& doc, const Route& route, Replay& replay);
+
+// Rotas com alguma entrada no edits.json (objetos ou replay).
 std::vector<std::string> routes_in_edits(const json::Value& doc);
 
 // Caminho dentro da pasta de instalação do jogo? (".../steamapps/common/DiRT Rally 2.0/..."); a

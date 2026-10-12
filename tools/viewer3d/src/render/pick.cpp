@@ -59,7 +59,7 @@ int pick(const Ray& ray, const Instances& inst, const InstanceRenderer& objects,
     const auto& types = objects.types();
     objects.for_each_near(target, draw_dist, [&](std::uint32_t i) {
         const auto& ty = types[inst.type[i]];
-        if (!objects.passes(inst, i, target, draw_dist, layers)) return;
+        if (!objects.passes(inst, i, target, draw_dist, layers) || inst.flag(i, Instances::kLocked)) return;
         const float* m = inst.matrix(i);
         float inv[9];
         inv_affine(m, inv);

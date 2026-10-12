@@ -26,6 +26,8 @@ public:
     // Saída para misturar com o que já está no quadro: 0 = opaca; 1 = leva o alfa da textura (decalques);
     // 2 = a cor da textura sem iluminação (oclusão ambiente, para o glBlendFunc multiplicar).
     void set_blend(int mode) const;
+    // Vista sólida: tudo em cinza de massa com a luz (sem texturas, decalques nem oclusão; o recorte das folhas fica).
+    void set_solid(bool on) const;
 
     // Atributos de instância constantes (arrays desligados): a matriz de 12 floats do DR2I.
     static void constant_rows(const float* m12);
@@ -33,7 +35,7 @@ public:
 
 private:
     gl::Program program_;
-    GLint vp_, color_, hi_, line_, tex_, has_tex_, cut_, vcol_, blend_;
+    GLint vp_, color_, hi_, line_, tex_, has_tex_, cut_, vcol_, blend_, solid_;
 };
 
 // Cor de um material sem textura, como tvColor: tom de terra fixo no terreno em lote, senão a base

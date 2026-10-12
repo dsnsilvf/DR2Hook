@@ -49,7 +49,17 @@ std::string edits_json(const Track& track, const std::vector<RouteEdits>& routes
             out += ",\"m\":" + floats(inst.matrix(i)) + ",\"m0\":" + floats(&inst.m0[i * kInstFloats]) + "}";
         }
     }
-    out += "\n]}\n";
+    out += "\n]";
+    bool first = true;
+    for (const RouteEdits& re : routes) {
+        if (!re.replay0) continue;
+        const std::string now = replay_json(re.route->replay);
+        if (now == replay_json(*re.replay0)) continue;
+        out += std::string(first ? ",\"replay\":[" : ",") + "\n{\"route\":" + json::quote(re.route->name) + "," + now.substr(1);
+        first = false;
+        ++n;
+    }
+    out += first ? "}\n" : "\n]}\n";
     if (count) *count = n;
     return out;
 }
@@ -84,13 +94,29 @@ bool near(const float* a, const float* b) {
 
 std::vector<std::string> routes_in_edits(const json::Value& doc) {
     std::vector<std::string> out;
-    const json::Value* edits = doc.find("edits");
-    if (!edits || !edits->is_array()) return out;
-    for (const json::Value& e : edits->as_array()) {
-        const json::Value* r = e.find("route");
-        if (r && r->is_string() && std::find(out.begin(), out.end(), r->as_string()) == out.end()) out.push_back(r->as_string());
+    for (const char* key : {"edits", "replay"}) {
+        const json::Value* list = doc.find(key);
+        if (!list || !list->is_array()) continue;
+        for (const json::Value& e : list->as_array()) {
+            const json::Value* r = e.find("route");
+            if (r && r->is_string() && std::find(out.begin(), out.end(), r->as_string()) == out.end()) out.push_back(r->as_string());
+        }
     }
     return out;
+}
+
+bool apply_replay(const json::Value& doc, const Route& route, Replay& replay) {
+    const json::Value* list = doc.find("replay");
+    if (!list || !list->is_array()) return false;
+    for (const json::Value& e : list->as_array()) {
+        const json::Value* r = e.find("route");
+        if (!r || !r->is_string() || r->as_string() != route.name) continue;
+        Replay next = read_replay(e);
+        next.bounds = replay.bounds;
+        replay = std::move(next);
+        return true;
+    }
+    return false;
 }
 
 void apply_edits(const json::Value& doc, const Track& track, const Route& route, Instances& inst, ApplyReport& report) {
@@ -140,6 +166,7 @@ void apply_edits(const json::Value& doc, const Track& track, const Route& route,
             inst.m.insert(inst.m.end(), m, m + kInstFloats);
             inst.m0.insert(inst.m0.end(), m0, m0 + kInstFloats);
             inst.hidden.push_back(0);
+            if (!inst.flags.empty()) inst.flags.resize(inst.idnum.size(), 0);
             ++inst.n;
         } else {
             if (!near(m0, &inst.m0[found * kInstFloats])) {

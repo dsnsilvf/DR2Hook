@@ -12,6 +12,8 @@ editor usa o autohinter leve). Para trocar ou acrescentar um ícone, edite `ICON
 
     python3 tools/viewer3d/assets/fonts/subset_fonts.py --inter <pasta do Inter-4.1.zip> --lucide <pasta package do lucide-static>
 
+Sem `--inter`, só o Lucide é recortado (para acrescentar ícones sem mexer no texto).
+
 As fontes originais não ficam no repositório: o zip do Inter vem das releases do GitHub e o lucide-static de
 `https://registry.npmjs.org/lucide-static/-/lucide-static-<versão>.tgz`.
 """
@@ -33,6 +35,7 @@ HEADER = os.path.join(VIEWER, "src", "app", "icons.hpp")
 TEXT_RANGES = (
     (0x0020, 0x007E),  # ASCII
     (0x00A0, 0x00FF),  # Latim-1: acentos, °, ·, ×, ±
+    (0x0100, 0x017F),  # Latim estendido A: Š de ŠKODA e nomes do leste europeu
     (0x2013, 0x2014),  # – —
     (0x2018, 0x201E),  # aspas
     (0x2022, 0x2022),  # •
@@ -99,6 +102,30 @@ ICONS = {
     "triangle-alert": "WARNING",
     "check": "CHECK",
     "info": "INFO",
+    # vista, organização e painéis da fase 2–4
+    "lock": "LOCK",
+    "lock-open": "UNLOCK",
+    "terminal": "CONSOLE",
+    "settings": "SETTINGS",
+    "package": "PALETTE",
+    "grid-3x3": "GRID",
+    "command": "COMMAND",
+    "image": "VIEW_TEXTURED",
+    "cylinder": "VIEW_SOLID",
+    "square-dashed": "VIEW_WIRE",
+    "milestone": "TRACK",
+    "square-dashed-mouse-pointer": "MARQUEE",
+    # projeto: arquivos, sons e configurações da pista
+    "folder-tree": "PROJECT",
+    "folder": "FOLDER",
+    "file": "FILE",
+    "volume-2": "SOUND",
+    "clipboard-check": "CHECKLIST",
+    "external-link": "EXTERNAL",
+    "refresh-cw": "REFRESH",
+    "sliders-vertical": "GENERAL",
+    "sun": "SUN",
+    "wrench": "WRENCH",
 }
 
 
@@ -160,12 +187,12 @@ def write_header(icons: dict[str, int]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--inter", required=True, help="pasta do Inter-4.1.zip extraído (tem extras/ttf/)")
+    ap.add_argument("--inter", help="pasta do Inter-4.1.zip extraído (tem extras/ttf/)")
     ap.add_argument("--lucide", required=True, help="pasta package/ do lucide-static extraído (tem font/)")
     a = ap.parse_args()
 
     text = sorted({cp for lo, hi in TEXT_RANGES for cp in range(lo, hi + 1)})
-    for style in ("Regular", "SemiBold"):
+    for style in ("Regular", "SemiBold") if a.inter else ():
         src = find(a.inter, f"extras/ttf/Inter-{style}.ttf", f"Inter-{style}.ttf")
         font = subset_font(src, os.path.join(HERE, f"Inter-{style}.ttf"), text)
         missing = [cp for cp in text if cp not in font.getBestCmap() and cp != 0xAD]  # hífen invisível

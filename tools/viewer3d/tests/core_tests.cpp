@@ -7,9 +7,12 @@
 // expected.json (pista sintética de `python -m tools.synthtrack`, contagens lidas pelo unpack_geom
 // do Python), confere também contra ele; na Montalegre, confere os números do plano.
 #undef NDEBUG
+#include "core/car_catalog.hpp"
+#include "core/car_tuning.hpp"
 #include "core/dr2i.hpp"
 #include "core/dr2m.hpp"
 #include "core/grid.hpp"
+#include "core/i18n.hpp"
 #include "core/io.hpp"
 #include "core/json.hpp"
 #include "core/live.hpp"
@@ -17,6 +20,7 @@
 #include "core/track.hpp"
 
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -48,6 +52,53 @@ bool throws(const std::function<void()>& fn, const char* contains = nullptr) {
         return !contains || std::strstr(e.what(), contains) != nullptr;
     }
     return false;
+}
+
+// Conversões do printf de um texto, na ordem ("%zu", "%s"...); "%%" não conta.
+std::vector<std::string> conversions(const char* s) {
+    std::vector<std::string> out;
+    for (const char* p = s; *p; ++p) {
+        if (*p != '%') continue;
+        if (p[1] == '%') {
+            ++p;
+            continue;
+        }
+        const char* q = p + 1;
+        while (*q && std::strchr("-+ #0123456789.*hljztL", *q)) ++q;
+        if (*q) out.emplace_back(p, q + 1);
+        p = *q ? q : q - 1;
+    }
+    return out;
+}
+
+void test_i18n() {
+    using namespace dr2::i18n;
+    std::set<std::string> keys;
+    for (std::size_t i = 0; i < table_size(); ++i) {
+        const char* const* e = table_entry(i);
+        std::string what = std::string("i18n: ") + e[0];
+        check(keys.insert(e[0]).second, (what + " repetido").c_str());
+        check(*e[1] != '\0', (what + " sem tradução").c_str());
+        const std::size_t n = std::strlen(e[0]);
+        check(n && !std::isspace(static_cast<unsigned char>(e[0][0])) && !std::isspace(static_cast<unsigned char>(e[0][n - 1])) &&
+                  static_cast<unsigned char>(e[0][0]) < 0xEE && !std::strstr(e[0], "##"),
+              (what + ": a chave tem de vir sem espaço, ícone ou ## nas pontas (o tr() busca assim)").c_str());
+        check(conversions(e[0]) == conversions(e[1]), (what + ": os % do inglês não batem").c_str());
+    }
+    Lang l = Lang::En;
+    check(from_locale("pt_BR.UTF-8", l) && l == Lang::Pt, "i18n: pt_BR");
+    check(from_locale("pt-PT", l) && l == Lang::Pt, "i18n: pt-PT");
+    check(from_locale("en_US", l) && l == Lang::En, "i18n: en_US");
+    check(!from_locale("fr_FR", l) && !from_locale("", l) && !from_locale("C", l), "i18n: não suportados");
+    check(pick({"fr_FR", "pt_BR", "en"}) == Lang::Pt, "i18n: primeiro suportado da lista");
+    check(pick({"de_DE", "ja"}) == Lang::En && pick({}) == Lang::En, "i18n: sem suportado -> inglês");
+    check(language() == Lang::Pt && std::strcmp(tr("Gravar"), "Gravar") == 0, "i18n: começa em português");
+    set_language(Lang::En);
+    check(std::strcmp(tr("Todos"), "All") == 0, "i18n: tr simples");
+    check(std::string(tr("Todos##k")) == "All##k", "i18n: tr mantém o id do ImGui");
+    check(std::string(tr(std::string("\xee\x80\x80  Todos"))) == "\xee\x80\x80  All", "i18n: tr mantém o ícone");
+    check(std::strcmp(tr("texto sem tradução xyz"), "texto sem tradução xyz") == 0, "i18n: sem tradução fica igual");
+    set_language(Lang::Pt);
 }
 
 void test_json() {
@@ -374,7 +425,7 @@ void test_progress() {
 void test_live() {
     unsigned char pkt[dr2::kLivePacketSize] = {};
     std::memcpy(pkt, "DR2L", 4);
-    const std::uint32_t head[3] = {1, 77, 1u | 4u};
+    const std::uint32_t head[3] = {2, 77, 1u | 4u | 8u};
     std::memcpy(pkt + 4, head, sizeof head);
     float body[26];
     for (int k = 0; k < 26; ++k) body[k] = static_cast<float>(k) + 0.5f;
@@ -383,14 +434,20 @@ void test_live() {
     std::memcpy(pkt + 112, &top, 4);
     const float kmh = 88.0f;
     std::memcpy(pkt + 116, &kmh, 4);
+    const std::uint32_t tail[2] = {31, 9};
+    std::memcpy(pkt + 120, tail, sizeof tail);
     dr2::LiveSample s;
     check(dr2::parse_live(pkt, sizeof pkt, s), "live: pacote válido");
-    check(s.seq == 77 && s.car && !s.view && s.paused, "live: número e bits");
+    check(s.seq == 77 && s.car && !s.view && s.paused && s.free, "live: número e bits");
     check(s.car_pos[0] == 0.5f && s.car_rot[0] == 3.5f && s.car_rot[8] == 11.5f && s.car_vel[2] == 14.5f, "live: carro");
     check(s.eye[0] == 15.5f && s.forward[0] == 18.5f && s.up[2] == 23.5f, "live: câmera");
     check(s.top == top && s.speed_kmh == 88.0f, "live: topo e km/h");
+    check(s.free_moves == 31 && s.editor_pose == 9, "live: passos da câmera livre e pose do editor");
     check(!dr2::parse_live(pkt, sizeof pkt - 1, s), "live: tamanho errado");
-    pkt[4] = 2;
+    pkt[4] = 1;  // a versão 1 tem 120 bytes, sem os dois campos do fim
+    check(dr2::parse_live(pkt, 120, s) && s.free_moves == 0 && s.speed_kmh == 88.0f, "live: versão 1 ainda lida");
+    check(!dr2::parse_live(pkt, sizeof pkt, s), "live: versão 1 com 128 bytes");
+    pkt[4] = 3;
     check(!dr2::parse_live(pkt, sizeof pkt, s), "live: versão errada");
 
     // o porte faz p_jogo = giro_y(p, yaw) + offset, com giro_y(v, a): x' = cos a·x − sin a·z, z' = sin a·x + cos a·z
@@ -403,6 +460,78 @@ void test_live() {
                       static_cast<float>(std::sin(a) * p[0] + std::cos(a) * p[2]) + t.offset[2]};
     const dr2::Vec3 back = t.point_to_track(g);
     for (int k = 0; k < 3; ++k) check(std::fabs(back[static_cast<std::size_t>(k)] - p[static_cast<std::size_t>(k)]) < 1e-3f, "live: jogo → pista");
+    const dr2::Vec3 there = t.point_to_game(p);
+    for (int k = 0; k < 3; ++k) check(std::fabs(there[static_cast<std::size_t>(k)] - g[static_cast<std::size_t>(k)]) < 1e-3f, "live: pista → jogo");
+    const dr2::Vec3 d{0.6f, -0.1f, 0.79f}, d2 = t.dir_to_track(t.dir_to_game(d));
+    for (int k = 0; k < 3; ++k) check(std::fabs(d2[static_cast<std::size_t>(k)] - d[static_cast<std::size_t>(k)]) < 1e-5f, "live: direção ida e volta");
+
+    // pacote do editor para o jogo (EditorPacket de include/dr2hook/live_link.h)
+    dr2::EditorMessage m;
+    m.seq = 5;
+    m.want_free = true;
+    m.request = 3;
+    m.pose = 12;
+    m.eye = {1.0f, 2.0f, 3.0f};
+    m.forward = {0.0f, 0.0f, 1.0f};
+    m.session = 0xABCD1234u;
+    unsigned char e[dr2::kEditorPacketSize];
+    dr2::build_editor_packet(m, e);
+    std::uint32_t w[14];
+    std::memcpy(w, e, sizeof w);
+    float f[6];
+    std::memcpy(f, e + 24, sizeof f);
+    check(std::memcmp(e, "DR2E", 4) == 0 && w[1] == 1 && w[2] == 5 && w[3] == 1 && w[4] == 3 && w[5] == 12, "editor: cabeçalho");
+    check(f[0] == 1.0f && f[2] == 3.0f && f[5] == 1.0f && w[12] == 0xABCD1234u && w[13] == 0, "editor: pose e sessão");
+}
+
+void test_car_catalog() {
+    const dr2::CarCatalog c = dr2::parse_car_catalog(dr2::json::parse(
+        R"({"version": 1, "classes": [{"id": "rally_r5", "pt": "R5", "en": "R5"}],)"
+        R"( "cars": [{"id": "fr5", "pt": "Ford Fiesta R5", "en": "Ford Fiesta R5", "class": "rally_r5", "year": 2017,)"
+        R"( "liveries": ["00", "01"]}, {"id": "x1", "class": "nada"}, {"pt": "sem id"}]})"));
+    check(c.classes.size() == 1 && c.cars.size() == 2, "carros: linhas (a sem id sai)");
+    const dr2::CarInfo* f = c.find("fr5");
+    check(f && f->year == 2017 && f->liveries.size() == 2 && f->liveries[1] == "01", "carros: fr5");
+    check(c.find("x1") && c.find("x1")->liveries == std::vector<std::string>{"00"} && c.find("x1")->name() == "x1",
+          "carros: sem pintura nem nome");
+    check(c.find_class("rally_r5") && !c.find_class("nada") && !c.find("zzz"), "carros: busca");
+    bool threw = false;
+    try {
+        dr2::parse_car_catalog(dr2::json::parse(R"({"version": 2, "classes": [], "cars": []})"));
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    check(threw, "carros: versão desconhecida");
+}
+
+void test_car_tuning() {
+    const dr2::CarTuning t = dr2::parse_car_tuning(dr2::json::parse(
+        R"({"version": 1, "car": "mcs", "params": [)"
+        R"({"name": "brakes_bias", "state": 1, "default": 0.75, "min": 0.150000095, "max": 0.899999976, "steps": 11},)"
+        R"({"name": "gearbox_5", "state": 0, "default": 0, "min": 0, "max": 0, "steps": 2}, {"state": 1}]})"));
+    check(t.car == "mcs" && t.params.size() == 2, "acerto: linhas (a sem nome sai)");
+    const dr2::TuningParam* b = t.find("brakes_bias");
+    check(b && b->adjustable() && !t.find("gearbox_5")->adjustable() && !t.find("x"), "acerto: ajustável");
+    check(b->index(b->def) == 8 && b->index(-5.0f) == 0 && b->index(9.0f) == 10 && b->at(10) == b->max, "acerto: passos");
+    check(std::fabs(b->at(6) - 0.6f) < 1e-6f, "acerto: valor do passo");
+    check(dr2::tuning_group("brakes_bias") == 0 && dr2::tuning_group("differential_rear_preload") == 3 &&
+              dr2::tuning_group("damping_rear_bump") == 8 && dr2::tuning_group("spare_tyre_count") == dr2::kTuningGroups - 1,
+          "acerto: grupos");
+    check(dr2::tuning_label("gearbox_3") == "3ª marcha" && dr2::tuning_label("suspension_rear_camber") == "Cambagem" &&
+              dr2::tuning_label("xyz") == "xyz",
+          "acerto: nomes");
+    check(dr2::tuning_value_text("brakes_bias", 0.75f) == "75% frente" &&
+              dr2::tuning_value_text("suspension_front_ride_height", -0.04f) == "-40 mm" &&
+              dr2::tuning_value_text("suspension_front_spring_rate", 159780.0f) == "159.8 N/mm" &&
+              dr2::tuning_value_text("damping_front_bump", 0.0f) == "0" && dr2::tuning_value_text("damping_rear_rebound", 2.0f) == "+2",
+          "acerto: unidades");
+    const dr2::TuningValues v = {{"brakes_bias", 0.6f}, {"gearbox_1", 0.4f}};
+    const std::string arg = dr2::tuning_arg(v);
+    dr2::TuningValues back;
+    check(dr2::parse_tuning_arg(arg, back) && back == v, "acerto: --tuning ida e volta");
+    check(dr2::tuning_arg({}).empty() && dr2::parse_tuning_arg("", back) && back.empty(), "acerto: vazio = padrão");
+    back = v;
+    check(!dr2::parse_tuning_arg("a=1,b=x", back) && !dr2::parse_tuning_arg("=1", back) && back == v, "acerto: inválido");
 }
 
 int main(int argc, char** argv) {
@@ -417,11 +546,14 @@ int main(int argc, char** argv) {
     }
     try {
         test_json();
+        test_i18n();
         test_dr2m_synthetic();
         test_dr2i_synthetic();
         test_grid();
         test_progress();
         test_live();
+        test_car_catalog();
+        test_car_tuning();
         if (!track_dir.empty()) test_track(track_dir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FALHOU com exceção: %s\n", e.what());

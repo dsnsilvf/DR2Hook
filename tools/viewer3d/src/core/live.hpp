@@ -2,6 +2,7 @@
 // 127.0.0.1:47820 com o carro do jogador e a câmera da especial em metros do mundo do jogo. Aqui: ler o
 // pacote, escutar a porta sem bloquear e levar do mundo do jogo para o da pista aberta
 // (game_transform.json, gravado pelo ring_deploy.py: o mesmo giro e deslocamento do porte, ao contrário).
+// Câmeras juntas: o editor manda a sua câmera e o pedido de câmera livre para 127.0.0.1:47821 (LiveSender).
 #pragma once
 
 #include "core/track.hpp"
@@ -15,6 +16,9 @@ namespace dr2 {
 struct LiveSample {
     std::uint32_t seq = 0;
     bool car = false, view = false, paused = false;
+    bool free = false;                // câmera livre ligada no jogo (v2)
+    std::uint32_t free_moves = 0;     // passos da câmera livre dados no jogo: sobe quando mexem nela lá (v2)
+    std::uint32_t editor_pose = 0;    // última pose do editor que o jogo pôs (v2)
     Vec3 car_pos{};
     float car_rot[9] = {};  // linhas da rotação como o jogo guarda (+0x2f0/+0x300/+0x310)
     Vec3 car_vel{};
@@ -24,9 +28,9 @@ struct LiveSample {
 };
 
 constexpr std::uint16_t kLivePort = 47820;
-constexpr std::size_t kLivePacketSize = 120;
+constexpr std::size_t kLivePacketSize = 128;  // versão 2 (a 1 tinha 120 e também é lida)
 
-// false se não é um pacote "DR2L" versão 1 de 120 bytes.
+// false se não é um pacote "DR2L" versão 1 (120 bytes) ou 2 (128 bytes).
 bool parse_live(const void* data, std::size_t size, LiveSample& out);
 
 // Do jogo para a pista: p_pista = giro_y(p_jogo - offset, -yaw). Sem arquivo, identidade.
@@ -36,6 +40,9 @@ struct GameTransform {
     bool loaded = false;
     Vec3 point_to_track(const Vec3& p) const;
     Vec3 dir_to_track(const Vec3& d) const;
+    // O caminho de volta: p_jogo = giro_y(p_pista, +yaw) + offset.
+    Vec3 point_to_game(const Vec3& p) const;
+    Vec3 dir_to_game(const Vec3& d) const;
 };
 // Lê <dir>/game_transform.json ({"yaw_deg": .., "offset": [x, y, z]}); sem o arquivo devolve a identidade.
 GameTransform load_game_transform(const std::string& track_dir);
@@ -63,6 +70,33 @@ private:
     LiveSample last_;
     double last_time_ = -1;
     std::uint64_t received_ = 0;
+};
+
+// Do editor para o jogo ("DR2E" versão 1, 56 bytes; o par do EditorPacket em include/dr2hook/live_link.h).
+// O jogo liga/desliga a câmera livre quando `request` muda (0 = nenhum pedido) e, com ela ligada, põe o olho e a
+// frente quando `pose` muda. Outra `session` (sorteada por editor aberto) zera as contas lá.
+struct EditorMessage {
+    std::uint32_t seq = 0;
+    bool want_free = false;
+    std::uint32_t request = 0, pose = 0;
+    Vec3 eye{}, forward{};  // em metros do mundo do jogo
+    std::uint32_t session = 0;
+};
+constexpr std::uint16_t kEditorPort = 47821;
+constexpr std::size_t kEditorPacketSize = 56;
+void build_editor_packet(const EditorMessage& m, unsigned char out[kEditorPacketSize]);
+
+// Manda o EditorMessage para 127.0.0.1:kEditorPort (ou DR2_EDITOR_PORT); sem jogo escutando, só se perde.
+class LiveSender {
+public:
+    LiveSender() = default;
+    ~LiveSender();
+    LiveSender(const LiveSender&) = delete;
+    LiveSender& operator=(const LiveSender&) = delete;
+    bool send(const EditorMessage& m);
+
+private:
+    int fd_ = -1;
 };
 
 }  // namespace dr2

@@ -3,8 +3,10 @@
 #pragma once
 
 #include "core/dr2i.hpp"
+#include "core/track.hpp"
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,12 +28,17 @@ public:
     struct Entry {
         std::string label;
         std::vector<Snap> before, after;
+        // passo das câmeras do replay (criar, mover, apagar): o replay inteiro da rota antes e depois
+        std::shared_ptr<const Replay> replay_before, replay_after;
     };
 
     // Empilha se algo mudou (descarta o futuro); devolve false se `before` == `after`.
     bool commit(std::string label, std::vector<Snap> before, std::vector<Snap> after);
-    bool undo(Instances& inst);
-    bool redo(Instances& inst);
+    // Passo do replay da rota; false se nada mudou.
+    bool commit_replay(std::string label, Replay before, Replay after);
+    // `replay`: o replay da rota, para os passos de câmera (nullptr = esses passos só andam o ponteiro).
+    bool undo(Instances& inst, Replay* replay = nullptr);
+    bool redo(Instances& inst, Replay* replay = nullptr);
 
     std::size_t size() const { return entries_.size(); }
     std::size_t pos() const { return pos_; }
@@ -59,6 +66,9 @@ bool changed(const Instances& inst, std::size_t i);
 // Copia a instância `src` para o fim, 2 m adiante em x, como tvDuplicateSel: a cópia nasce oculta e o
 // passo de histórico a revela (desfazer a esconde de novo). Devolve o índice da cópia.
 std::uint32_t duplicate(Instances& inst, History& hist, std::uint32_t src);
+// Várias de uma vez, cada cópia deslocada por `offset` (x, y, z), num passo só. Devolve os índices das cópias.
+std::vector<std::uint32_t> duplicate(Instances& inst, History& hist, const std::vector<std::uint32_t>& src, const float* offset,
+                                     const char* label = "Duplicar");
 
 // Volta a instância à matriz do arquivo e a mostra (tvRestoreSel), com passo de histórico.
 void restore(Instances& inst, History& hist, std::uint32_t i);

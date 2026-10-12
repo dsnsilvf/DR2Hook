@@ -37,13 +37,16 @@ double now_seconds() {
 
 bool parse_live(const void* data, std::size_t size, LiveSample& out) {
     const auto* p = static_cast<const unsigned char*>(data);
-    if (size != kLivePacketSize || std::memcmp(p, "DR2L", 4) != 0 || u32(p + 4) != 1) return false;
+    if (size < 8 || std::memcmp(p, "DR2L", 4) != 0) return false;
+    const std::uint32_t version = u32(p + 4);
+    if (!(version == 1 && size == 120) && !(version == 2 && size == kLivePacketSize)) return false;
     LiveSample s;
     s.seq = u32(p + 8);
     const std::uint32_t flags = u32(p + 12);
     s.car = flags & 1u;
     s.view = flags & 2u;
     s.paused = flags & 4u;
+    s.free = flags & 8u;
     floats(p + 16, s.car_pos.data(), 3);
     floats(p + 28, s.car_rot, 9);
     floats(p + 64, s.car_vel.data(), 3);
@@ -52,6 +55,10 @@ bool parse_live(const void* data, std::size_t size, LiveSample& out) {
     floats(p + 100, s.up.data(), 3);
     s.top = u32(p + 112);
     floats(p + 116, &s.speed_kmh, 1);
+    if (version >= 2) {
+        s.free_moves = u32(p + 120);
+        s.editor_pose = u32(p + 124);
+    }
     out = s;
     return true;
 }
@@ -65,6 +72,17 @@ Vec3 GameTransform::dir_to_track(const Vec3& d) const {
 
 Vec3 GameTransform::point_to_track(const Vec3& p) const {
     return dir_to_track({p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]});
+}
+
+Vec3 GameTransform::dir_to_game(const Vec3& d) const {
+    const double a = static_cast<double>(yaw_deg) * M_PI / 180.0;
+    const double c = std::cos(a), s = std::sin(a);
+    return {static_cast<float>(c * d[0] - s * d[2]), d[1], static_cast<float>(s * d[0] + c * d[2])};
+}
+
+Vec3 GameTransform::point_to_game(const Vec3& p) const {
+    const Vec3 r = dir_to_game(p);
+    return {r[0] + offset[0], r[1] + offset[1], r[2] + offset[2]};
 }
 
 GameTransform load_game_transform(const std::string& track_dir) {
@@ -130,6 +148,44 @@ bool LiveReceiver::poll() {
 
 double LiveReceiver::age() const {
     return last_time_ < 0 ? std::numeric_limits<double>::infinity() : now_seconds() - last_time_;
+}
+
+void build_editor_packet(const EditorMessage& m, unsigned char out[kEditorPacketSize]) {
+    std::memset(out, 0, kEditorPacketSize);
+    auto put = [&](std::size_t at, std::uint32_t v) { std::memcpy(out + at, &v, 4); };
+    std::memcpy(out, "DR2E", 4);
+    put(4, 1);
+    put(8, m.seq);
+    put(12, m.want_free ? 1u : 0u);
+    put(16, m.request);
+    put(20, m.pose);
+    std::memcpy(out + 24, m.eye.data(), 12);
+    std::memcpy(out + 36, m.forward.data(), 12);
+    put(48, m.session);
+}
+
+LiveSender::~LiveSender() {
+    if (fd_ >= 0) ::close(fd_);
+}
+
+bool LiveSender::send(const EditorMessage& m) {
+    if (fd_ < 0) {
+        fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd_ < 0) return false;
+        ::fcntl(fd_, F_SETFL, ::fcntl(fd_, F_GETFL) | O_NONBLOCK);
+    }
+    std::uint16_t port = kEditorPort;
+    if (const char* env = std::getenv("DR2_EDITOR_PORT")) {
+        const long p = std::strtol(env, nullptr, 10);
+        if (p > 0 && p < 65536) port = static_cast<std::uint16_t>(p);
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    unsigned char buf[kEditorPacketSize];
+    build_editor_packet(m, buf);
+    return ::sendto(fd_, buf, sizeof buf, 0, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) == static_cast<ssize_t>(sizeof buf);
 }
 
 }  // namespace dr2

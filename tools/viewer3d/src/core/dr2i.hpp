@@ -22,6 +22,15 @@ struct Instances {
     std::vector<float> m;              // 12 por instância, editável
     std::vector<float> m0;             // cópia do arquivo, para saber o que mudou
     std::vector<std::uint8_t> hidden;  // apagada na sessão
+    // Só da vista (não vai ao histórico nem ao edits.json): kVeiled = escondida pelo olho da Cena,
+    // kLocked = travada (o clique e o retângulo passam por ela). Pode ser menor que n (vale 0).
+    static constexpr std::uint8_t kVeiled = 1, kLocked = 2;
+    std::vector<std::uint8_t> flags;
+    bool flag(std::size_t i, std::uint8_t f) const { return i < flags.size() && (flags[i] & f); }
+    void set_flag(std::size_t i, std::uint8_t f, bool on) {
+        if (flags.size() < n) flags.resize(n, 0);
+        if (i < flags.size()) flags[i] = static_cast<std::uint8_t>(on ? flags[i] | f : flags[i] & ~f);
+    }
 
     const float* matrix(std::size_t i) const { return &m[i * kInstFloats]; }
     float* matrix(std::size_t i) { return &m[i * kInstFloats]; }

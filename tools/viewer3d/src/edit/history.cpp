@@ -39,7 +39,7 @@ bool same(const std::vector<Snap>& a, const std::vector<Snap>& b) {
 bool History::commit(std::string label, std::vector<Snap> before, std::vector<Snap> after) {
     if (same(before, after)) return false;
     entries_.resize(pos_);
-    entries_.push_back({std::move(label), std::move(before), std::move(after)});
+    entries_.push_back({std::move(label), std::move(before), std::move(after), nullptr, nullptr});
     if (entries_.size() > kMax) {
         entries_.erase(entries_.begin());
         ++dropped_;
@@ -48,15 +48,35 @@ bool History::commit(std::string label, std::vector<Snap> before, std::vector<Sn
     return true;
 }
 
-bool History::undo(Instances& inst) {
-    if (pos_ == 0) return false;
-    apply_snap(inst, entries_[--pos_].before);
+bool History::commit_replay(std::string label, Replay before, Replay after) {
+    if (replay_json(before) == replay_json(after)) return false;
+    entries_.resize(pos_);
+    Entry e;
+    e.label = std::move(label);
+    e.replay_before = std::make_shared<const Replay>(std::move(before));
+    e.replay_after = std::make_shared<const Replay>(std::move(after));
+    entries_.push_back(std::move(e));
+    if (entries_.size() > kMax) {
+        entries_.erase(entries_.begin());
+        ++dropped_;
+    }
+    pos_ = entries_.size();
     return true;
 }
 
-bool History::redo(Instances& inst) {
+bool History::undo(Instances& inst, Replay* replay) {
+    if (pos_ == 0) return false;
+    const Entry& e = entries_[--pos_];
+    apply_snap(inst, e.before);
+    if (replay && e.replay_before) *replay = *e.replay_before;
+    return true;
+}
+
+bool History::redo(Instances& inst, Replay* replay) {
     if (pos_ >= entries_.size()) return false;
-    apply_snap(inst, entries_[pos_++].after);
+    const Entry& e = entries_[pos_++];
+    apply_snap(inst, e.after);
+    if (replay && e.replay_after) *replay = *e.replay_after;
     return true;
 }
 
@@ -72,20 +92,31 @@ void spin(float* m, const float* base, float th) {
 }
 
 std::uint32_t duplicate(Instances& inst, History& hist, std::uint32_t src) {
-    const std::uint32_t n = inst.n;
-    inst.type.push_back(inst.type[src]);
-    inst.idnum.push_back(inst.idnum[src] >= kAdded ? inst.idnum[src] : kAdded + inst.idnum[src]);
-    const float* m = inst.matrix(src);
-    std::vector<float> copy(m, m + kInstFloats);
-    copy[9] += 2.0f;
-    inst.m.insert(inst.m.end(), copy.begin(), copy.end());
-    inst.m0.insert(inst.m0.end(), copy.begin(), copy.end());
-    inst.hidden.push_back(1);
-    inst.n = n + 1;
-    auto before = snapshot(inst, {n});
-    inst.hidden[n] = 0;
-    hist.commit("Duplicar", std::move(before), snapshot(inst, {n}));
-    return n;
+    const float off[3] = {2.0f, 0.0f, 0.0f};
+    return duplicate(inst, hist, std::vector<std::uint32_t>{src}, off).front();
+}
+
+std::vector<std::uint32_t> duplicate(Instances& inst, History& hist, const std::vector<std::uint32_t>& src, const float* offset,
+                                     const char* label) {
+    std::vector<std::uint32_t> made;
+    for (std::uint32_t s : src) {
+        const std::uint32_t n = inst.n;
+        inst.type.push_back(inst.type[s]);
+        inst.idnum.push_back(inst.idnum[s] >= kAdded ? inst.idnum[s] : kAdded + inst.idnum[s]);
+        const float* m = inst.matrix(s);
+        std::vector<float> copy(m, m + kInstFloats);
+        for (int a = 0; a < 3; ++a) copy[9 + a] += offset[a];
+        inst.m.insert(inst.m.end(), copy.begin(), copy.end());
+        inst.m0.insert(inst.m0.end(), copy.begin(), copy.end());
+        inst.hidden.push_back(1);
+        if (!inst.flags.empty()) inst.flags.resize(n + 1, 0);
+        inst.n = n + 1;
+        made.push_back(n);
+    }
+    auto before = snapshot(inst, made);
+    for (std::uint32_t i : made) inst.hidden[i] = 0;
+    hist.commit(label, std::move(before), snapshot(inst, made));
+    return made;
 }
 
 void restore(Instances& inst, History& hist, std::uint32_t i) {
