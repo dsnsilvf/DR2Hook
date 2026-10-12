@@ -13,7 +13,7 @@ Um "local" é um ponteiro para o identificador da linha da tabela LOCATION (`0x7
 - `[[local]+0x48]`: nome interno (`0x140100850`). As locations novas copiam a linha da hospedeira, então herdam o nome dela (ex. `montalegre`).
 - `0x1400f3fb0(linha, &tmp)` devolve um ponteiro para o id.
 
-Campos da linha LOCATION que já se sabe: 15 e 16 são latitude e longitude em graus inteiros (varint, complemento de dois). O 17 ainda não tem nome (valores vistos: 182, 91, 39, 13). Os campos 14 e 18 também não. **Os campos 15 e 16 não movem o alfinete do mapa.**
+Campos da linha LOCATION que já se sabe: 15 e 16 são latitude e longitude em graus inteiros (varint, complemento de dois). O 17 ainda não tem nome. Os valores parecem dias do ano: 182 (1º de julho) na maioria; 91 em Hell, Holjes, Finlândia, Suécia e Escócia; 13 em Austrália, Nova Zelândia e EUA; 39 na Polônia. Não é o dia do sol: o Ring com 13 no lugar do 182 deu a mesma luz e as mesmas sombras, pixel a pixel (2026-10-11). Os campos 14 e 18 também não. **Os campos 15 e 16 não movem o alfinete do mapa.**
 
 ## Abas (F3/F4)
 
@@ -108,12 +108,15 @@ Gerar o pacote do Ring, com o alfinete em Brasília por padrão:
 python3 scripts/research/track_package.py --overlay captures/overlay --id dr2hook_ring --lat -15 --lon -48 --install "<jogo>/ctracks"
 ```
 
-O cache só é refeito quando a assinatura muda (`kLoaderVersion`, hoje `trackpkg 5`, o exe, os pacotes e o registro).
+O catálogo e os enxertos só são refeitos quando a assinatura muda (`kLoaderVersion`, hoje `trackpkg 6`, o exe, o
+registro e, de cada pacote, o CRC do `manifest.json` e dos `graft/`). Os `track/` e `data/` são sincronizados
+arquivo por arquivo pelo CRC do zip, com a lista em `_cache/files.txt`: só o que mudou é regravado, e o que nenhum
+pacote traz mais é apagado. No Ring, uma edição só em `track/` leva 0,3 s; refazer os enxertos, uns 3 s.
 
 ## Pendente
 
 - Ver no jogo o card novo do Ring (foto pela câmera do `package.json`).
-- Nome do campo 17 da LOCATION.
+- Nome do campo 17 da LOCATION. Não é o dia do ano do sol (teste de 2026-10-11). Falta achar no exe quem lê o campo.
 
 Feito em 2026-10-11: o diálogo no viewer3d (Arquivo > Informações da pista). Ele tem 34 países prontos, o clique no
 mapa-múndi do jogo (`scripts/research/world_map_image.py`) e a câmera da foto do card. O passo a passo está em

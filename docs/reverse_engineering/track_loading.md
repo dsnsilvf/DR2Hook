@@ -968,8 +968,10 @@ caixas ficam; só os `TRANSFORM` mudam).
   - paddock entre as tendas, de frente para a pista.
 - **Resultado:** 44 nós trocados. Ao reler, a posição bate com o editor em menos de 0,1 mm.
   - Instalado na overlay em 2026-10-07 (backup do original em `build/re/montalegre_route0_orig/grids.pssg`).
-  - **Falta ver no jogo:** onde o carro nasce no treino e nas outras largadas. Não se sabe qual grade cada
-    modo usa; o treino deve usar `grid_time_trial_0/slot_0`.
+  - **Visto no jogo em 2026-10-11** (comando remoto `car`, ver [Comandos remotos](../guides/remote_commands.md)):
+    a especial que o `ring_deploy.py --mode bot` abre põe o carro em
+    `grid_start_standing_01/slot_00`, a 0,2 m da vaga e com a frente igual à dela (0,666, 0,025, 0,745).
+  - Falta ver o treino (deve usar `grid_time_trial_0/slot_0`) e as outras grades.
 
 ### 12.3 Um comando e o F5 do editor (2026-10-07)
 
@@ -1253,3 +1255,48 @@ python3 scripts/research/ring_deploy.py [--quick] [--mode bot|freecam] [--edits 
   - O primeiro F5 com câmera livre crashou pelo `cameralines.cqtc` errado (§12.1); corrigido.
   - Pelo script, 2026-10-07: bot normal, bot com `--quick` e câmera livre com `--quick` chegaram à largada, com
     a tela preta do boot até a largada. A câmera livre ficou 15 s ligada sem crash (parada).
+
+## 13. Inventário: o que a pista nova ainda pega da Montalegre (2026-10-11)
+
+O pacote (`track_package.py`) só leva os arquivos que diferem da hospedeira; o resto o jogo lê da Montalegre
+pelo alias. `scripts/research/track_inventory.py` lista, por item, o que é próprio e o que é emprestado, e
+confere a área de serviço (`--json` para o editor). Com o Ring atual (21 próprios de 67):
+
+- **Próprios:** chão e colisão, `track.vis`, objetos, ornamentos, traçado da IA e progresso, vagas, linhas de
+  reset (`resetlines.cqtc`), câmeras do replay e `cameralines.cqtc`, estepes, `pfx.xml`, `ground_cover_config.xml`,
+  `triggers_animated_objects.xml`. Fora da rota: o mapa do menu (`route_0_spline.tpk`) e a tela de carga.
+- **Emprestados com posição no mundo** (lidos nesta rodada; o efeito no Ring ainda não foi olhado item a item):
+  - `light_placement.xml`: 62 luzes com matriz `world` e `ornament_id` dos ornamentos da Montalegre. Os
+    holofotes `sa_floating_*` são os da tenda de serviço (~94, 1436, −602).
+  - `crowd_standing2.bin` + `crowds_references.xml` (37 tipos: público, fiscais, fotógrafos).
+  - `trees.bin` + `trees_references.xml` (108 referências; as `mnt_dist_*` são o horizonte, com caixas de
+    ±500 m).
+  - `audio_markup.xml` (`SplineReflection` com `p0..p2`), `audio_reflections.xml` (5 retângulos `centre`),
+    `audio_triggers.xml` (refletores com `transform`); `ambience_triggers.xml` está vazio.
+  - `triggers_effects.xml`: fogos de fim de campeonato com `position`/`transform`.
+  - `drivable_entities.jpk`: a lona do parque (`core_padd_tarp_01_driveable`) e o pódio
+    (`podium_platform_race_driveable`).
+  - `niwater.pssg` (lago `nonlod_lake_01`), `landscape.heightfield` (`LAND`/`HMAP`), `grass.grs`,
+    `ground_cover.pssg`, `patchup_ot.pssg` (823 MB) e `route_patchup_ot.pssg`.
+- **Emprestados genéricos:** clima (`weather.xml`, `basewind2.xml` em `\1BXML`), as 6 luzes do dia, água
+  (`waterdefs.xml`), lama (`mud*.xml`), distâncias de LOD, efeitos de colisão, bancos de som e materiais dos
+  props, sequência do semáforo (`start_lights.xml`), animações do público, atributos de árvores e ornamentos,
+  tipos de objeto da rota.
+
+### 13.1 Área de serviço
+
+O carro para na oficina na grade `grid_compound_5#5` (Montalegre: 102, 1433,7, −601,6; os estepes do
+`triggers_game_object.xml` ficam em volta). As câmeras são as `service_001`, `service_intro` e `service_post_001`
+do `replay_camera_config.xml`, com `postProcess="service_area_post"`. O `ring_cameras.py` mantém essas câmeras
+da Montalegre (§12.1), mas o `ring_grids.py` leva a grade para o parque do Ring (167,8, 1434,7, −462,6). Por
+isso as três câmeras ficam a ~155 m do carro, e a oficina do Ring deve abrir olhando para o vazio (ainda não
+visto no jogo; o `--quick` vai direto à largada). Os holofotes da tenda (`light_placement.xml`) e a lona
+(`drivable_entities.jpk`) também ficaram no lugar antigo. As câmeras de pódio (`podium_cam_*`) estão no mesmo caso.
+
+**Corrigido (2026-10-11):** o `ring_grids.py` dá a transformação da oficina (`paddock_move`: o mundo da vaga
+`grid_compound_5#5/slot_00_compound` na Montalegre e no Ring; um ponto `p` vai para `p @ inv(a) @ b`). Com ela, o
+`ring_cameras.py` leva as câmeras `service_*` (posição e orientação), o `ring_grids.py` leva os holofotes do
+`light_placement.xml` (agora entre os arquivos da hospedeira do `ring_deploy.py`) e os estepes do
+`triggers_game_object.xml`. O `track_inventory.py` confere: carro em (120,6, 1433,9, −510,8), câmeras a 4,7, 7,0 e
+13,0 m, luz mais longe a 31,6 m. Ficam no lugar da Montalegre a lona (`drivable_entities.jpk`, formato não decifrado)
+e a plataforma do pódio. Falta ver a oficina no jogo.

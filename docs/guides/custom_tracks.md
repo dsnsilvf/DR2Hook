@@ -13,8 +13,10 @@ Como uma pista feita no editor (viewer3d) chega ao jogo. Hoje só o DR2 Hook Rin
 A pista aparece na aba DR2Hook da tela de locations (F3/F4 trocam as abas), com o card, o alfinete no mapa-múndi e
 a tela de carregamento próprias.
 
-A dxgi monta um cache em `ctracks/_cache` e só o refaz quando um pacote, o exe ou a versão do carregador muda. Nas
-outras aberturas a tela de boot diz "cache up to date". Para tirar a pista, apague o `.dr2track`.
+A dxgi monta um cache em `ctracks/_cache` e só refaz o que mudou: o catálogo, os cards e o mapa quando o manifesto
+ou os enxertos de algum pacote mudam (ou o exe, ou a versão do carregador); os arquivos da pista, um por um, pelo
+CRC do zip. Sem mudança, a tela de boot diz "cache up to date". Para tirar a pista, apague o `.dr2track`: os
+arquivos dela saem do cache na abertura seguinte.
 
 ## 2. Para quem faz a pista: do editor ao jogo
 
@@ -74,6 +76,35 @@ O botão verde do editor roda `scripts/research/ring_deploy.py`, que faz, nesta 
    sai igual byte a byte para a mesma entrada, e o instalado só é regravado quando muda; assim o cache do jogo só
    é refeito quando a pista mudou;
 4. marca a abertura como vinda do editor e abre o jogo pela Steam.
+
+As abas **Veículo**, **Acerto** e **Condições** da janela escolhem o carro, a pintura, o acerto, a hora e o clima; o
+editor passa `--car`, `--livery`, `--tuning`, `--time` e `--surface` ao `ring_deploy.py`, que grava tudo no
+`<jogo>/dr2hook_autostage.ini` e recusa um carro, uma pintura ou uma luz que o jogo ou a pista não têm. Pela linha de
+comando:
+
+```bash
+python3 scripts/research/ring_deploy.py --car mcs --livery 00 --time sunset --surface rain
+```
+
+**Acerto.** Em "Próprio", a aba mostra um controle por item que o carro ajusta (freios, diferencial, câmbio,
+suspensão, amortecedores, estepes), com os passos e as unidades do jogo; cada carro guarda o seu. As faixas vêm do
+próprio jogo: os dados do carro são cifrados, então a dxgi anota mínimo, máximo, passos e padrão quando o carro
+carrega e grava `<jogo>/dr2hook_tuning/<carro>.json`, que o `ring_deploy.py` copia para `build/viewer3d/cars/tuning/`.
+Um carro que ainda não rodou um teste não tem faixas: rode um com o acerto padrão primeiro. Pela linha de comando,
+nas unidades do jogo (vazio volta ao padrão):
+
+```bash
+python3 scripts/research/ring_deploy.py --car mcs --tuning "brakes_bias=0.6,suspension_front_ride_height=-0.03"
+```
+
+O log do jogo diz o que entrou ("acerto do mcs: 2 valor(es) do ini aplicado(s)…"). Valor fora da faixa é limitado a
+ela, e item que o carro não ajusta é ignorado. Nomes e RE em [Vehicle Setup](../reverse_engineering/vehicle_setup.md),
+seção "Acerto do carro".
+
+Hora: `sunrise`, `midday`, `sunset`, `dusk`, `night`. Clima: `dry`, `wet` (molhado, sem chuva), `rain`. A pista
+precisa ter o `lighting_<hora>_<clima>_00.xml`; o Ring tem meio-dia e pôr do sol nos três climas. No jogo mudam a
+luz e o céu da especial; as gotas da chuva ainda não aparecem. Como o AutoStage troca as condições está em
+[Carga da especial](../reverse_engineering/stage_loading.md).
 
 Numa abertura pelo editor, o jogo pula a tela de boot do DR2Hook, o splash e o vídeo da Codemasters, e vai direto
 para a especial. Detalhes em [Abertura do jogo](../reverse_engineering/boot_intro.md) §6.

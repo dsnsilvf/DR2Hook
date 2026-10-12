@@ -72,8 +72,8 @@ O motor contém um subsistema nativo de benchmark projetado para automação e t
 | `+0xa8` | `char[32]` | `location` | Região (ex: `"usa"`, `"new_zealand"`). |
 | `+0xc8` | `char[32]` | `track` | Pista (ex: `"twin_peaks"`, `"new_zealand_rally_01"`). |
 | `+0xe8` | `char[32]` | `route` | Traçado (ex: `"free_roam"`, `"route_2"`). |
-| `+0x108` | `char[32]` | `time_of_day` | Horário (ex: `"midday"`, `"sunset"`, `"night"`). |
-| `+0x128` | `char[32]` | `surface_weather` | Condição de piso (ex: `"dry"`, `"wet"`). |
+| `+0x108` | `char[32]` | `time_of_day` | Horário (ex: `"midday"`). **Nada lê**: a corrida usa meio-dia fixo (§4.1). |
+| `+0x128` | `char[32]` | `surface_weather` | Clima (ex: `"dry"`). **Nada lê**: a corrida usa seco fixo (§4.1). |
 | `+0x148` | `char[32]` | `vehicle` | Identificador do carro (ex: `"fr5"`). |
 | `+0x168` | `char[32]` | `livery` | Número da pintura (ex: `"00"`). |
 | `+0x198` | `uint32_t` | `active` | Estado ativo da sessão de teste (`1`). |
@@ -110,6 +110,50 @@ Getters dos campos (consumidores leem depois via estes, então sobrescrever apó
 - Instalado no `DLL_PROCESS_ATTACH` (`src/core/main.cpp`), igual ao hook do UiData. `dxgi.dll` entra no processo como dependência de `d3d11.dll` (import estático do exe), então o `DllMain` roda antes do `WinMain`.
 - Detour: chama o original, guarda se o `-benchmark` nativo estava ativo, e se o ini estiver ativo sobrescreve `+0x80`, `+0xa1`, strings e `+0x198`. Quando o modo foi forçado (sem `-benchmark`), também chama `0x1409d0340` para criar a pasta como o fluxo nativo faria.
 - Logging: o Logger só abre na thread de init. `LogAutoStageStatus()` (chamado após `Logger::Init`) relata a instalação e o resultado do detour, rode ele antes ou depois.
+
+### 4.1 Hora e clima da especial (2026-10-12)
+
+Os textos `time_of_day` e `surface_weather` do BM não chegam à corrida. Caminho verificado por disassembly e no jogo:
+
+1. A montagem da corrida do benchmark `0x1405b5bc0` (vtable `0x14128b178`; recebe o tipo do evento em `edx`, que
+   repassa a `0x140577a20`, e este o grava em evento+0) copia para o evento (rbp+0x690; a cópia vai a +0x40) um
+   bloco global de 0x198 bytes, `0x1409d2b10()` = `0x141f59940`.
+2. Logo depois, sobrescreve a struct de condições da cópia (+0x108, 0x18 bytes) com uma montada na hora:
+   `0x1409cba30(sol = 90.0)` (90 em `.rdata 0x11f7cec`), depois `0x1409cb9f0(.., tempo = 0, variação = 0)`, gravada por
+   `0x1409d8ef0` (a chamada fica em `0x1405b6311`; retorno `0x1405b6316`). Por isso a especial sai sempre com
+   meio-dia e seco, e escrever no bloco global não muda nada.
+3. `0x1404381c0(jogo, evento)` copia o evento para o jogo (`0x140559f10()` = `[0x1416951e8]`); a struct vai
+   para jogo+0x3088+0x108. O setter `0x140ac0ac0`, chamado por `0x140487480`, aponta o terreno
+   (`[0x14159d868]`+0x386f0) para ela, e a luz da especial (`0x1406a2750`) monta
+   `"%s_%s_%s_%s_%s"` = `<pista>_<rota>_<hora>_<tempo>_<NN>` (reserva `"%s_%s_%s"`).
+
+Struct de condições (+0x108 do bloco ou do evento):
+
+| Offset | Tipo | Conteúdo |
+|---|---|---|
+| +0x0 | float | ângulo do sol. `0x1409d2600` converte em hora: a = ângulo + 6 (mod 360); abaixo de 78 nascer do sol, 162 meio-dia, 180 pôr do sol, 186 crepúsculo, acima disso noite |
+| +0x4 | int | hora: 0 `sunrise`, 1 `midday`, 2 `sunset`, 3 `dusk`, 4 `night` (nome por `0x1409d2fc0`) |
+| +0x8 | int | tempo: 0 `dry`, 1 `wet`, 2 `rain`, 3 `overcast`, 4 `snow` (nome por `0x1409d2a60`) |
+| +0xc | int | variação, o `_NN` do `lighting_*.xml` (`"%02u"` em `0x1409d2e60`) |
+| +0x10 | qword | zerado pela montagem |
+
+A carreira (`0x14041fd20`) também deixa o sol em 90 (`0x1409cba50`) e escolhe só os índices de hora e tempo por
+tabela; a luz segue o índice, não o ângulo.
+
+**Hook do DR2Hook** (`src/core/auto_stage.cpp`, na dxgi): um detour em `0x1409d8ef0` (prólogo
+`0f 10 02 0f 11 81 08 01 00 00`) chama o original e, só quando o endereço de retorno é `0x1405b6316`, troca
++0x4 e +0x8 pelos índices de `time_of_day` e `surface` do ini (nome desconhecido deixa o do jogo). O setter tem
+outros cinco chamadores (`0x140422650`, `0x14042ca30`, `0x1405b6660`, `0x1405b9290`, `0x1405ba200`), que ficam
+intactos. O log sai na tela de carregamento: `AutoStage: condicoes da especial 1/0/0 -> 2/2/0 (sunset, rain).`
+
+Validado no Ring (2026-10-12, prints): meio-dia/seco, pôr do sol/seco, meio-dia/molhado, meio-dia/chuva e pôr do
+sol/chuva carregam e trocam luz e céu. **As gotas da chuva não aparecem** (câmera de fora, pista sem brilho de
+molhado): o efeito de chuva e a pista molhada devem depender de outro estado, ainda não achado. Uma carga com
+pôr do sol/chuva travou uma vez antes da tela de carregamento; repetida, carregou.
+
+Tentativa que não funciona: gravar no bloco global na entrada de `0x1405b5bc0`. O passo 2 sobrescreve. Além
+disso, o detour precisa preservar `rdx`; sem isso a rota sai nula e a carga cai em `0x140439044` (jogo+0x32a0 =
+fonte da rota, vinda de evento+0x20, que `0x140590fa0` preenche).
 
 ---
 
@@ -230,6 +274,7 @@ O menu de pausa loga os eventos (`continue`, `back`, `restart_race`, `dr2hook`) 
 - Evento de chegada/saída da especial.
 - Rota da especial no evento (hoje só a pista, ex.: `new_zealand_rally_01`).
 - Entrada da espera com volante e controle (offset do acelerador confirmado só no teclado).
-- Objeto em `+0x32a0` nulo no crash de troca de pista do benchmark (5.1).
+- Objeto em `+0x32a0` nulo no crash de troca de pista do benchmark (5.1): é a fonte da rota do evento (§4.1); falta saber por que o `free_roam` a deixa nula.
+- Gotas da chuva e pista molhada com `surface = rain`/`wet` (§4.1): a luz troca, o efeito não.
 - Opção do perfil lida em `StateRallyLaunchTypeDecision` (`[rsp+0x3c]` via `0x1405cbc50`/`0x140479c40`).
 - Por que o `racestart` veio duplicado num reinício.

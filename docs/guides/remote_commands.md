@@ -21,7 +21,9 @@ Para o próximo lote, esperar o `dr2hook_cmd.txt` sumir e ler o `.out`.
 | `unpause` | Atalho de `link continue` no menu de pausa. Volta à corrida (passando pela contagem). Validado. |
 | `link <nome>` | Posta a transição `<nome>` (`options`, `back`, `continue`, `restart_race`, `quit`…) no estado do topo, se for uma tela. O runner abre o link no próximo tick, como se o item tivesse sido escolhido. Recusa em evento online e quando o topo não é uma tela. |
 | `key <tecla>` | Posta `WM_KEYDOWN`/`WM_KEYUP` na janela: `f8`, `f9`, `f11`, `esc`, `insert`, letras, `0x77`. Alcança os atalhos do core, o F8 e o `onKeyDown` dos mods. **Não move os menus nativos** (o jogo lê Raw Input); para isso use `link`. |
+| `car` | Posição (`pos x y z`, metros do mundo), velocidade e matriz de rotação do carro do jogador; `sem carro` fora da corrida. Serve para ver em que vaga de largada o carro nasceu. |
 | `cam` / `cam <ex ey ez> <tx ty tz>` | Sem argumentos, mostra a pose da câmera livre. Com seis números, põe o olho em `e` e olha para `t` (metros do mundo). Exige a câmera livre ligada (`key f9`), senão responde `camera livre desligada`. Serve para tirar prints aéreos sem segurar teclas. |
+| `focus` / `focus on\|off` | Se o jogo pausa ao perder o foco. `on`: segue rodando sem o foco (o core engole `WM_ACTIVATE`, `WM_ACTIVATEAPP` e `WM_KILLFOCUS` de saída, que abririam o menu de pausa); `off`: volta ao normal. Na abertura vale `keep_running_unfocused=` do `dr2hook_live.ini` (o Testar no jogo do editor grava). |
 | `crash` | Insta crash (mesmo do F11). Só em treino offline. |
 | `mods` | Lista os mods Lua e as opções (`[índice] id = valor`). |
 | `opt <mod> <opção> [valor]` | Mexe numa opção de mod, por índice ou id. `valor`: índice do combo (toggle: `0` Off, `1` On) ou o texto do valor. Sem valor: botão chama, toggle e choice avançam. |

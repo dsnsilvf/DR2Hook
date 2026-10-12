@@ -11,7 +11,7 @@ Nome de string no executável não é variável localizada.
 - [PhysicsRig](physics_rig.md) — referência estrutural: cadeia de ponteiros, stride, blocos, campos compartilhados
 - [Vehicle Transform](vehicle_transform.md) — posição, quatérnion, base Right/Up/Forward, âncora visual
 - [Vehicle Physics](vehicle_physics.md) — velocidades linear e angular, e os campos `T` / `V` copiados para elas
-- [Vehicle Setup](vehicle_setup.md) — bloco decodificado de setup, ponto do eixo, bitola e entre-eixos
+- [Vehicle Setup](vehicle_setup.md) — bloco decodificado de setup, ponto do eixo, bitola e entre-eixos; acerto do carro (`TuningSetup`, faixas cifradas, carimbo) e o hook do AutoStage
 - [Wheels](wheels.md) — vetores da roda, ordem dos blocos, quociente e tabela 4×4
 - [Suspension](suspension.md) — escalar `+0x1504`, integrador e o termo somado em `+0x1660`
 - [Tyres](tyres.md) — byte de estado do pneu e da roda em `+0x2cf0`
