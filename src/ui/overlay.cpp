@@ -36,6 +36,8 @@ bool g_loadCover = false;
 HWND g_hWnd = nullptr;
 ID3D11Device *g_device = nullptr;
 ID3D11DeviceContext *g_deviceContext = nullptr;
+bool g_backendWin32 = false; // ImGui_ImplWin32_Init / ImGui_ImplDX11_Init deram certo
+bool g_backendDx11 = false;
 ID3D11RenderTargetView *g_renderTargetView = nullptr;
 
 std::mutex g_notificationMutex;
@@ -508,12 +510,9 @@ bool OverlayManager::Initialize(HWND hWnd, ID3D11Device *pDevice,
   }
 
 #if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
-  if (g_hWnd != nullptr) {
-    ImGui_ImplWin32_Init(g_hWnd);
-  }
-  if (g_device != nullptr && g_deviceContext != nullptr) {
-    ImGui_ImplDX11_Init(g_device, g_deviceContext);
-  }
+  g_backendWin32 = g_hWnd != nullptr && ImGui_ImplWin32_Init(g_hWnd);
+  g_backendDx11 = g_device != nullptr && g_deviceContext != nullptr &&
+                  ImGui_ImplDX11_Init(g_device, g_deviceContext);
 #endif
 
   g_initialized = true;
@@ -546,8 +545,10 @@ void OverlayManager::Shutdown() {
   g_tonemapTried = false;
   g_coverScene = nullptr;
   ReleaseCoverImage();
-  ImGui_ImplDX11_Shutdown();
-  ImGui_ImplWin32_Shutdown();
+  // Sem janela ou device (os testes headless) os backends nunca subiram e o Shutdown deles lê nulo.
+  if (g_backendDx11) ImGui_ImplDX11_Shutdown();
+  if (g_backendWin32) ImGui_ImplWin32_Shutdown();
+  g_backendDx11 = g_backendWin32 = false;
 #endif
 
   if (g_renderTargetView != nullptr) {
@@ -623,7 +624,7 @@ bool OverlayManager::HandleWndProc(HWND hWnd, UINT msg, WPARAM wParam,
   }
 
 #if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
-  ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+  if (g_backendWin32) ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
 #endif
 
   ImGuiIO &io = ImGui::GetIO();
@@ -1330,8 +1331,8 @@ void OverlayManager::Render(IDXGISwapChain *pSwapChain) {
       g_deviceContext->OMSetRenderTargets(1, &g_renderTargetView, nullptr);
     }
 
-    ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
+    if (g_backendDx11) ImGui_ImplDX11_NewFrame();
+    if (g_backendWin32) ImGui_ImplWin32_NewFrame();
   }
 #endif
 
@@ -1350,7 +1351,7 @@ void OverlayManager::Render(IDXGISwapChain *pSwapChain) {
   ImGui::Render();
 
 #if defined(_WIN32) || defined(DR2HOOK_USE_BACKENDS)
-  if (pSwapChain != nullptr && g_renderTargetView != nullptr) {
+  if (pSwapChain != nullptr && g_renderTargetView != nullptr && g_backendDx11) {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
   }
 #endif

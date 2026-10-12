@@ -1,3 +1,5 @@
+// asserts valem também no build release
+#undef NDEBUG
 #include "dr2hook/auto_stage.h"
 #include <cassert>
 #include <cstring>
@@ -105,7 +107,11 @@ void TestAutoStageConfigIniRoundtrip() {
       "surface = wet\n"
       "vehicle = subaru_impreza\n"
       "livery = 01\n"
-      "cycle_camera = 0\n";
+      "cycle_camera = 0\n"
+      "tuning_car = subaru_impreza\n"
+      "tuning_brakes_bias = 0.6\n"
+      "Tuning_Suspension_Front_Ride_Height = -0.03\n"
+      "tuning_gearbox_1 = abc\n";
 
   {
     std::ofstream out("dr2hook_autostage.ini", std::ios::trunc);
@@ -125,6 +131,10 @@ void TestAutoStageConfigIniRoundtrip() {
   assert(cfg.vehicle == "subaru_impreza");
   assert(cfg.livery == "01");
   assert(cfg.cycleCamera == false);
+  assert(cfg.tuningCar == "subaru_impreza");
+  assert(cfg.tuning.size() == 2); // valor que não é número fica de fora
+  assert(cfg.tuning[0].first == "brakes_bias" && cfg.tuning[0].second == 0.6f);
+  assert(cfg.tuning[1].first == "suspension_front_ride_height" && cfg.tuning[1].second == -0.03f);
 
   std::remove("dr2hook_autostage.ini");
 

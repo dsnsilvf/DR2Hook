@@ -123,6 +123,7 @@ add_library(dr2hook_core SHARED
     src/core/intro_skip.cpp
     src/core/editor_launch.cpp
     src/core/live_link.cpp
+    src/core/window_focus.cpp
     src/core/location_tabs.cpp
     src/core/load_view.cpp
     src/ui/overlay.cpp
@@ -186,6 +187,11 @@ foreach(dr2_target dxgi dr2hook_core)
     endif()
 
     set_target_properties(${dr2_target} PROPERTIES PREFIX "")
+    # Fora do Windows os dois só servem de checagem com os headers do wine (ainda não compilam inteiros); o build
+    # nativo padrão fica com os testes e as ferramentas. Para tentar: cmake --build build --target dxgi.
+    if(NOT WIN32)
+        set_target_properties(${dr2_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
 endforeach()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -205,6 +211,45 @@ if((WIN32 OR MSVC) AND MINGW)
         "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
     )
 endif()
+
+# No build Windows (mingw) os testes que puxam overlay.cpp, ghost_lab.cpp ou hooks precisam do que a dxgi e o core
+# trazem: MinHook, os backends DX11/Win32 do ImGui e as libs do D3D. No Linux esses trechos ficam fora por #if.
+set(MINHOOK_SOURCES
+    vendor/minhook/src/buffer.c
+    vendor/minhook/src/hook.c
+    vendor/minhook/src/trampoline.c
+    vendor/minhook/src/hde/hde64.c
+)
+
+function(dr2hook_test_windows_support target)
+    if(NOT WIN32)
+        return()
+    endif()
+    target_sources(${target} PRIVATE ${MINHOOK_SOURCES} ${ARGN})
+    if(MINGW)
+        target_link_options(${target} PRIVATE "-static" "-static-libgcc" "-static-libstdc++")
+    endif()
+endfunction()
+
+# Os outros testes também ligam estático no mingw, senão o .exe pede libstdc++-6.dll ao rodar no wine.
+function(dr2hook_test_static target)
+    if(MINGW)
+        target_link_options(${target} PRIVATE "-static" "-static-libgcc" "-static-libstdc++")
+    endif()
+endfunction()
+
+function(dr2hook_test_overlay_support target)
+    if(NOT WIN32)
+        return()
+    endif()
+    dr2hook_test_windows_support(${target} ${IMGUI_BACKEND_SOURCES} ${ARGN})
+    target_link_libraries(${target} PRIVATE dwmapi d3dcompiler d3d11)
+    if(MINGW)
+        target_link_options(${target} PRIVATE
+            "-Wl,--defsym,_ZN7dr2hook30ImGui_ImplWin32_WndProcHandlerEP6HWND__jyx=_Z30ImGui_ImplWin32_WndProcHandlerP6HWND__jyx"
+        )
+    endif()
+endfunction()
 
 # Alvo de teste executável local: Memória e Segurança
 add_executable(test_memory_safety
@@ -490,10 +535,22 @@ add_executable(test_path_redirect
 
 target_include_directories(test_path_redirect PRIVATE include)
 
+foreach(dr2_test test_lua_engine test_overlay test_stability_soak)
+    dr2hook_test_overlay_support(${dr2_test} src/core/ghost_trace.cpp src/core/terminal_damage.cpp)
+endforeach()
+foreach(dr2_test test_memory_safety test_ui_patch test_mod_menu test_free_camera test_path_redirect)
+    dr2hook_test_static(${dr2_test})
+endforeach()
+dr2hook_test_windows_support(test_auto_stage src/core/race_events.cpp tests/load_probe_stub.cpp)
+if(WIN32)
+    dr2hook_test_windows_support(test_physics_tick_harness src/core/physics_harness_detour_x64.S)
+endif()
+
 # Alvo customizado para geração do pacote de release (Fase 6)
 add_custom_target(package_release
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/release/package_release.sh
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Gerando pacote compactado de release e hashes SHA-256 do DR2Hook"
 )
+
 

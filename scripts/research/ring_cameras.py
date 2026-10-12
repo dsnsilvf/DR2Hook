@@ -11,7 +11,8 @@ do terreno (`ring_tracksplit.start_transform`). Saem:
   encadeados, com a curva de porcentagem da Montalegre. As zonas (`TriggerZone`) são caixas de 10 m de altura e
   0,5 m de espessura atravessando a pista de `l` a `r`, com um `ZoneEvent` por troca (câmera do editor = `replay`,
   `onboard_*`/`external_*` = `target`) e `lapNumber` quando a zona só vale numa volta.
-  Ficam da Montalegre: `dynamic_camera_rig` (relativa ao carro) e as do pódio e do serviço, com seus caminhos.
+  Ficam da Montalegre: `dynamic_camera_rig` (relativa ao carro) e as do pódio e do serviço, com seus caminhos. As do
+  pódio e do serviço vão junto com a oficina para o parque do Ring (`ring_grids.paddock_move`, track_loading.md §13.1).
 - `cameralines.cqtc`: prismas `CBND` (4 paredes, 8 triângulos) em volta das peças altas (`replay.bounds`), numa
   folha só. Formato medido na Montalegre (16 prismas em volta das guaritas): caixa (6 f32), nº de triângulos, de
   vértices, de materiais, offsets dos vértices, nós, triângulos e refs, etiquetas de 4 bytes; vértice = x 24 bits,
@@ -20,7 +21,10 @@ do terreno (`ring_tracksplit.start_transform`). Saem:
   em 24 bits BE, os outros como u16 BE relativos a ele, o último com o bit 15. Normais para fora. (Até 2026-10-07 o
   gerador punha um byte 0 a mais antes do 1º triângulo: o jogo lia as refs deslocadas e caía com a câmera livre.)
 
-    python3 scripts/research/ring_cameras.py build/re/ring_cameras
+Com `--edits <edits.json>` do viewer3d, as câmeras e zonas da seção `replay` da rota (criadas, movidas ou apagadas no
+editor) entram no lugar das do track.json; os prismas ficam os do track.json.
+
+    python3 scripts/research/ring_cameras.py build/re/ring_cameras [--edits <edits.json>]
 """
 from __future__ import annotations
 
@@ -37,12 +41,14 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from ring_grids import paddock_move  # noqa: E402
 from ring_tracksplit import rotate_y, start_transform  # noqa: E402
 from tools.egodata import bxml  # noqa: E402
 
 HOST = "build/re/montalegre_route0_orig"
 TRACK = "examples/tracks/synthetic__dr2hook_ring/track.json"
 KEEP = ("dynamic_camera_rig", "podium_", "service_")  # câmeras da Montalegre que ficam
+PADDOCK = ("podium_", "service_")  # destas, as que vão com a oficina
 GOPRO_HOST = "camera_r01_gopro_001"
 HOST_SPECTATORS = 7
 ZONE_HEIGHT = 10.0
@@ -113,7 +119,11 @@ def look_quat(eye, aim) -> tuple[float, float, float, float]:
     x = np.cross((0.0, 1.0, 0.0), f)
     x /= np.linalg.norm(x)
     y = np.cross(f, x)
-    m = np.stack([x, y, f], 1)  # colunas = eixos locais
+    return mat_quat(np.stack([x, y, f], 1))  # colunas = eixos locais
+
+
+def mat_quat(m: np.ndarray) -> tuple[float, float, float, float]:
+    """(x, y, z, w) de uma rotação cujas colunas são os eixos locais no mundo."""
     tr = m[0, 0] + m[1, 1] + m[2, 2]
     if tr > 0:
         s = 2.0 * math.sqrt(tr + 1.0)
@@ -134,6 +144,10 @@ def rotate(q, v) -> np.ndarray:
     qv = np.array(q[:3])
     v = np.asarray(v, float)
     return v + 2.0 * np.cross(qv, np.cross(qv, v) + q[3] * v)
+
+
+def quat_mat(q) -> np.ndarray:
+    return np.stack([rotate(q, e) for e in np.eye(3)], 1)
 
 
 def yaw_quat(across) -> tuple[float, float, float, float]:
@@ -167,7 +181,23 @@ def linear_curve(ident):
              ["Value", None, [("time", "1.000"), ("value", "1.000")], []]]]
 
 
-def build_config(host_root, replay: dict, game: Game):
+def move_paddock(nodes: list, paths: list, move: np.ndarray) -> None:
+    """Leva câmeras (`Position`, `orientation`) e caminhos (`Point`) por `move` (4×4 vetor-linha)."""
+    for cam in nodes:
+        p = param(cam, "Position")
+        v = np.array([float(attr(p, k)) for k in "xyz"] + [1.0]) @ move
+        set_vec(cam, "Position", v[:3])
+        o = param(cam, "orientation")
+        q = tuple(float(attr(o, k)) for k in "xyzw")
+        set_quat(cam, "orientation", mat_quat(move[:3, :3].T @ quat_mat(q)))
+    for path in paths:
+        for pt in path[3]:
+            v = np.array([float(attr(pt, k)) for k in "xyz"] + [1.0]) @ move
+            for k, x in zip("xyz", v[:3]):
+                attr(pt, k, f"{x:.3f}")
+
+
+def build_config(host_root, replay: dict, game: Game, paddock: np.ndarray | None = None):
     root = copy.deepcopy(host_root)
     kids = root[3]
     hosts = {attr(c, "ident"): c for c in kids if c[0] == "Camera"}
@@ -242,6 +272,10 @@ def build_config(host_root, replay: dict, game: Game):
     others = [c for c in keep if attr(c, "ident") != "dynamic_camera_rig"]
     kept_splines = [c for c in kids if c[0] == "Path" and attr(c, "type") == "spline" and attr(c, "ident") in kept_paths]
     kept_curves = [host_paths[attr(c, "percentageCurve")] for c in kept_splines]
+    if paddock is not None:
+        moved = [c for c in others if attr(c, "ident").startswith(PADDOCK)]  # root já é cópia: muda no lugar
+        names = {attr(c, k) for c in moved for k in ("sourcePath", "targetPath")} - {None, ""}
+        move_paddock(moved, [c for c in kept_splines if attr(c, "ident") in names], paddock)
     root[3] = rig + cameras + others + zones + splines + kept_splines + curves + kept_curves
     return root
 
@@ -350,15 +384,27 @@ def prisms(bounds: list[dict], game: Game):
     return out
 
 
+def edited_replay(route: dict, edits: dict | None) -> dict:
+    """`route["replay"]` com as câmeras e zonas da seção `replay` do edits.json, se ela tem esta rota."""
+    replay = dict(route["replay"])
+    for e in (edits or {}).get("replay", []):
+        if e.get("route") == route.get("name"):
+            replay["cameras"], replay["zones"] = e["cameras"], e["zones"]
+    return replay
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
     ap.add_argument("--track", default=TRACK)
+    ap.add_argument("--edits", help="edits.json do viewer3d (seção replay: câmeras e zonas mudadas no editor)")
     a = ap.parse_args()
-    replay = json.load(open(a.track))["routes"][0]["replay"]
+    route = json.load(open(a.track))["routes"][0]
+    replay = edited_replay(route, json.load(open(a.edits)) if a.edits else None)
     game = Game()
     host = bxml.decode(open(os.path.join(HOST, "replay_camera_config.xml"), "rb").read())
-    root = build_config(host, replay, game)
+    old_w, new_w = paddock_move()
+    root = build_config(host, replay, game, np.linalg.inv(old_w) @ new_w)
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "replay_camera_config.xml"), "wb") as fh:
         fh.write(bxml.encode(root))

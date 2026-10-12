@@ -15,6 +15,7 @@
 #include "dr2hook/load_view.h"
 #include "dr2hook/intro_skip.h"
 #include "dr2hook/live_link.h"
+#include "dr2hook/window_focus.h"
 #include "dr2hook/location_tabs.h"
 #include "dr2hook/session_audio.h"
 #include "dr2hook/script/mod_manager.h"
@@ -259,6 +260,7 @@ int Core_Initialize(int truncateLog) {
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
     dr2hook::IntroSkip::Install();
     dr2hook::LiveLink::Install();
+    dr2hook::WindowFocus::Install();
     dr2hook::LocationTabs::Install(
         reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr)));
 
@@ -377,6 +379,10 @@ void Core_OnFrame(IDXGISwapChain *swapChain, HWND hwnd, double deltaTime) {
 
 int Core_OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   try {
+    if (dr2hook::WindowFocus::OnWndProc(hwnd, msg, wParam, lParam) != 0) {
+      return 1;
+    }
+
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) &&
         (wParam == VK_INSERT || wParam == 0x2D)) {
       dr2hook::OverlayManager::ToggleMenu();

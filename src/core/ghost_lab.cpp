@@ -2967,12 +2967,19 @@ void PatchObjectUpdateSerial() {
 
 // Para outros módulos (LoadView): onde cada thread está (RIP + retornos do jogo).
 void GhostLabDumpThreads() {
+#if defined(_WIN32)
   DumpThreads();
+#endif
 }
 
 // Para outros módulos (LoadView): o mesmo watchpoint de escrita, logado pelo CrashLogger.
 void GhostLabArmWriteWatch(const std::vector<uintptr_t> &addrs, const std::vector<int> &lens) {
+#if defined(_WIN32)
   ArmWriteWatch(addrs, lens);
+#else
+  (void)addrs;
+  (void)lens;
+#endif
 }
 
 bool GhostLab::Install(uintptr_t gameBase) {
@@ -3177,7 +3184,9 @@ int GhostLab::SpawnClone() {
 
 void GhostLab::SetOpaque(bool opaque) {
   if (g_opaque.exchange(opaque) != opaque) {
+#if defined(_WIN32)
     g_opacityLogged = false;
+#endif
     Logger::Info(std::string("GhostLab: fantasma ") +
                  (opaque ? "solido (opacidade 1, sem aura)"
                          : "transparente de novo") +
@@ -3189,23 +3198,35 @@ bool GhostLab::IsOpaque() { return g_opaque.load(); }
 
 void GhostLab::OnStageLoad() {
   g_collide.store(false);
+#if defined(_WIN32)
   // Os carros da especial anterior somem com ela.
   std::lock_guard<std::mutex> lock(g_collideMutex);
   g_collidingVehicles.clear();
   for (auto &slot : g_solidBodies) slot.store(nullptr);
+#endif
 }
 
 void GhostLab::OnStageStart() { g_collide.store(false); }
 
 bool GhostLab::ToggleClonePause() {
+#if defined(_WIN32)
   const bool paused = !g_clonePaused.load();
   g_clonePaused.store(paused);
+#else
+  const bool paused = false;
+#endif
   Logger::Info(std::string("GhostLab[pausa]: F6 -> pedido de pausa dos clones ") +
                (paused ? "ligado." : "desligado."));
   return paused;
 }
 
-bool GhostLab::ClonesPaused() { return g_clonePaused.load(); }
+bool GhostLab::ClonesPaused() {
+#if defined(_WIN32)
+  return g_clonePaused.load();
+#else
+  return false;
+#endif
+}
 
 bool GhostLab::ToggleCollision() {
   const bool collide = !g_collide.load();

@@ -28,6 +28,7 @@ constexpr ULONGLONG kMinGapMs = 16;   // até ~60 pacotes por segundo
 constexpr ULONGLONG kIdleGapMs = 500; // sem carro nem câmera: só um sinal de vida
 
 SOCKET g_socket = INVALID_SOCKET;
+SOCKET g_editorSocket = INVALID_SOCKET; // 127.0.0.1:47821, pacotes do editor
 bool g_wsa = false;
 sockaddr_in g_to{};
 uint32_t g_seq = 0;
@@ -36,6 +37,17 @@ ULONGLONG g_lastSend = 0;
 // de fluxo coincidiram com travamentos da leitura de arquivos do jogo (2026-10-08).
 bool g_armed = false;
 bool g_opened = false;
+// Último pedido e última pose do editor já aplicados (por sessão do editor).
+uint32_t g_editorSession = 0;
+uint32_t g_editorRequest = 0;
+uint32_t g_editorPose = 0;
+
+bool Finite(const float *v, int n) {
+  for (int i = 0; i < n; ++i) {
+    if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e6f) return false;
+  }
+  return true;
+}
 
 // Abre o socket na primeira vez que o elo tem algo a mandar.
 bool Open() {
@@ -58,20 +70,59 @@ bool Open() {
   g_to.sin_port = htons(LiveLink::kPort);
   g_to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   Logger::Info("LiveLink: carro e camera vao para 127.0.0.1:" + std::to_string(LiveLink::kPort) + " (UDP).");
+
+  g_editorSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  sockaddr_in at{};
+  at.sin_family = AF_INET;
+  at.sin_port = htons(LiveLink::kEditorPort);
+  at.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (g_editorSocket != INVALID_SOCKET &&
+      bind(g_editorSocket, reinterpret_cast<const sockaddr *>(&at), sizeof at) == 0) {
+    ioctlsocket(g_editorSocket, FIONBIO, &nonBlocking);
+    Logger::Info("LiveLink: camera do editor em 127.0.0.1:" + std::to_string(LiveLink::kEditorPort) + " (UDP).");
+  } else {
+    if (g_editorSocket != INVALID_SOCKET) closesocket(g_editorSocket);
+    g_editorSocket = INVALID_SOCKET;
+    Logger::Warn("LiveLink: porta " + std::to_string(LiveLink::kEditorPort) +
+                 " ocupada; sem a camera do editor.");
+  }
   return true;
+}
+
+// Lê tudo o que o editor mandou e aplica o mais novo: o pedido de ligar/desligar a
+// câmera livre e a pose dele.
+void ReadEditor() {
+  if (g_editorSocket == INVALID_SOCKET) return;
+  EditorPacket last{};
+  bool got = false;
+  for (;;) {
+    EditorPacket p{};
+    const int n = recv(g_editorSocket, reinterpret_cast<char *>(&p), sizeof p, 0);
+    if (n == SOCKET_ERROR) break;
+    if (n != static_cast<int>(sizeof p) || std::memcmp(p.magic, "DR2E", 4) != 0 || p.version != 1) continue;
+    last = p;
+    got = true;
+  }
+  if (!got) return;
+  if (last.session != g_editorSession) {
+    g_editorSession = last.session;
+    g_editorRequest = 0;
+    g_editorPose = 0;
+  }
+  if (last.request != 0 && last.request != g_editorRequest) {
+    g_editorRequest = last.request;
+    FreeCamera::SetEnabled((last.flags & kEditorWantFree) != 0, " (editor)");
+  }
+  if (last.pose != 0 && last.pose != g_editorPose && Finite(last.eye, 3) && Finite(last.forward, 3) &&
+      FreeCamera::RemoteLook(last.eye, last.forward)) {
+    g_editorPose = last.pose;
+  }
 }
 
 uint32_t TopRva() {
   const std::string stack = TerminalDamage::FlowStack();
   const size_t at = stack.rfind("st=");
   return at == std::string::npos ? 0 : static_cast<uint32_t>(std::strtoull(stack.c_str() + at + 3, nullptr, 16));
-}
-
-bool Finite(const float *v, int n) {
-  for (int i = 0; i < n; ++i) {
-    if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e6f) return false;
-  }
-  return true;
 }
 
 #endif
@@ -95,6 +146,8 @@ void LiveLink::Shutdown() {
 #if defined(_WIN32)
   if (g_socket != INVALID_SOCKET) closesocket(g_socket);
   g_socket = INVALID_SOCKET;
+  if (g_editorSocket != INVALID_SOCKET) closesocket(g_editorSocket);
+  g_editorSocket = INVALID_SOCKET;
   if (g_wsa) WSACleanup();
   g_wsa = false;
   g_opened = false;
@@ -105,17 +158,21 @@ void LiveLink::Shutdown() {
 void LiveLink::OnFrame() {
 #if defined(_WIN32)
   if (!g_armed || !Open()) return;
+  ReadEditor();
   const ULONGLONG now = GetTickCount64();
   if (now - g_lastSend < kMinGapMs) return;
 
   LivePacket p{};
   std::memcpy(p.magic, "DR2L", 4);
-  p.version = 1;
+  p.version = 2;
   p.top = TopRva();
   if (p.top == kTopPause) p.flags |= kLivePaused;
   if (FreeCamera::StageView(p.eye, p.forward, p.up) && Finite(p.eye, 3) && Finite(p.forward, 3)) {
     p.flags |= kLiveView;
   }
+  if (FreeCamera::Enabled()) p.flags |= kLiveFree;
+  p.freeMoves = FreeCamera::LocalMoves();
+  p.editorPose = g_editorPose;
   const bool racing = p.top == kTopRace || p.top == kTopPause || p.top == kTopCountdown;
   CarState car{};
   if (racing && Player::GetVehicleAddress() != 0 && Player::CaptureState(car, true)) {

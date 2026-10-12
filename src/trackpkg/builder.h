@@ -16,7 +16,9 @@ namespace trackpkg {
 // - os arquivos do jogo enxertados (graft/ dos pacotes, cards de reserva e o selo do DR2Hook);
 // - os arquivos track/ e data/ dos pacotes.
 // Os ids do catálogo ficam em `ctracks/registry.ini` e nunca mudam para uma pista. Uma assinatura
-// (versão do carregador, exe, pacotes e registro) evita refazer o cache a cada boot.
+// (versão do carregador, exe, registro e, de cada pacote, o manifesto e os graft/) diz quando refazer
+// o catálogo e os enxertos; track/ e data/ são sincronizados arquivo por arquivo pelo CRC do zip
+// (`_cache/files.txt`), então editar a pista regrava só os arquivos que mudaram.
 
 // Andamento para a tela de boot (textos em inglês): etapa atual com a fração da barra (0..1; negativa
 // mantém), etapa concluída e pacote ou pista recusados.

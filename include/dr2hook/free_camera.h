@@ -24,6 +24,13 @@ public:
   // aplicada com a câmera livre ligada (F9, ou `key f9`).
   static std::string RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz);
   static std::string RemotePose();
+  // Elo com o editor (LiveLink): ligar/desligar sem o F9 (`who` vai para o log, ex. " (editor)"),
+  // olho e frente em metros do mundo (aplicados no próximo tick; só com a câmera livre ligada)
+  // e quantos passos o mouse/teclado do jogo já deram nela (sobe quando o jogador a move).
+  static bool Enabled();
+  static void SetEnabled(bool enable, const char *who);
+  static bool RemoteLook(const float eye[3], const float forward[3]);
+  static uint32_t LocalMoves();
   // Pose da câmera da especial no último tick (a livre, se ligada): olho, frente e
   // cima em metros do mundo. false se não houve tick nos últimos 500 ms.
   static bool StageView(float eye[3], float forward[3], float up[3]);

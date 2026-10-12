@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -21,7 +22,7 @@ namespace {
 namespace fs = std::filesystem;
 
 // Muda quando o que o cache contém muda (força refazer em quem atualizar a dxgi).
-constexpr const char *kLoaderVersion = "trackpkg 5";
+constexpr const char *kLoaderVersion = "trackpkg 6";
 
 constexpr uint32_t kTrackModel = 0xB8E12AAA;
 constexpr uint32_t kTrack = 0x1072479A;
@@ -397,6 +398,22 @@ std::string Stamp(const std::string &path) {
   return std::to_string(size) + ":" + std::to_string(static_cast<long long>(t));
 }
 
+// O que do pacote entra no catálogo e nos enxertos: o manifesto e os graft/, pelo CRC do zip. track/ e data/ ficam
+// de fora; esses o cache sincroniza arquivo por arquivo (SyncFiles).
+std::string SharedInputs(const Package &pkg) {
+  std::string s = pkg.manifest().id;
+  for (const std::string &en : pkg.Entries()) {
+    if (en != "manifest.json" && en.compare(0, 6, "graft/") != 0) continue;
+    uint32_t crc = 0;
+    uint64_t size = 0;
+    pkg.Stat(en, &crc, &size);
+    char buf[48];
+    std::snprintf(buf, sizeof buf, " %08x:%llu", crc, static_cast<unsigned long long>(size));
+    s += " " + en + buf;
+  }
+  return s;
+}
+
 std::string ReadText(const std::string &path) {
   std::vector<uint8_t> d;
   return ReadAll(path, &d) ? std::string(d.begin(), d.end()) : std::string();
@@ -466,7 +483,7 @@ BuildResult BuildTrackPackages(const BuildOptions &opt) {
       progress(BuildEvent::Problem, f + ": another package uses the same track id, skipped");
       continue;
     }
-    sig += "\npkg " + f + " " + Stamp(Join(root, f));
+    sig += "\npkg " + f + " " + SharedInputs(*pkg);
     pkgs.push_back(std::move(pkg));
   }
   progress(BuildEvent::Done, pkgs.empty() ? std::string("No track packages in ctracks/")
@@ -478,22 +495,24 @@ BuildResult BuildTrackPackages(const BuildOptions &opt) {
   auto withRegistry = [&](const std::string &text) { return sig + "\nregistry " + std::to_string(Djb2(text)); };
   const std::string sigIn = withRegistry(ReadText(regPath));
 
-  // Cache em dia: só a tabela de execução.
+  // Catálogo e enxertos em dia: só a lista das pistas ativas, guardada na assinatura.
   const std::string sigPath = Join(cache, "signature.txt");
   const std::string old = ReadText(sigPath);
   std::set<std::string> active;
   const bool fresh = old.compare(0, sigIn.size(), sigIn) == 0 && (old.size() == sigIn.size() || old[sigIn.size()] == '\n');
   if (fresh) {
-    progress(BuildEvent::Done, "Track cache is up to date", 1);
     std::istringstream in(old.substr(sigIn.size()));
     std::string line;
     while (std::getline(in, line))
       if (line.compare(0, 7, "active ") == 0) active.insert(line.substr(7));
   } else {
-    res.regenerated = true;
     info("ctracks: montando o cache (" + std::to_string(pkgs.size()) + " pacote(s))");
     progress(BuildEvent::Step, "Building the track catalogue", 0.12);
-    for (const char *sub : {"catalogues", "frontend", "tracks"}) fs::remove_all(U8Path(Join(cache, sub)), ec);
+    // Só o que depende de todos os pacotes; track/ e data/ seguem a sincronização lá embaixo.
+    for (const std::string &t : {std::string("catalogues/base.ctpk"), std::string(kBadgeBundle), std::string(kMapDatabase),
+                                 std::string(kCardBundles[0]), std::string(kCardBundles[1]),
+                                 GraftTarget("frontend/databases/loadingscreen.pssg")})
+      fs::remove(U8Path(Join(cache, t)), ec);
     fs::remove(U8Path(sigPath), ec);
 
     GameFiles game(opt.gameDir);
@@ -594,42 +613,111 @@ BuildResult BuildTrackPackages(const BuildOptions &opt) {
 
     progress(BuildEvent::Done, "Catalogue, cards and map updated", 0.45);
 
-    // track/ e data/
-    for (size_t i = 0; i < ok.size(); ++i) {
-      Package *pkg = ok[i];
-      const Manifest &m = pkg->manifest();
-      const std::string step =
-          "Extracting tracks (" + std::to_string(i + 1) + "/" + std::to_string(ok.size()) + "): " + m.name;
-      size_t count = 0, seen = 0;
-      const auto &entries = pkg->Entries();
-      for (const std::string &en : entries) {
-        progress(BuildEvent::Step, step, 0.45 + 0.55 * (i + double(seen++) / entries.size()) / ok.size());
-        std::string dest;
-        if (en.compare(0, 6, "track/") == 0) {
-          dest = "tracks/locations/" + m.hostLocation + "/" + m.id + "/" + en.substr(6);
-        } else if (en.compare(0, 5, "data/") == 0) {
-          if (!AllowedDataPath(en.substr(5), m.id)) {
-            warn("ctracks: " + m.id + ": arquivo fora dos prefixos permitidos: " + en);
-            continue;
-          }
-          dest = en.substr(5);
-        } else {
-          continue;
-        }
-        if (!pkg->Read(en, &raw, &err) || !WriteAll(Join(cache, dest), raw)) {
-          warn("ctracks: " + m.id + ": " + en + ": " + (err.empty() ? "não gravou" : err));
-          return res;
-        }
-        ++count;
-      }
-      info("ctracks: " + m.id + ": " + std::to_string(count) + " arquivo(s)");
-    }
-    if (!ok.empty()) progress(BuildEvent::Done, "Track files extracted");
     // O registro pode ter mudado agora: a assinatura usa o que ficou gravado.
     std::string sigOut = withRegistry(ReadText(regPath));
     for (const std::string &id : active) sigOut += "\nactive " + id;
     if (!WriteText(sigPath, sigOut + "\n")) warn("ctracks: não gravou a assinatura do cache");
   }
+
+  // track/ e data/ das pistas ativas, arquivo por arquivo. files.txt guarda o CRC e o tamanho de cada arquivo já
+  // extraído; só se grava o que mudou e se apaga o que nenhum pacote traz mais. Assim, uma edição no editor
+  // reextrai só os arquivos que ela mexeu.
+  struct Want {
+    Package *pkg;
+    std::string entry;
+    uint32_t crc = 0;
+    uint64_t size = 0;
+  };
+  std::map<std::string, Want> want; // caminho no cache -> entrada do pacote
+  for (const auto &pkg : pkgs) {
+    const Manifest &m = pkg->manifest();
+    if (!active.count(m.id)) continue;
+    for (const std::string &en : pkg->Entries()) {
+      std::string dest;
+      if (en.compare(0, 6, "track/") == 0) {
+        dest = "tracks/locations/" + m.hostLocation + "/" + m.id + "/" + en.substr(6);
+      } else if (en.compare(0, 5, "data/") == 0) {
+        if (!AllowedDataPath(en.substr(5), m.id)) {
+          if (!fresh) warn("ctracks: " + m.id + ": arquivo fora dos prefixos permitidos: " + en);
+          continue;
+        }
+        dest = en.substr(5);
+      } else {
+        continue;
+      }
+      Want w{pkg.get(), en};
+      pkg->Stat(en, &w.crc, &w.size);
+      want[dest] = w;
+    }
+  }
+  const std::string listPath = Join(cache, "files.txt");
+  const std::string listIn = ReadText(listPath);
+  std::map<std::string, std::pair<uint32_t, uint64_t>> have;
+  {
+    std::istringstream in(listIn);
+    std::string line;
+    if (std::getline(in, line) && line == kLoaderVersion) {
+      while (std::getline(in, line)) { // <crc> <tamanho> <caminho>
+        unsigned int crc = 0;
+        unsigned long long size = 0;
+        int at = 0;
+        if (std::sscanf(line.c_str(), "%x %llu %n", &crc, &size, &at) == 2 && at > 0)
+          have[line.substr(at)] = {crc, size};
+      }
+    } else {
+      // Sem a lista (cache vazio ou de outra versão): não se sabe o que há nas pastas, então recomeça.
+      for (const char *sub : {"tracks", "frontend/streamed_textures"}) fs::remove_all(U8Path(Join(cache, sub)), ec);
+    }
+  }
+  std::vector<std::string> todo;
+  for (const auto &[dest, w] : want) {
+    const auto h = have.find(dest);
+    std::error_code sec;
+    const bool same = h != have.end() && h->second.first == w.crc && h->second.second == w.size &&
+                      fs::file_size(U8Path(Join(cache, dest)), sec) == w.size && !sec;
+    if (!same) todo.push_back(dest);
+  }
+  size_t removed = 0;
+  const size_t cacheLen = U8Path(cache).native().size();
+  for (const auto &h : have) {
+    if (want.count(h.first)) continue;
+    if (fs::remove(U8Path(Join(cache, h.first)), ec)) ++removed;
+    // Pastas que ficaram vazias (pista retirada).
+    for (fs::path dir = U8Path(Join(cache, h.first)).parent_path();
+         dir.native().size() > cacheLen && fs::is_empty(dir, ec) && !ec; dir = dir.parent_path())
+      fs::remove(dir, ec);
+  }
+  const double base = fresh ? 0.1 : 0.45;
+  std::string err;
+  std::vector<uint8_t> raw;
+  for (size_t i = 0; i < todo.size(); ++i) {
+    const Want &w = want[todo[i]];
+    progress(BuildEvent::Step,
+             "Extracting track files (" + std::to_string(i + 1) + "/" + std::to_string(todo.size()) + "): " + w.pkg->manifest().name,
+             base + (1 - base) * i / todo.size());
+    if (!w.pkg->Read(w.entry, &raw, &err) || !WriteAll(Join(cache, todo[i]), raw)) {
+      warn("ctracks: " + w.pkg->manifest().id + ": " + w.entry + ": " + (err.empty() ? "não gravou" : err));
+      return res;
+    }
+  }
+  std::string listOut = std::string(kLoaderVersion) + "\n";
+  for (const auto &[dest, w] : want) {
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "%08x %llu ", w.crc, static_cast<unsigned long long>(w.size));
+    listOut += buf + dest + "\n";
+  }
+  if (listOut != listIn && !WriteText(listPath, listOut)) warn("ctracks: não gravou " + listPath);
+  if (!todo.empty() || removed > 0) {
+    info("ctracks: arquivos das pistas: " + std::to_string(todo.size()) + " gravado(s), " + std::to_string(removed) +
+         " apagado(s), " + std::to_string(want.size() - todo.size()) + " em dia");
+    progress(BuildEvent::Done,
+             "Track files updated (" + std::to_string(todo.size()) + " changed" +
+                 (removed > 0 ? ", " + std::to_string(removed) + " removed)" : std::string(")")),
+             1);
+  } else if (fresh) {
+    progress(BuildEvent::Done, "Track cache is up to date", 1);
+  }
+  res.regenerated = !fresh || !todo.empty() || removed > 0;
 
   for (const auto &pkg : pkgs) {
     const Manifest &m = pkg->manifest();

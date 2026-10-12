@@ -12,7 +12,10 @@ carro), 1 = cima, 2 = trás (o carro aponta para −linha 2).
 
 Junto sai o `triggers_game_object.xml` (XML binário v0, `cfgxml.py`): o da Montalegre só tem os estepes do parque
 (`SpareWheelData`, `transform` = matriz 4×4 vetor-linha em texto), que vão com as vagas `grid_compound_5#5` para o
-parque do Ring (mesmo giro e deslocamento da grade).
+parque do Ring (mesmo giro e deslocamento da grade). Pelo mesmo movimento vai o `light_placement.xml` (XML em
+texto, `world` = matriz 4×4 vetor-linha): as 62 luzes da Montalegre ficam todas a menos de 32 m do parque
+(holofotes da oficina e do pódio, luzes de trabalho e as sondas `core_ibl_serv_area`). O `ring_cameras.py` usa
+`paddock_move` para levar as câmeras da oficina e do pódio (track_loading.md §13.1).
 
     python3 scripts/research/ring_grids.py build/re/ring_grids
 """
@@ -22,6 +25,7 @@ import argparse
 import json
 import math
 import os
+import re
 import struct
 import sys
 
@@ -36,7 +40,10 @@ from tools.egodata.pssg import PSSGFile  # noqa: E402
 
 HOST = "build/re/montalegre_route0_orig/grids.pssg"
 HOST_TRIGGERS = "build/re/montalegre_route0_orig/triggers_game_object.xml"
+HOST_LIGHTS = "build/re/montalegre_route0_orig/light_placement.xml"
 COMPOUND = "grid_compound_5#5"
+# a 1ª vaga do parque é a âncora da oficina: na Montalegre o nó da grade não fica nela, no Ring fica
+PADDOCK_ANCHOR = f"{COMPOUND}/slot_00_compound"
 TRACK = "examples/tracks/synthetic__dr2hook_ring/track.json"
 
 
@@ -142,6 +149,27 @@ def move_spare_wheels(tree, old_w: np.ndarray, new_w: np.ndarray) -> int:
     return moved
 
 
+def move_lights(text: str, old_w: np.ndarray, new_w: np.ndarray) -> tuple[str, int]:
+    """Leva o `world` de cada luz do light_placement.xml de `old_w` para `new_w`. Devolve o texto e quantas mudaram."""
+    move = np.linalg.inv(old_w) @ new_w
+    n = 0
+
+    def one(m):
+        nonlocal n
+        n += 1
+        w = np.array([float(x) for x in m.group(1).split()]).reshape(4, 4) @ move
+        return 'world="' + " ".join(f"{x:.7g}" for x in w.reshape(16)) + ' "'
+
+    return re.sub(r'world="([^"]*)"', one, text), n
+
+
+def paddock_move(track: str = TRACK, host: str = HOST) -> tuple[np.ndarray, np.ndarray]:
+    """Mundo da grade do parque (oficina) na Montalegre e no Ring: um ponto p da oficina vai para p @ inv(a) @ b."""
+    grids = json.load(open(track))["routes"][0]["grids"]
+    _, old_w, new_w = next(c for c in build(PSSGFile(host), grids, Game()) if c[0] == PADDOCK_ANCHOR)
+    return old_w, new_w
+
+
 def check(data: bytes, grids: list[dict], game: Game) -> float:
     """Relê o arquivo gravado e devolve o maior erro de posição (m) contra o plano do editor."""
     f = PSSGFile(data)
@@ -164,6 +192,7 @@ def main() -> None:
     ap.add_argument("--track", default=TRACK)
     ap.add_argument("--host", default=HOST)
     ap.add_argument("--host-triggers", default=HOST_TRIGGERS)
+    ap.add_argument("--host-lights", default=HOST_LIGHTS)
     a = ap.parse_args()
     grids = json.load(open(a.track))["routes"][0]["grids"]
     game = Game()
@@ -181,12 +210,16 @@ def main() -> None:
         o, n = start_frame(old), start_frame(new)
         print(f"{name:48s} {o[0]:8.2f} {o[1]:7.2f} {o[2]:6.2f} {o[3]:7.1f}   {n[0]:8.2f} {n[1]:7.2f} {n[2]:6.2f} {n[3]:7.1f}")
     print(f"{a.out}/grids.pssg: {len(changed)} nós, {len(data)} bytes, erro ao reler {worst * 1000:.2f} mm")
-    _, old_w, new_w = next(c for c in changed if c[0] == COMPOUND)
+    _, old_w, new_w = next(c for c in changed if c[0] == PADDOCK_ANCHOR)
     trig = cfgxml.decode(open(a.host_triggers, "rb").read())
     moved = move_spare_wheels(trig, old_w, new_w)
     with open(os.path.join(a.out, "triggers_game_object.xml"), "wb") as fh:
         fh.write(cfgxml.encode(trig))
     print(f"{a.out}/triggers_game_object.xml: {moved} estepes levados para o parque do Ring")
+    text, lights = move_lights(open(a.host_lights, encoding="utf-8", newline="").read(), old_w, new_w)
+    with open(os.path.join(a.out, "light_placement.xml"), "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    print(f"{a.out}/light_placement.xml: {lights} luzes da oficina e do pódio levadas para o parque do Ring")
 
 
 if __name__ == "__main__":

@@ -751,9 +751,12 @@ void TestModSettingsPersistence() {
   dr2hook::ModManager::DispatchMenuEvent(0, 0, -1); // fast -> on
   dr2hook::ModManager::DispatchMenuEvent(0, 1, 2);  // mode -> C
   dr2hook::ModManager::DispatchMenuEvent(0, 2, -1); // botao nao grava valor
-  std::ifstream saved(modDir / dr2hook::ModManager::kSettingsFileName);
   std::stringstream text;
-  text << saved.rdbuf();
+  {
+    // Fechar antes do remove_all do fim: no Windows arquivo aberto não sai.
+    std::ifstream saved(modDir / dr2hook::ModManager::kSettingsFileName);
+    text << saved.rdbuf();
+  }
   TEST_ASSERT(text.str().find("fast=on") != std::string::npos &&
                   text.str().find("mode=C") != std::string::npos &&
                   text.str().find("go=") == std::string::npos,

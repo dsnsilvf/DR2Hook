@@ -69,6 +69,8 @@ std::atomic<int> g_speedStep{kSpeedStepDefault};
 std::atomic<int> g_mouseX{0};
 std::atomic<int> g_mouseY{0};
 std::atomic<bool> g_armMouse{false};
+// Passos dados pelo mouse/teclado do jogo (o LiveLink conta ao editor quem mexeu por último).
+std::atomic<uint32_t> g_localMoves{0};
 
 struct PendingLook {
   bool set = false;
@@ -241,11 +243,13 @@ void Apply(void *camera) {
     g_mouseX.store(0, std::memory_order_relaxed);
     g_mouseY.store(0, std::memory_order_relaxed);
   }
+  bool moved = false;
   if (!menu && !paused && (dx != 0 || dy != 0)) {
     // dx positivo é o mouse para a direita. O yaw positivo da base gira
     // para o lado oposto do que a imagem mostra.
     FreeCamLook(g_pose, -static_cast<float>(dx) * kLookRadiansPerPixel,
                 static_cast<float>(dy) * kLookRadiansPerPixel);
+    moved = true;
   }
   const uint32_t keys = g_keys.load(std::memory_order_relaxed);
   const bool hold = (keys & kBitHold) != 0;
@@ -266,6 +270,10 @@ void Apply(void *camera) {
   if (!menu && !paused && !hold && dt > 0.f &&
       (axisRight != 0.f || axisForward != 0.f || axisUp != 0.f)) {
     FreeCamMove(g_pose, -axisRight, axisForward, axisUp, speed * dt);
+    moved = true;
+  }
+  if (moved) {
+    g_localMoves.fetch_add(1, std::memory_order_relaxed);
   }
 
   FreeCamVec3 rows[3]{};
@@ -517,10 +525,9 @@ void FreeCamera::Shutdown() {
   }
 }
 
-std::string FreeCamera::RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz) {
-  if (!g_enabled.load(std::memory_order_relaxed)) {
-    return "camera livre desligada (key f9)";
-  }
+namespace {
+
+void QueueLook(float ex, float ey, float ez, float tx, float ty, float tz) {
   std::lock_guard<std::mutex> lock(g_pendingMutex);
   g_pending.set = true;
   g_pending.eye[0] = ex;
@@ -529,8 +536,56 @@ std::string FreeCamera::RemoteLookAt(float ex, float ey, float ez, float tx, flo
   g_pending.target[0] = tx;
   g_pending.target[1] = ty;
   g_pending.target[2] = tz;
+}
+
+void SetEnabledFrom(bool enable, const char *who) {
+  g_keys.store(0, std::memory_order_relaxed);
+  g_mouseX.store(0, std::memory_order_relaxed);
+  g_mouseY.store(0, std::memory_order_relaxed);
+  if (!enable) {
+    g_capture.store(false, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(g_pendingMutex);
+    g_pending.set = false;
+  }
+  g_enabled.store(enable, std::memory_order_relaxed);
+  if (OverlayManager::IsInitialized()) {
+    OverlayManager::AddNotification(
+        enable ? "Free camera on. Mouse looks. WASD moves, Space/Q up/down. "
+                 "Hold Ctrl to freeze the keyboard. + and - set the "
+                 "keyboard speed. F9 toggles."
+               : "Free camera off.",
+        4.0f, ToastType::Info);
+  }
+  Logger::Info(std::string(enable ? "FreeCamera: ligada" : "FreeCamera: desligada") + who + ".");
+}
+
+} // namespace
+
+std::string FreeCamera::RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz) {
+  if (!g_enabled.load(std::memory_order_relaxed)) {
+    return "camera livre desligada (key f9)";
+  }
+  QueueLook(ex, ey, ez, tx, ty, tz);
   return "ok";
 }
+
+bool FreeCamera::Enabled() { return g_enabled.load(std::memory_order_relaxed); }
+
+void FreeCamera::SetEnabled(bool enable, const char *who) {
+  if (enable != g_enabled.load(std::memory_order_relaxed)) {
+    SetEnabledFrom(enable, who);
+  }
+}
+
+bool FreeCamera::RemoteLook(const float eye[3], const float forward[3]) {
+  if (!g_enabled.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  QueueLook(eye[0], eye[1], eye[2], eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]);
+  return true;
+}
+
+uint32_t FreeCamera::LocalMoves() { return g_localMoves.load(std::memory_order_relaxed); }
 
 std::string FreeCamera::RemotePose() {
   if (!g_enabled.load(std::memory_order_relaxed) || !g_hasPose.load(std::memory_order_relaxed)) {
@@ -581,23 +636,7 @@ void FreeCamera::OnFrame(HWND hwnd) {
 int FreeCamera::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wParam == VK_F9 &&
       (lParam & (1 << 30)) == 0) {
-    const bool enable = !g_enabled.load(std::memory_order_relaxed);
-    g_keys.store(0, std::memory_order_relaxed);
-    g_mouseX.store(0, std::memory_order_relaxed);
-    g_mouseY.store(0, std::memory_order_relaxed);
-    if (!enable) {
-      g_capture.store(false, std::memory_order_relaxed);
-    }
-    g_enabled.store(enable, std::memory_order_relaxed);
-    if (OverlayManager::IsInitialized()) {
-      OverlayManager::AddNotification(
-          enable ? "Free camera on. Mouse looks. WASD moves, Space/Q up/down. "
-                   "Hold Ctrl to freeze the keyboard. + and - set the "
-                   "keyboard speed. F9 toggles."
-                 : "Free camera off.",
-          4.0f, ToastType::Info);
-    }
-    Logger::Info(enable ? "FreeCamera: ligada." : "FreeCamera: desligada.");
+    SetEnabledFrom(!g_enabled.load(std::memory_order_relaxed), " (F9)");
     return 1;
   }
 
@@ -668,6 +707,10 @@ bool FreeCamera::Install(uintptr_t) { return false; }
 void FreeCamera::Shutdown() {}
 void FreeCamera::OnFrame(HWND) {}
 int FreeCamera::OnWndProc(HWND, UINT, WPARAM, LPARAM) { return 0; }
+bool FreeCamera::Enabled() { return false; }
+void FreeCamera::SetEnabled(bool, const char *) {}
+bool FreeCamera::RemoteLook(const float *, const float *) { return false; }
+uint32_t FreeCamera::LocalMoves() { return 0; }
 
 } // namespace dr2hook
 

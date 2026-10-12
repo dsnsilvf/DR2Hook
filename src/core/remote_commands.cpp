@@ -1,7 +1,9 @@
 #include "dr2hook/remote_commands.h"
 #include "dr2hook/free_camera.h"
+#include "dr2hook/window_focus.h"
 
 #include "dr2hook/logger.h"
+#include "dr2hook/player.h"
 #include "dr2hook/safety.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/terminal_damage.h"
@@ -113,7 +115,7 @@ std::string Status() {
 }
 
 std::string Help() {
-  return "comandos: help | status | stack | pause | unpause | link <nome> | key <tecla> | cam [ex ey ez tx ty tz] | crash | toast <texto> | "
+  return "comandos: help | status | stack | pause | unpause | link <nome> | key <tecla> | car | cam [ex ey ez tx ty tz] | focus [on|off] | crash | toast <texto> | "
          "mods | opt <mod> <opcao> [valor] | log <texto>";
 }
 
@@ -189,6 +191,17 @@ std::string Run(const std::string &line, HWND hwnd) {
     OverlayManager::AddNotification(Rest(line, 1), 3.0f, ToastType::Info);
     return "ok";
   }
+  if (cmd == "car") {
+    // Posição e orientação do carro do jogador (onde nasceu na largada, por exemplo).
+    CarState st;
+    if (!Player::CaptureState(st, true)) return "sem carro";
+    const auto &m = st.rotationMatrix.m;
+    char buf[320];
+    std::snprintf(buf, sizeof(buf), "pos %.3f %.3f %.3f vel %.2f %.2f %.2f rot %.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f",
+                  st.position.x, st.position.y, st.position.z, st.linearVelocity.x, st.linearVelocity.y,
+                  st.linearVelocity.z, m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+    return buf;
+  }
   if (cmd == "cam") {
     // cam                      -> pose atual da camera livre
     // cam <ex ey ez> <tx ty tz> -> poe o olho em e e olha para t (camera livre ligada)
@@ -201,6 +214,11 @@ std::string Run(const std::string &line, HWND hwnd) {
       if (end == nullptr || *end != '\0') return "numero invalido: " + args[i + 1];
     }
     return FreeCamera::RemoteLookAt(v[0], v[1], v[2], v[3], v[4], v[5]);
+  }
+  if (cmd == "focus") {
+    // focus [on|off]: on = o jogo segue rodando sem o foco (sem a pausa do jogo)
+    if (args.size() >= 2) WindowFocus::SetKeepRunning(Lower(args[1]) == "on" || args[1] == "1");
+    return WindowFocus::KeepRunning() ? "segue sem o foco" : "pausa ao perder o foco";
   }
   if (cmd == "key") {
     if (args.size() < 2) return "uso: key <tecla>";

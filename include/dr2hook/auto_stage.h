@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace dr2hook {
 
@@ -17,6 +19,10 @@ struct AutoStageConfig {
   std::string vehicle = "fr5";
   std::string livery = "00";
   bool cycleCamera = false;
+  // Acerto do carro: tuning_<parâmetro> = valor (nomes de kTuningNames, unidades do
+  // jogo). Só vale se tuning_car for o vehicle; vazio = acerto padrão do jogo.
+  std::string tuningCar;
+  std::vector<std::pair<std::string, float>> tuning;
 };
 
 namespace benchmark_offsets {
@@ -47,6 +53,9 @@ void SetAutoStageConfig(const AutoStageConfig &config);
 bool InstallAutoStageHook();
 // Chamar depois do Logger::Init: relata a instalacao e o que o detour viu.
 void LogAutoStageStatus();
+// Relata o acerto montado na carga e grava as faixas do carro (dr2hook_tuning/).
+// O acerto sai depois da tela de carregamento; RaceEvent chama a cada evento.
+void LogAutoStageTuning();
 void UninstallAutoStageHook();
 
 } // namespace dr2hook

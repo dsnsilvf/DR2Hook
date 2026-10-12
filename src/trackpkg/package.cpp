@@ -130,6 +130,8 @@ bool Package::Open(const std::string &path, std::string *error) {
     }
     entries_.push_back(name);
     indices_.push_back(i);
+    crcs_.push_back(st.m_crc32);
+    sizes_.push_back(st.m_uncomp_size);
   }
   std::vector<uint8_t> mf;
   if (!Read("manifest.json", &mf, error)) return false;
@@ -150,6 +152,16 @@ bool Package::Read(const std::string &entry, std::vector<uint8_t> *out, std::str
     return true;
   }
   *error = "falta " + entry;
+  return false;
+}
+
+bool Package::Stat(const std::string &entry, uint32_t *crc, uint64_t *size) const {
+  for (size_t k = 0; k < entries_.size(); ++k) {
+    if (entries_[k] != entry) continue;
+    *crc = crcs_[k];
+    *size = sizes_[k];
+    return true;
+  }
   return false;
 }
 

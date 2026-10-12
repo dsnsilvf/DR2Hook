@@ -10,6 +10,11 @@
 #include <filesystem>
 #include <fstream>
 #include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <iterator>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -54,12 +59,101 @@ constexpr uintptr_t kRouteLength = 0x68;
 constexpr uintptr_t kRouteName = 0x70;
 constexpr uintptr_t kRouteElevation = 0x80;
 
+// Condições da especial (hora e tempo). O benchmark não lê os textos do BM
+// (+0x108/+0x128). A montagem da corrida 0x1405b5bc0 (vtable 0x14128b178)
+// copia um bloco global (0x1409d2b10() = 0x141f59940) para o evento, mas logo
+// depois sobrescreve a struct de condições (+0x108, 0x18 bytes) com uma nova:
+// 0x1409cba30(sol 90.0) + 0x1409cb9f0(.., tempo 0, variação 0), gravada por
+// 0x1409d8ef0 (chamada em 0x1405b6311). Resultado: sempre meio-dia e seco. O
+// evento vira corrida+0x3088, e a luz da especial (0x1406a2750) monta
+// "<pista>_<rota>_<hora>_<tempo>_<NN>" dos índices da struct: +0 ângulo do sol
+// (float; a carreira, 0x14041fd20, deixa 90 e escolhe só o índice), +4 hora
+// (sunrise, midday, sunset, dusk, night), +8 tempo (dry, wet, rain, overcast,
+// snow), +0xc variação (o _NN do lighting_*.xml). Ligamos o setter e, só
+// quando quem chamou é a montagem do benchmark, trocamos hora e tempo.
+constexpr uintptr_t kSetConditionsRva = 0x1409d8ef0 - kImageBase;
+constexpr uint8_t kSetConditionsPrologue[] = {0x0f, 0x10, 0x02, 0x0f, 0x11, 0x81, 0x08, 0x01, 0x00, 0x00};
+constexpr uintptr_t kBenchmarkConditionsReturnRva = 0x1405b6316 - kImageBase;
+constexpr uintptr_t kConditionsTime = 0x108 + 4;
+constexpr const char *kTimeNames[] = {"sunrise", "midday", "sunset", "dusk", "night"};
+constexpr const char *kWeatherNames[] = {"dry", "wet", "rain", "overcast", "snow"};
+
+// Acerto do carro (vehicle_setup.md, "Acerto do carro"). Na carga, 0x14098c830 prepara o acerto
+// (TuningSetup, 0xf0 bytes) de cada veículo: o objeto do veículo guarda o nome do
+// carro em +0x131 ("mcs") e o acerto em +0x188. Sem definição ainda, cria a do carro
+// (0x140734ca0) e volta aos padrões; depois 0x140734e70 limita cada valor à faixa e
+// 0x140735040 recalcula o carimbo (acerto+0xe8) que a física compara em 0x140749c80
+// para recarregar. Ligamos o 0x140734e70: depois dele gravamos os valores do ini (só
+// no carro do AutoStage, dentro da faixa), e o carimbo já sai com eles.
+constexpr uintptr_t kTuningClampRva = 0x140734e70 - kImageBase;
+constexpr uint8_t kTuningClampPrologue[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56,
+                                            0x57, 0x41, 0x56, 0x41, 0x57};
+constexpr uintptr_t kTuningInVehicle = 0x188;
+constexpr uintptr_t kVehicleName = 0x131;
+constexpr uintptr_t kSetupValues = 0x10; // float[51]
+constexpr uintptr_t kDefRanges = 0xc90;  // {float padrão, min, max, passos}[51]; os 3 últimos codificados
+constexpr uintptr_t kDefState = 0xff4;   // int[51]: 1 ajustável, 0 o carro não tem, 2 fixo
+constexpr uint32_t kDecodeMin = 0xccd5aa19;
+constexpr uint32_t kDecodeMax = 0xa069a253;
+constexpr uint32_t kEncodeSteps = 0x993908c7;
+constexpr int kTuningCount = 51;
+// Ordem do jogo (init estático 0x14007e1b0; a tela de acerto 0x14030cb30 usa os mesmos índices).
+constexpr const char *kTuningNames[kTuningCount] = {
+    "brakes_bias", "brakes_strength", "brakes_rear_saturation",
+    "differential_front_driving_lock", "differential_front_braking_lock", "differential_front_preload",
+    "differential_front_viscosity", "differential_centre_driving_lock", "differential_centre_braking_lock",
+    "differential_centre_preload", "differential_centre_viscosity", "differential_centre_torque_distribution",
+    "differential_rear_driving_lock", "differential_rear_braking_lock", "differential_rear_preload",
+    "differential_rear_viscosity", "gearbox_1", "gearbox_2", "gearbox_3", "gearbox_4", "gearbox_5", "gearbox_6",
+    "gearbox_7", "gearbox_final_drive", "suspension_front_ride_height", "suspension_front_spring_rate",
+    "suspension_front_tender_spring_rate", "suspension_front_anti_roll", "suspension_front_camber",
+    "suspension_front_toe", "suspension_rear_ride_height", "suspension_rear_spring_rate",
+    "suspension_rear_tender_spring_rate", "suspension_rear_anti_roll", "suspension_rear_camber",
+    "suspension_rear_toe", "damping_front_bump", "damping_front_fast_bump", "damping_front_fast_bump_threshold",
+    "damping_front_rebound", "damping_front_fast_rebound", "damping_front_fast_rebound_threshold",
+    "damping_rear_bump", "damping_rear_fast_bump", "damping_rear_fast_bump_threshold", "damping_rear_rebound",
+    "damping_rear_fast_rebound", "damping_rear_fast_rebound_threshold", "spare_tyre_count",
+    "suspension_front_air_pressure", "suspension_rear_air_pressure"};
+
+constexpr uint32_t ModInverse(uint32_t a) {
+  uint32_t x = a; // a·a ≡ 1 (mod 8); cada passo de Newton dobra os bits certos
+  for (int i = 0; i < 5; ++i) x *= 2u - a * x;
+  return x;
+}
+
 using LoadingFillFn = void (*)(void *screen);
+using SetConditionsFn = void (*)(void *owner, const void *conditions);
 using GameFn = uint8_t *(*)();
 using CatalogueRowFn = uint8_t **(*)(void *catalogue, uint64_t key, void *out);
 
 LoadingFillFn g_originalLoadingFill = nullptr;
+SetConditionsFn g_originalSetConditions = nullptr;
+// Índices calculados no Initialize; o detour do setter só os copia.
+std::atomic<bool> g_condArmed{false};
+std::atomic<int> g_condTime{-1};
+std::atomic<int> g_condWeather{-1};
+std::atomic<uint32_t> g_condBefore{0}; // hora | tempo<<8 | variação<<16 | 1<<24 (gravou)
+std::atomic<uint32_t> g_condAfter{0};
 uintptr_t g_gameBase = 0;
+
+using TuningClampFn = void (*)(void *setup);
+TuningClampFn g_originalTuningClamp = nullptr;
+// Valores do ini por índice (NaN = o do jogo), preparados no Initialize.
+std::atomic<bool> g_tuneArmed{false};
+char g_tuneCar[32] = {};
+float g_tuneValues[kTuningCount] = {};
+int g_tuneUnknown = 0; // nomes do ini que não existem
+bool g_tuneOtherCar = false; // tuning_car diferente do vehicle: valores ignorados
+// O que o detour viu, para LogTuning gravar fora da montagem.
+struct TuningReport {
+  char car[32];
+  float def[kTuningCount], min[kTuningCount], max[kTuningCount];
+  uint32_t steps[kTuningCount];
+  int32_t state[kTuningCount];
+  int applied, clamped, ignored;
+};
+TuningReport g_tuneReport;
+std::atomic<bool> g_tunePending{false};
 
 using BenchmarkInitFn = void *(*)(void *thisPtr, void *arg2, void *arg3,
                                   void *arg4);
@@ -151,6 +245,40 @@ void WriteIniBool(const std::filesystem::path &iniPath, const std::string &key,
   }
 }
 
+// Índice do nome na tabela do jogo; -1 se não existe. "morning" é o nome
+// antigo do editor para sunrise.
+template <size_t N>
+int ConditionIndex(const char *const (&names)[N], std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "morning") value = "sunrise";
+  for (size_t i = 0; i < N; ++i) {
+    if (value == names[i]) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// Mapeia tuning_<nome> do ini para os índices do jogo.
+void ArmTuning(const AutoStageConfig &cfg) {
+  std::fill(std::begin(g_tuneValues), std::end(g_tuneValues), std::numeric_limits<float>::quiet_NaN());
+  std::memset(g_tuneCar, 0, sizeof(g_tuneCar));
+  std::strncpy(g_tuneCar, cfg.vehicle.c_str(), sizeof(g_tuneCar) - 1);
+  g_tuneUnknown = 0;
+  g_tuneOtherCar = !cfg.tuning.empty() && !cfg.tuningCar.empty() && cfg.tuningCar != cfg.vehicle;
+  if (!g_tuneOtherCar) {
+    for (const auto &[name, value] : cfg.tuning) {
+      const auto it = std::find_if(std::begin(kTuningNames), std::end(kTuningNames),
+                                   [&](const char *n) { return name == n; });
+      if (it == std::end(kTuningNames)) {
+        ++g_tuneUnknown;
+        continue;
+      }
+      g_tuneValues[it - std::begin(kTuningNames)] = value;
+    }
+  }
+  g_tuneArmed.store(true);
+}
+
 void ReportDetour() {
   if (!g_detourRan.load() || g_detourReported.exchange(true)) return;
   Logger::Info(std::string("AutoStage: BenchmarkManager::Initialize executou; "
@@ -179,6 +307,10 @@ void *DetourBenchmarkInit(void *thisPtr, void *arg2, void *arg3, void *arg4) {
 
   if (cfg.enabled && thisPtr != nullptr) {
     ApplyAutoStage(thisPtr, cfg);
+    g_condTime.store(ConditionIndex(kTimeNames, cfg.timeOfDay));
+    g_condWeather.store(ConditionIndex(kWeatherNames, cfg.surface));
+    g_condArmed.store(true);
+    ArmTuning(cfg);
     if (nativeEnabled == 0 && g_benchmarkMakeDir != nullptr) {
       g_benchmarkMakeDir(thisPtr);
     }
@@ -257,11 +389,17 @@ bool LoadAutoStageConfig(AutoStageConfig *outConfig) {
         else if (keyLower == "location") cfg.location = val;
         else if (keyLower == "track") cfg.track = val;
         else if (keyLower == "route") cfg.route = val;
-        else if (keyLower == "time_of_day" || keyLower == "timeofday" || keyLower == "weather") cfg.timeOfDay = val;
-        else if (keyLower == "surface") cfg.surface = val;
+        else if (keyLower == "time_of_day" || keyLower == "timeofday") cfg.timeOfDay = val;
+        else if (keyLower == "surface" || keyLower == "weather") cfg.surface = val;
         else if (keyLower == "vehicle" || keyLower == "car") cfg.vehicle = val;
         else if (keyLower == "livery") cfg.livery = val;
         else if (keyLower == "cycle_camera") cfg.cycleCamera = ParseBool(val);
+        else if (keyLower == "tuning_car") cfg.tuningCar = val;
+        else if (keyLower.rfind("tuning_", 0) == 0) {
+          char *end = nullptr;
+          const float v = std::strtof(val.c_str(), &end);
+          if (end != val.c_str() && std::isfinite(v)) cfg.tuning.emplace_back(keyLower.substr(7), v);
+        }
       }
     }
   }
@@ -283,8 +421,11 @@ bool LoadAutoStageConfig(AutoStageConfig *outConfig) {
   if (GetEnvironmentVariableA("DR2HOOK_STAGE_VEHICLE", envVal, sizeof(envVal)) > 0) {
     cfg.vehicle = envVal;
   }
-  if (GetEnvironmentVariableA("DR2HOOK_STAGE_WEATHER", envVal, sizeof(envVal)) > 0) {
+  if (GetEnvironmentVariableA("DR2HOOK_STAGE_TIME", envVal, sizeof(envVal)) > 0) {
     cfg.timeOfDay = envVal;
+  }
+  if (GetEnvironmentVariableA("DR2HOOK_STAGE_WEATHER", envVal, sizeof(envVal)) > 0) {
+    cfg.surface = envVal;
   }
   if (GetEnvironmentVariableA("DR2HOOK_STAGE_SURFACE", envVal, sizeof(envVal)) > 0) {
     cfg.surface = envVal;
@@ -306,7 +447,10 @@ bool LoadAutoStageConfig(AutoStageConfig *outConfig) {
   return cfg.enabled;
 }
 
+static void LogConditions();
+
 static void DetourLoadingFill(void *screen) {
+  LogConditions();
   uint8_t *game = reinterpret_cast<GameFn>(g_gameBase + kGameRva)();
   auto *distance = game != nullptr ? reinterpret_cast<float *>(game + kGameDistance) : nullptr;
   void *source = game != nullptr ? *reinterpret_cast<void **>(game + kGameRouteSource) : nullptr;
@@ -334,6 +478,162 @@ static void DetourLoadingFill(void *screen) {
     }
   }
   g_originalLoadingFill(screen);
+}
+
+// O setter serve a seis montagens; só mexe na do benchmark (endereço de
+// retorno). Não loga aqui (a montagem roda numa fiber de pilha curta): fica
+// para LogConditions, na tela de carregamento.
+static void DetourSetConditions(void *owner, const void *conditions) {
+  g_originalSetConditions(owner, conditions);
+  if (!g_condArmed.load(std::memory_order_relaxed) ||
+      reinterpret_cast<uintptr_t>(__builtin_return_address(0)) != g_gameBase + kBenchmarkConditionsReturnRva)
+    return;
+  auto *cond = reinterpret_cast<int32_t *>(static_cast<uint8_t *>(owner) + kConditionsTime);
+  const int t = g_condTime.load(std::memory_order_relaxed);
+  const int w = g_condWeather.load(std::memory_order_relaxed);
+  g_condBefore.store(static_cast<uint32_t>(cond[0] & 0xff) | static_cast<uint32_t>(cond[1] & 0xff) << 8 |
+                         static_cast<uint32_t>(cond[2] & 0xff) << 16 | 1u << 24,
+                     std::memory_order_relaxed);
+  if (t >= 0) cond[0] = t;
+  if (w >= 0) cond[1] = w;
+  g_condAfter.store(static_cast<uint32_t>(cond[0] & 0xff) | static_cast<uint32_t>(cond[1] & 0xff) << 8 |
+                        static_cast<uint32_t>(cond[2] & 0xff) << 16,
+                    std::memory_order_relaxed);
+}
+
+// Relata uma vez o que o detour do setter trocou.
+static void LogConditions() {
+  const uint32_t before = g_condBefore.exchange(0);
+  if (before == 0) return;
+  const uint32_t after = g_condAfter.load();
+  AutoStageConfig cfg = GetAutoStageConfig();
+  auto triple = [](uint32_t v) {
+    return std::to_string(v & 0xff) + "/" + std::to_string((v >> 8) & 0xff) + "/" + std::to_string((v >> 16) & 0xff);
+  };
+  Logger::Info("AutoStage: condicoes da especial " + triple(before) + " -> " + triple(after) + " (" +
+               cfg.timeOfDay + ", " + cfg.surface + ")" +
+               (g_condTime.load() < 0 || g_condWeather.load() < 0 ? "; nome desconhecido fica como o jogo deixou."
+                                                                  : "."));
+}
+
+static float DecodeFloat(uint32_t bits, uint32_t key) {
+  const uint32_t plain = bits * key;
+  float f;
+  std::memcpy(&f, &plain, sizeof(f));
+  return f;
+}
+
+// Roda dentro da montagem (fiber de pilha curta), depois da tela de carregamento: só
+// copia e grava floats; o log e o arquivo das faixas ficam para LogTuning (RaceEvent).
+static void DetourTuningClamp(void *setup) {
+  g_originalTuningClamp(setup);
+  if (!g_tuneArmed.load(std::memory_order_relaxed) || setup == nullptr) return;
+  auto *t = static_cast<uint8_t *>(setup);
+  const char *name = reinterpret_cast<const char *>(t - kTuningInVehicle + kVehicleName);
+  if (std::strncmp(name, g_tuneCar, sizeof(g_tuneCar)) != 0) return;
+  const uint8_t *def = *reinterpret_cast<uint8_t *const *>(t);
+  if (def == nullptr) return;
+  auto *values = reinterpret_cast<float *>(t + kSetupValues);
+  const bool report = !g_tunePending.load(std::memory_order_acquire);
+  TuningReport &r = g_tuneReport;
+  int applied = 0, clamped = 0, ignored = 0;
+  for (int p = 0; p < kTuningCount; ++p) {
+    const uint8_t *e = def + kDefRanges + p * 0x10;
+    float dflt;
+    std::memcpy(&dflt, e, sizeof(dflt));
+    const float lo = DecodeFloat(*reinterpret_cast<const uint32_t *>(e + 4), kDecodeMin);
+    const float hi = DecodeFloat(*reinterpret_cast<const uint32_t *>(e + 8), kDecodeMax);
+    const int32_t state = *reinterpret_cast<const int32_t *>(def + kDefState + p * 4);
+    if (report) {
+      r.def[p] = dflt;
+      r.min[p] = lo;
+      r.max[p] = hi;
+      r.steps[p] = *reinterpret_cast<const uint32_t *>(e + 12) * ModInverse(kEncodeSteps);
+      r.state[p] = state;
+    }
+    const float v = g_tuneValues[p];
+    if (std::isnan(v)) continue;
+    if (state != 1) {
+      ++ignored;
+      continue;
+    }
+    const float c = std::min(std::max(v, lo), hi);
+    if (c != v) ++clamped;
+    values[p] = c;
+    ++applied;
+  }
+  if (report) {
+    std::memcpy(r.car, g_tuneCar, sizeof(r.car));
+    r.applied = applied;
+    r.clamped = clamped;
+    r.ignored = ignored;
+    g_tunePending.store(true, std::memory_order_release);
+  }
+}
+
+// Grava <jogo>/dr2hook_tuning/<carro>.json (faixas do acerto, para o editor) e relata.
+static void LogTuning() {
+  if (!g_tunePending.load(std::memory_order_acquire)) return;
+  const TuningReport &r = g_tuneReport;
+  std::string json = "{\n \"version\": 1,\n \"car\": \"" + std::string(r.car) + "\",\n \"params\": [\n";
+  char line[256];
+  for (int p = 0; p < kTuningCount; ++p) {
+    std::snprintf(line, sizeof(line),
+                  "  {\"name\": \"%s\", \"state\": %d, \"default\": %.9g, \"min\": %.9g, \"max\": %.9g, "
+                  "\"steps\": %u}%s\n",
+                  kTuningNames[p], static_cast<int>(r.state[p]), r.def[p], r.min[p], r.max[p], r.steps[p],
+                  p + 1 < kTuningCount ? "," : "");
+    json += line;
+  }
+  json += " ]\n}\n";
+  const auto dir = GetGameDirectory() / "dr2hook_tuning";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const auto path = dir / (std::string(r.car) + ".json");
+  std::string old;
+  if (std::ifstream in(path, std::ios::binary); in) old.assign(std::istreambuf_iterator<char>(in), {});
+  if (old != json) std::ofstream(path, std::ios::binary | std::ios::trunc) << json;
+
+  std::string what;
+  if (g_tuneOtherCar) {
+    what = "valores do ini sao de outro carro (tuning_car); fica o padrao do jogo";
+  } else if (r.applied == 0 && r.ignored == 0 && g_tuneUnknown == 0) {
+    what = "padrao do jogo";
+  } else {
+    what = std::to_string(r.applied) + " valor(es) do ini aplicado(s)";
+    if (r.clamped) what += ", " + std::to_string(r.clamped) + " limitado(s) a faixa";
+    if (r.ignored) what += ", " + std::to_string(r.ignored) + " que o carro nao ajusta";
+    if (g_tuneUnknown) what += ", " + std::to_string(g_tuneUnknown) + " nome(s) desconhecido(s)";
+  }
+  Logger::Info("AutoStage: acerto do " + std::string(r.car) + ": " + what + "; faixas em dr2hook_tuning/" +
+               r.car + ".json.");
+  g_tunePending.store(false, std::memory_order_release);
+}
+
+static void InstallTuningHook(uintptr_t gameBase) {
+  void *target = reinterpret_cast<void *>(gameBase + kTuningClampRva);
+  if (std::memcmp(target, kTuningClampPrologue, sizeof(kTuningClampPrologue)) != 0) {
+    Logger::Warn("AutoStage: limitador do acerto diferente do esperado; o carro fica com o acerto padrao.");
+    return;
+  }
+  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourTuningClamp),
+                    reinterpret_cast<void **>(&g_originalTuningClamp)) != MH_OK ||
+      MH_EnableHook(target) != MH_OK) {
+    Logger::Warn("AutoStage: falha no hook do acerto do carro.");
+  }
+}
+
+static void InstallConditionsHook(uintptr_t gameBase) {
+  void *target = reinterpret_cast<void *>(gameBase + kSetConditionsRva);
+  if (std::memcmp(target, kSetConditionsPrologue, sizeof(kSetConditionsPrologue)) != 0) {
+    Logger::Warn("AutoStage: setter das condicoes diferente do esperado; hora e tempo ficam os do jogo.");
+    return;
+  }
+  if (MH_CreateHook(target, reinterpret_cast<void *>(&DetourSetConditions),
+                    reinterpret_cast<void **>(&g_originalSetConditions)) != MH_OK ||
+      MH_EnableHook(target) != MH_OK) {
+    Logger::Warn("AutoStage: falha no hook das condicoes da especial.");
+  }
 }
 
 static void InstallLoadingFillHook(uintptr_t gameBase) {
@@ -409,6 +709,9 @@ bool InstallAutoStageHook() {
   g_benchmarkMakeDir =
       reinterpret_cast<BenchmarkMakeDirFn>(gameBase + kBenchmarkMakeDirRva);
   InstallLoadingFillHook(gameBase);
+  g_gameBase = gameBase;
+  InstallConditionsHook(gameBase);
+  InstallTuningHook(gameBase);
   g_benchmarkInitTarget = target;
   g_hookInstalled = true;
   return true;
@@ -436,6 +739,8 @@ void LogAutoStageStatus() {
     Logger::Info("AutoStage: Initialize ainda nao executou.");
   }
 }
+
+void LogAutoStageTuning() { LogTuning(); }
 
 void UninstallAutoStageHook() {
 #if defined(_WIN32)

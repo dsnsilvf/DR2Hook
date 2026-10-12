@@ -20,6 +20,22 @@ se pedido, reabre o jogo:
 - `--mode bot`: o AutoStage é o benchmark do jogo, o carro anda sozinho.
   "Eu dirijo" ainda não existe: falta descobrir como o benchmark passa o controle ao jogador.
 
+`--windowed` muda o jogo para janela antes de abrir (`fullscreen="0"` no hardware_settings_config.xml do prefixo do
+Wine; o valor de antes fica em `<jogo>/dr2hook_fullscreen_orig.txt`) e `--fullscreen` o devolve. `--keep-focus` grava
+`keep_running_unfocused=1` no `<jogo>/dr2hook_live.ini` (o jogo não pausa ao perder o foco; `--pause-unfocused`, 0).
+Sem nenhum dos dois de cada par, nada muda.
+
+Carro e condições vão para o mesmo `dr2hook_autostage.ini`: `--car fr5 --livery 00` (vehicle/livery; a lista vem de
+`build/viewer3d/cars/catalog.json`, que o car_catalog.py gera do jogo), `--time midday|sunset|...` e `--surface
+dry|wet|rain` (time_of_day/surface; só valem as luzes que a pista tem, `lighting_<hora>_<clima>_00.xml` na overlay) e
+`--cycle-camera`/`--no-cycle-camera` (câmeras externas alternando). Opção ausente = fica o que o ini já tem. Com
+`--car`, o modelo do carro para o editor é extraído em `build/viewer3d/cars/<id>/` se ainda não estiver lá.
+
+`--tuning "brakes_bias=0.6,suspension_front_ride_height=-0.03"` grava o acerto do carro (`tuning_car` e
+`tuning_<parâmetro>`, nas unidades do jogo; nomes e faixas em vehicle_setup.md, "Acerto do carro"); `--tuning ""` volta ao padrão do
+jogo. A dxgi grava a cada carga as faixas do carro em `<jogo>/dr2hook_tuning/<carro>.json`; o script as copia para
+`build/viewer3d/cars/tuning/`, onde a aba Veículo do editor as lê.
+
 `--quick` pula a tela de carregamento (a foto aérea renderizada pelo viewer3d e o traçado): fica a da última vez. E
 grava `dr2hook_quickload.ini` na pasta do jogo: o core deixa a tela preta com o log ao vivo do boot até a largada (e apaga o arquivo); com `--cover`, a foto da última tela de carregamento (`captures/overlay/dr2hook/loadcover_*.ppm`) fica atrás do log.
 
@@ -51,6 +67,8 @@ import sys
 import threading
 import time
 
+from ui_lang import t
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 GAME = os.environ.get("DR2_GAME_DIR", "/mnt/Jogos/SteamLibrary/steamapps/common/DiRT Rally 2.0")
 TRACK_DIR = "examples/tracks/synthetic__dr2hook_ring"
@@ -65,28 +83,33 @@ STEAM_URL = f"steam://rungameid/{APP_ID}"
 # moldes da Montalegre que as etapas leem (extraídos antes; ver track_loading.md)
 HOSTS = ("build/re/montalegre/tracksplit.pssg", "build/re/montalegre/route_0__track.vis",
          "build/re/montalegre_objects/objects.pssg", "build/re/montalegre_route0_orig/grids.pssg",
-         "build/re/montalegre_route0_orig/triggers_game_object.xml")
+         "build/re/montalegre_route0_orig/triggers_game_object.xml", "build/re/montalegre_route0_orig/light_placement.xml")
 ROUTE_FILES = ("progress_track.xml", "ai_track.xml", "ai_vehicle_track.xml", "vehicle_track_progress_data.xml",
                "resetlines.cqtc", "ai_track_markers.xml")
 # código que as etapas usam: mudou, refaz
 CODE = ("scripts/research", "tools/egodata", "tools/uiview/mesh.py")
 # duração típica (s) quando ainda não há medida: só pesa a barra
-GUESS = {"terrain": 2.0, "collision": 7.5, "objects": 1.0, "route": 1.0, "cameras": 0.3, "grids": 0.2, "loading": 20.0,
+# nomes das tabelas do jogo (0x1409d2fc0, 0x1409d2a60); o AutoStage grava os índices nas condições da especial
+TIMES = ("sunrise", "midday", "sunset", "dusk", "night")
+SURFACES = ("dry", "wet", "rain")
+CAR_CATALOG = "build/viewer3d/cars/catalog.json"
+TUNING_DIR = "build/viewer3d/cars/tuning"  # faixas do acerto de cada carro, copiadas de <jogo>/dr2hook_tuning
+GUESS = {"carmodel": 3.0, "terrain": 2.0, "collision": 7.5, "objects": 1.0, "route": 1.0, "cameras": 0.3, "grids": 0.2, "loading": 20.0,
          "copy": 0.3, "card": 12.0, "package": 8.0, "close": 1.0, "open": 3.0, "boot": 15.0, "base": 4.0, "load": 4.0, "start": 2.0,
          "freecam": 0.5}
 # fases do jogo no dr2hook.log, em ordem: (etapa, texto, marca que fecha a fase). Uma marca só vale depois da
 # anterior (o "LoadTrace: IO" do boot não fecha nada); a da largada fecha todas.
 MILESTONES = (
-    ("boot", "Iniciando o jogo", "AutoStage: Fast-path"),
-    ("base", "Carregando os dados do jogo", "RaceEvent: carregando"),
-    ("load", "Carregando a pista", None),  # sem marca: pela contagem de arquivos abertos (wait_milestone)
-    ("start", "Preparando a largada", "RaceEvent: largada"),
+    ("boot", t("Iniciando o jogo", "Starting the game"), "AutoStage: Fast-path"),
+    ("base", t("Carregando os dados do jogo", "Loading the game data"), "RaceEvent: carregando"),
+    ("load", t("Carregando a pista", "Loading the track"), None),  # sem marca: pela contagem de arquivos abertos (wait_milestone)
+    ("start", t("Preparando a largada", "Getting the start ready"), "RaceEvent: largada"),
 )
 OPEN_MARK = "LoadTrace: open"  # um por arquivo aberto; contados a partir do "RaceEvent: carregando"
 LOAD_OPENS_GUESS = 1600        # a carga do Ring de 2026-10-07 abriu 1708 e 1564
 LOAD_QUIET = 1.5               # s sem abrir arquivo (com metade aberta) fecham a fase "load"
 # linhas do jogo que vão para o log do viewer
-GAME_LINE = re.compile(r"AutoStage: Fast-path|LoadProbe: pacote|RaceEvent|LoadCover|LoadTrace: IO|\[crash\]|\[ERROR\]")
+GAME_LINE = re.compile(r"AutoStage: Fast-path|AutoStage: acerto|LoadProbe: pacote|RaceEvent|LoadCover|LoadTrace: IO|\[crash\]|\[ERROR\]")
 CRASH = re.compile(r"\[crash\]: (excecao [^\n]*)")
 
 
@@ -193,6 +216,63 @@ def prefix_servers() -> list[int]:
     return pids
 
 
+def read_ini(path: str) -> dict[str, str]:
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return {}
+    return {m.group(1).lower(): m.group(2).strip() for m in re.finditer(r"(?m)^\s*(\w+)\s*=\s*(.*)$", text)}
+
+
+def parse_tuning(text: str) -> dict[str, str]:
+    """"nome=valor,nome=valor" → {nome: valor}; vazio = acerto padrão do jogo."""
+    out = {}
+    for item in filter(None, (x.strip() for x in text.split(","))):
+        m = re.fullmatch(r"(\w+)\s*=\s*(\S+)", item)
+        if not m:
+            raise ValueError(f"--tuning: \"{item}\" não é nome=valor")
+        try:
+            float(m.group(2))
+        except ValueError:
+            raise ValueError(f"--tuning: \"{m.group(2)}\" não é número") from None
+        out[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def set_tuning(path: str, car: str, values: dict[str, str]) -> None:
+    """Troca as linhas tuning_* do ini pelo acerto novo (sem valores, o carro fica com o padrão do jogo)."""
+    text = open(path, encoding="utf-8", errors="replace").read()
+    text = re.sub(r"(?m)^tuning_\w+\s*=.*\n?", "", text).rstrip("\n") + "\n"
+    if values:
+        text += f"tuning_car = {car}\n" + "".join(f"tuning_{k} = {v}\n" for k, v in values.items())
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+
+
+def sync_tuning(game: str) -> None:
+    """Copia as faixas do acerto que a dxgi grava a cada carga para o editor (só as que mudaram)."""
+    src = os.path.join(game, "dr2hook_tuning")
+    try:
+        names = [n for n in os.listdir(src) if n.endswith(".json")]
+    except OSError:
+        return
+    dst = os.path.join(ROOT, TUNING_DIR)
+    os.makedirs(dst, exist_ok=True)
+    for n in names:
+        a, b = os.path.join(src, n), os.path.join(dst, n)
+        try:
+            if not os.path.exists(b) or open(a, "rb").read() != open(b, "rb").read():
+                shutil.copyfile(a, b)
+        except OSError:
+            pass
+
+
+def lightings() -> list[tuple[str, str]]:
+    """(hora, piso) com lighting_<hora>_<piso>_00.xml na pasta da pista na overlay, na ordem de TIMES/SURFACES."""
+    folder = os.path.join(ROOT, OVERLAY, DEST)
+    return [(x, y) for x in TIMES for y in SURFACES if os.path.exists(os.path.join(folder, f"lighting_{x}_{y}_00.xml"))]
+
+
 def set_ini(path: str, values: dict[str, str]) -> None:
     text = open(path, encoding="utf-8", errors="replace").read()
     for k, v in values.items():
@@ -201,6 +281,59 @@ def set_ini(path: str, values: dict[str, str]) -> None:
             text = text.rstrip("\n") + f"\n{k} = {v}\n"
     with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
+
+
+def hardware_settings(game: str) -> str:
+    """hardware_settings_config.xml do prefixo do Wine (DR2_HW_SETTINGS troca o caminho)."""
+    env = os.environ.get("DR2_HW_SETTINGS")
+    if env:
+        return env
+    steamapps = os.path.dirname(os.path.dirname(os.path.abspath(game)))  # .../steamapps/common/<jogo>
+    return os.path.join(steamapps, "compatdata", str(APP_ID), "pfx", "drive_c", "users", "steamuser", "Documents",
+                        "My Games", "DiRT Rally 2.0", "hardwaresettings", "hardware_settings_config.xml")
+
+
+def set_window_mode(game: str, windowed: bool) -> str:
+    """Janela (fullscreen="0") ou o modo de antes, guardado em dr2hook_fullscreen_orig.txt. Devolve o que fez."""
+    xml = hardware_settings(game)
+    if not os.path.exists(xml):
+        return t("sem hardware_settings_config.xml (o jogo nunca abriu?)", "no hardware_settings_config.xml (has the game ever run?)")
+    orig = os.path.join(game, "dr2hook_fullscreen_orig.txt")
+    text = open(xml, encoding="utf-8", errors="replace").read()
+    m = re.search(r'(<resolution\b[^>]*\bfullscreen=")(\d+)(")', text)
+    if not m:
+        return t("sem fullscreen= no hardware_settings_config.xml", "no fullscreen= in hardware_settings_config.xml")
+    current = m.group(2)
+    if windowed:
+        if current == "0":
+            return t("jogo já em janela", "game already windowed")
+        if not os.path.exists(orig):
+            with open(orig, "w", encoding="utf-8") as fh:
+                fh.write(current + "\n")
+        want = "0"
+    else:
+        if not os.path.exists(orig):
+            return ""
+        want = open(orig, encoding="utf-8").read().strip() or "1"
+        os.remove(orig)
+        if want == current:
+            return ""
+    text = text[:m.start(2)] + want + text[m.end(2):]
+    with open(xml, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+    return (t("jogo em janela", "game windowed") if windowed else
+            t("modo de tela de antes de volta", "previous display mode restored")) + f' (fullscreen="{want}")'
+
+
+def set_keep_focus(game: str, keep: bool) -> None:
+    """dr2hook_live.ini: keep_running_unfocused=1 deixa o jogo rodando sem o foco (window_focus.cpp, lido na abertura)."""
+    path = os.path.join(game, "dr2hook_live.ini")
+    lines = open(path, encoding="utf-8").read().splitlines() if os.path.exists(path) else [
+        "; DR2Hook: o jogo segue rodando sem o foco (1) ou pausa ao perdê-lo (0). Gravado pelo ring_deploy.py."]
+    lines = [l for l in lines if not l.startswith("keep_running_unfocused=")]
+    lines.append(f"keep_running_unfocused={1 if keep else 0}")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(l + "\n" for l in lines))
 
 
 def mark_editor_launch(game: str) -> None:
@@ -259,7 +392,7 @@ def send_command(game: str, command: str, timeout: float = 4.0) -> str:
                 os.remove(cmd)
             except FileNotFoundError:
                 pass
-            raise RuntimeError("o jogo não leu o comando (está aberto com o mod?)")
+            raise RuntimeError(t("o jogo não leu o comando (está aberto com o mod?)", "the game did not read the command (is it open with the mod?)"))
         time.sleep(0.05)
     while time.time() < deadline:
         if stamp() not in (None, before):
@@ -268,7 +401,7 @@ def send_command(game: str, command: str, timeout: float = 4.0) -> str:
             if answer:
                 return answer
         time.sleep(0.05)
-    raise RuntimeError("o jogo leu o comando mas não respondeu no dr2hook_cmd.out")
+    raise RuntimeError(t("o jogo leu o comando mas não respondeu no dr2hook_cmd.out", "the game read the command but did not answer in dr2hook_cmd.out"))
 
 
 CARD_SHOT = f"{OUT}/card/card.ppm"
@@ -312,58 +445,68 @@ class Deploy:
         track = [TRACK_DIR]
         code = list(CODE)
         edits = a.edits
-        s = [
-            Step("terrain", "Terreno (tracksplit.pssg)",
+        with_edits = t(" (com as edições)", " (with the edits)") if edits else ""
+        s = []
+        if a.car:  # o editor desenha este carro (LiveLink e vagas de largada); ~3 s na primeira vez
+            s.append(Step("carmodel", t("Modelo do carro no editor", "Car model for the editor") + f" ({a.car})",
+                          lambda: run_script(self.rep, ["-m", "tools.uiview.car.viewer_car", a.car, "--game", a.game]),
+                          inputs=["tools/uiview/car", "tools/uiview/mesh.py"], args=[a.car],
+                          outputs=[f"build/viewer3d/cars/{a.car}/car.bin", f"build/viewer3d/cars/{a.car}/car.json"]))
+        s += [
+            Step("terrain", t("Terreno (tracksplit.pssg)", "Terrain (tracksplit.pssg)"),
                  lambda: run_script(self.rep, ["scripts/research/ring_tracksplit.py", f"{o}/terrain/tracksplit.pssg",
                                                "--host", HOSTS[0]]),
                  inputs=track + code + [HOSTS[0]], outputs=[f"{o}/terrain/tracksplit.pssg"]),
-            Step("collision", "Colisão (track.jpk)",
+            Step("collision", t("Colisão (track.jpk)", "Collision (track.jpk)"),
                  lambda: run_script(self.rep, ["scripts/research/track_jpk.py", "ring", f"{o}/terrain/{ROUTE}/track.jpk",
                                                "--bg-margin", "200"]),
                  inputs=track + code, outputs=[f"{o}/terrain/{ROUTE}/track.jpk"]),
-            Step("objects", "Objetos e decoração" + (" (com as edições)" if edits else ""),
+            Step("objects", t("Objetos e decoração", "Objects and decoration") + with_edits,
                  lambda: run_script(self.rep, ["scripts/research/ring_objects.py", f"{o}/objects", "--tracksplit",
                                                f"{o}/terrain/tracksplit.pssg", "--kinds", "eot"]
                                     + (["--edits", edits] if edits else [])),
                  inputs=track + code + [p for p in HOSTS[1:3]] + ([edits] if edits else []), args=[edits or ""],
                  after=["terrain"], outputs=[f"{o}/objects/objects.pssg", f"{o}/objects/{ROUTE}/track.vis"]),
-            Step("route", "Rota: progresso, IA, zonas da IA e paredes de reset",
+            Step("route", t("Rota: progresso, IA, zonas da IA e paredes de reset", "Route: progress, AI, AI zones and reset walls"),
                  lambda: run_script(self.rep, ["scripts/research/ring_route.py", f"{o}/route"]
                                     + (["--edits", edits] if edits else [])),
                  inputs=track + code + ["build/re/montalegre_route0_orig"] + ([edits] if edits else []),
                  args=[edits or ""], outputs=[f"{o}/route/{f}" for f in ROUTE_FILES]),
-            Step("cameras", "Câmeras do replay",
-                 lambda: run_script(self.rep, ["scripts/research/ring_cameras.py", f"{o}/cameras"]),
-                 inputs=track + code, outputs=[f"{o}/cameras/replay_camera_config.xml"]),
-            Step("grids", "Vagas de largada e estepes do parque",
+            Step("cameras", t("Câmeras do replay", "Replay cameras") + with_edits,
+                 lambda: run_script(self.rep, ["scripts/research/ring_cameras.py", f"{o}/cameras"]
+                                    + (["--edits", edits] if edits else [])),
+                 inputs=track + code + [HOSTS[3]] + ([edits] if edits else []), args=[edits or ""],
+                 outputs=[f"{o}/cameras/replay_camera_config.xml"]),
+            Step("grids", t("Vagas de largada, estepes e luzes da oficina", "Start slots, spare tyres and service area lights"),
                  lambda: run_script(self.rep, ["scripts/research/ring_grids.py", f"{o}/grids"]),
-                 inputs=track + code + [HOSTS[3], HOSTS[4]],
-                 outputs=[f"{o}/grids/grids.pssg", f"{o}/grids/triggers_game_object.xml"]),
+                 inputs=track + code + [HOSTS[3], HOSTS[4], HOSTS[5]],
+                 outputs=[f"{o}/grids/grids.pssg", f"{o}/grids/triggers_game_object.xml",
+                          f"{o}/grids/light_placement.xml"]),
         ]
         if not a.quick:
-            s.append(Step("loading", "Tela de carregamento (foto aérea)",
+            s.append(Step("loading", t("Tela de carregamento (foto aérea)", "Loading screen (aerial photo)"),
                           lambda: run_script(self.rep, ["scripts/research/loading_screen.py", "--overlay", OVERLAY,
                                                         "--name", TRACK, "--layout", f"{TRACK_DIR}/source/layout.json",
                                                         "--track-dir", TRACK_DIR]),
                           inputs=track + code + ["build/viewer3d/viewer3d"],
                           outputs=[f"{OVERLAY}/frontend", f"{OVERLAY}/dr2hook/loadcover_{TRACK}_{ROUTE}.ppm"]))
-        s.append(Step("copy", "Copiando para a overlay", self.copy, cached=False))
+        s.append(Step("copy", t("Copiando para a overlay", "Copying to the overlay"), self.copy, cached=False))
         info = os.path.join(TRACK_DIR, "package.json")
         cam = card_camera(os.path.join(ROOT, info))
         port = [st.key for st in s if st.cached]
         if cam:
-            s.append(Step("card", "Foto do card (câmera do editor)", lambda: self.render_card(cam),
+            s.append(Step("card", t("Foto do card (câmera do editor)", "Card photo (editor camera)"), lambda: self.render_card(cam),
                           inputs=track + ["build/viewer3d/viewer3d"], args=[cam], outputs=[CARD_SHOT]))
-        s.append(Step("package", "Pacote da pista (.dr2track em ctracks/)", self.package,
+        s.append(Step("package", t("Pacote da pista (.dr2track em ctracks/)", "Track package (.dr2track in ctracks/)"), self.package,
                       inputs=[info, "scripts/research/track_package.py", "scripts/research/pssg_fragment.py"],
                       args=[a.game], after=port + (["card"] if cam else []), outputs=[PACKAGE]))
         if not a.no_game:
-            s.append(Step("close", "Fechando o jogo aberto", self.close_game, cached=False))
-            s.append(Step("open", "Abrindo o jogo (Steam)", self.open_game, cached=False))
+            s.append(Step("close", t("Fechando o jogo aberto", "Closing the open game"), self.close_game, cached=False))
+            s.append(Step("open", t("Abrindo o jogo (Steam)", "Opening the game (Steam)"), self.open_game, cached=False))
             for i, (key, label, _mark) in enumerate(MILESTONES):
                 s.append(Step(key, label, lambda i=i: self.wait_milestone(i), cached=False))
             if a.mode == "freecam":
-                s.append(Step("freecam", "Câmera livre (F9)", self.freecam, cached=False))
+                s.append(Step("freecam", t("Câmera livre (F9)", "Free camera (F9)"), self.freecam, cached=False))
         return s
 
     def plan(self, steps: list[Step]) -> None:
@@ -392,6 +535,7 @@ class Deploy:
             f"{ROUTE}/cameralines.cqtc": f"{o}/cameras/cameralines.cqtc",
             f"{ROUTE}/grids.pssg": f"{o}/grids/grids.pssg",
             f"{ROUTE}/triggers_game_object.xml": f"{o}/grids/triggers_game_object.xml",
+            f"{ROUTE}/light_placement.xml": f"{o}/grids/light_placement.xml",
             **{f"{ROUTE}/{f}": f"{o}/route/{f}" for f in ROUTE_FILES},
         }
         dest = os.path.join(ROOT, OVERLAY, DEST)
@@ -461,9 +605,32 @@ class Deploy:
             os.remove(os.path.join(g, "dr2hook_cmd.txt"))
         except FileNotFoundError:
             pass
-        set_ini(os.path.join(g, "dr2hook_autostage.ini"),
-                {"enabled": "1", "once": "1", "location": LOCATION, "track": TRACK, "route": ROUTE})
+        values = {"enabled": "1", "once": "1", "location": LOCATION, "track": TRACK, "route": ROUTE}
+        for key, val in (("vehicle", self.a.car), ("livery", self.a.livery), ("time_of_day", self.a.time),
+                         ("surface", self.a.surface)):
+            if val:
+                values[key] = val
+        if self.a.cycle_camera is not None:
+            values["cycle_camera"] = "1" if self.a.cycle_camera else "0"
+        set_ini(os.path.join(g, "dr2hook_autostage.ini"), values)
+        ini = read_ini(os.path.join(g, "dr2hook_autostage.ini"))
+        if self.a.tuning is not None:
+            set_tuning(os.path.join(g, "dr2hook_autostage.ini"), ini.get("vehicle", "fr5"), self.a.tuning)
+            ini = read_ini(os.path.join(g, "dr2hook_autostage.ini"))
+        n_tune = sum(1 for k in ini if k.startswith("tuning_") and k != "tuning_car")
+        tune = (t(f"acerto próprio ({n_tune} valores)", f"custom setup ({n_tune} values)") if n_tune
+                else t("acerto padrão", "default setup"))
+        self.rep.log("  " + t("carro", "car") + f" {ini.get('vehicle', '?')} " + t("pintura", "livery")
+                     + f" {ini.get('livery', '?')}, {ini.get('time_of_day', '?')} / {ini.get('surface', '?')}, {tune}")
         mark_editor_launch(g)
+        if self.a.windowed is not None:
+            done = set_window_mode(g, self.a.windowed)
+            if done:
+                self.rep.log("  " + done)
+        if self.a.keep_focus is not None:
+            set_keep_focus(g, self.a.keep_focus)
+            self.rep.log("  " + (t("o jogo não pausa ao perder o foco", "the game won't pause when it loses focus") if self.a.keep_focus
+                                 else t("o jogo pausa ao perder o foco", "the game pauses when it loses focus")))
         quick = os.path.join(g, "dr2hook_quickload.ini")
         if self.a.quick:
             cover = os.path.join(ROOT, OVERLAY, "dr2hook", f"loadcover_{TRACK}_{ROUTE}.ppm")
@@ -478,7 +645,7 @@ class Deploy:
         self.log_pos, self.reached, self.opens, self.last_open = 0, -1, 0, 0.0
         steam = shutil.which("steam")
         if not steam:
-            raise RuntimeError("não achei o comando steam")
+            raise RuntimeError(t("não achei o comando steam", "steam command not found"))
         subprocess.Popen([steam, STEAM_URL], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
         for _ in range(240):
@@ -486,7 +653,7 @@ class Deploy:
                 self.rep.log("  processo do jogo aberto")
                 return
             time.sleep(0.5)
-        raise RuntimeError("o jogo não abriu em 2 minutos")
+        raise RuntimeError(t("o jogo não abriu em 2 minutos", "the game did not open within 2 minutes"))
 
     def poll_log(self) -> None:
         """Lê o que entrou no dr2hook.log desde a última vez: marcos, arquivos abertos, linhas para o log, crash."""
@@ -513,9 +680,11 @@ class Deploy:
                     self.reached = max(self.reached, i)
             if GAME_LINE.search(line):
                 self.rep.log("  jogo: " + re.sub(r"^\[[^\]]*\] \[\w+\] ", "", line))
+            if "AutoStage: acerto" in line:
+                sync_tuning(self.a.game)
             m = CRASH.search(line)
             if m:
-                raise RuntimeError(f"o jogo travou ({m.group(1)}); veja o dr2hook.log")
+                raise RuntimeError(t(f"o jogo travou ({m.group(1)}); veja o dr2hook.log", f"the game crashed ({m.group(1)}); see dr2hook.log"))
 
     def wait_milestone(self, i: int) -> None:
         """Espera a fase i fechar (ou uma posterior)."""
@@ -534,9 +703,9 @@ class Deploy:
                     self.cache.setdefault("load", {})["opens"] = self.opens  # a próxima carga compara com esta
                 return
             if not game_pids():
-                raise RuntimeError("o jogo fechou durante a carga (crash?); veja o dr2hook.log")
+                raise RuntimeError(t("o jogo fechou durante a carga (crash?); veja o dr2hook.log", "the game closed while loading (crash?); see dr2hook.log"))
             time.sleep(0.2)
-        raise RuntimeError(f"{MILESTONES[i][1].lower()}: nada em 5 minutos")
+        raise RuntimeError(f"{MILESTONES[i][1].lower()}: " + t("nada em 5 minutos", "nothing in 5 minutes"))
 
     def freecam(self) -> None:
         answer = send_command(self.a.game, "key f9")
@@ -552,6 +721,8 @@ class Deploy:
             raise RuntimeError(f"a overlay não tem {DEST} (veja custom_track.py)")
         if self.a.edits and not os.path.exists(self.a.edits):
             raise RuntimeError(f"não achei {self.a.edits}")
+        self.check_car()
+        self.check_lighting()
         if self.a.no_game:
             return
         ini = os.path.join(self.a.game, "dr2hook_loadprobe.ini")
@@ -565,7 +736,36 @@ class Deploy:
                 or f"track_alias = {TRACK}=" not in text:
             raise RuntimeError("o dr2hook_loadprobe.ini não está pronto (enabled = 1, overlay_dir e track_alias do Ring)")
 
+    def check_car(self) -> None:
+        """Carro e pintura que o jogo não tem travariam a carga: confere no catálogo (gerado se faltar)."""
+        a = self.a
+        if not a.car and not a.livery:
+            return
+        path = os.path.join(ROOT, CAR_CATALOG)
+        if not os.path.exists(path):
+            run_script(self.rep, ["scripts/research/car_catalog.py", "--game", a.game, "--out", path])
+        cars = {c["id"]: c for c in json.load(open(path, encoding="utf-8"))["cars"]}
+        car = a.car or read_ini(os.path.join(a.game, "dr2hook_autostage.ini")).get("vehicle", "fr5")
+        if car not in cars:
+            raise RuntimeError(t(f"o jogo não tem o carro \"{car}\"", f"the game has no car \"{car}\""))
+        if a.livery and a.livery not in cars[car]["liveries"]:
+            raise RuntimeError(t(f"o {car} não tem a pintura {a.livery} (tem {', '.join(cars[car]['liveries'])})",
+                                 f"{car} has no livery {a.livery} (it has {', '.join(cars[car]['liveries'])})"))
+
+    def check_lighting(self) -> None:
+        """A hora e o piso escolhem lighting_<hora>_<piso>_00.xml da pista; sem o arquivo a carga não fecha."""
+        a = self.a
+        if not a.time and not a.surface:
+            return
+        ini = read_ini(os.path.join(a.game, "dr2hook_autostage.ini")) if not a.no_game else {}
+        time_, surface = a.time or ini.get("time_of_day", "midday"), a.surface or ini.get("surface", "dry")
+        have = lightings()
+        if (time_, surface) not in have:
+            raise RuntimeError(t(f"a pista não tem a luz {time_}/{surface} (tem {', '.join(f'{x}/{y}' for x, y in have)})",
+                                 f"the track has no {time_}/{surface} lighting (it has {', '.join(f'{x}/{y}' for x, y in have)})"))
+
     def run(self) -> int:
+        sync_tuning(self.a.game)
         try:
             self.preflight()
             write_game_transform(TRACK_DIR)
@@ -619,9 +819,11 @@ class Deploy:
             done += weight[k]
             self.rep.line(f"@progress {done / total:.4f}")
         if self.a.no_game:
-            self.rep.line("@done overlay pronta (o jogo não foi aberto)")
+            self.rep.line("@done " + t("overlay pronta (o jogo não foi aberto)", "overlay ready (the game was not opened)"))
+        elif self.a.mode == "freecam":
+            self.rep.line("@done " + t("na pista com a câmera livre", "on the track with the free camera"))
         else:
-            self.rep.line("@done na pista" + (" com a câmera livre" if self.a.mode == "freecam" else ", o bot dirige"))
+            self.rep.line("@done " + t("na pista, o bot dirige", "on the track, the bot drives"))
         return 0
 
     def save_cache(self) -> None:
@@ -634,16 +836,17 @@ class Deploy:
 
 def control(a, rep: Report) -> int:
     """Pausar/continuar (--cmd) e parar (--close) do viewer: uma linha @done ou @fail com o que aconteceu."""
+    sync_tuning(a.game)
     try:
         if a.close:
             if not game_pids((EXE, CRASH_EXE)):
-                rep.line("@done o jogo já estava fechado")
+                rep.line("@done " + t("o jogo já estava fechado", "the game was already closed"))
                 return 0
             Deploy(a, rep).close_game()
-            rep.line("@done jogo fechado")
+            rep.line("@done " + t("jogo fechado", "game closed"))
         else:
             if not game_pids():
-                raise RuntimeError("o jogo não está aberto")
+                raise RuntimeError(t("o jogo não está aberto", "the game is not open"))
             rep.line(f"@done {send_command(a.game, a.cmd)}")
     except Exception as e:  # noqa: BLE001 - qualquer erro vira @fail para o viewer
         rep.line(f"@fail {e}")
@@ -656,13 +859,35 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true", help="pula a tela de carregamento (foto aérea e traçado)")
     ap.add_argument("--cover", action="store_true", help="com --quick, a foto aérea atrás do log (sem ela, tela preta)")
     ap.add_argument("--mode", choices=("bot", "freecam", "drive"), default="bot")
-    ap.add_argument("--edits", help="edits.json do viewer3d (objetos movidos, apagados e copiados na route_0)")
+    ap.add_argument("--edits", help="edits.json do viewer3d (objetos movidos, apagados e copiados e câmeras do replay da route_0)")
+    win = ap.add_mutually_exclusive_group()
+    win.add_argument("--windowed", dest="windowed", action="store_true", default=None, help="abre o jogo em janela")
+    win.add_argument("--fullscreen", dest="windowed", action="store_false", help="devolve o modo de tela de antes do --windowed")
+    foc = ap.add_mutually_exclusive_group()
+    foc.add_argument("--keep-focus", dest="keep_focus", action="store_true", default=None,
+                     help="o jogo não pausa ao perder o foco (dr2hook_live.ini)")
+    foc.add_argument("--pause-unfocused", dest="keep_focus", action="store_false", help="o jogo pausa ao perder o foco")
+    ap.add_argument("--car", help="id do carro (cars/<id>.nefs; ver car_catalog.py)")
+    ap.add_argument("--livery", help="pintura numerada do carro (00, 01...)")
+    ap.add_argument("--time", choices=TIMES, help="hora do dia (precisa da luz na pista)")
+    ap.add_argument("--surface", choices=SURFACES, help="clima: seco, molhado (sem chuva) ou chuva")
+    ap.add_argument("--tuning", metavar="NOME=VALOR,...",
+                    help="acerto do carro, nas unidades do jogo (vazio = padrão do jogo; ver vehicle_setup.md, seção Acerto do carro)")
+    cyc = ap.add_mutually_exclusive_group()
+    cyc.add_argument("--cycle-camera", dest="cycle_camera", action="store_true", default=None,
+                     help="câmeras externas alternando (cycle_camera do benchmark)")
+    cyc.add_argument("--no-cycle-camera", dest="cycle_camera", action="store_false", help="câmera normal do jogador")
     ap.add_argument("--no-game", action="store_true", help="só porta para a overlay, sem abrir o jogo")
     ap.add_argument("--force", action="store_true", help="refaz todas as etapas, mesmo sem mudança")
     ap.add_argument("--game", default=GAME)
     ap.add_argument("--cmd", metavar="COMANDO", help="só manda COMANDO (pause, unpause...) ao jogo aberto e sai")
     ap.add_argument("--close", action="store_true", help="só fecha o jogo e sai")
     a = ap.parse_args()
+    if a.tuning is not None:
+        try:
+            a.tuning = parse_tuning(a.tuning)
+        except ValueError as e:
+            ap.error(str(e))
     if a.edits:
         a.edits = os.path.abspath(a.edits)
     os.chdir(ROOT)
@@ -671,7 +896,8 @@ def main() -> int:
     if a.cmd or a.close:
         return control(a, rep)
     if a.mode == "drive":
-        rep.line("@fail \"Eu dirijo\" ainda não existe: o AutoStage usa o benchmark, e o carro anda sozinho")
+        rep.line("@fail " + t("\"Eu dirijo\" ainda não existe: o AutoStage usa o benchmark, e o carro anda sozinho",
+                              "\"I drive\" does not exist yet: AutoStage uses the benchmark, and the car drives itself"))
         return 1
     return Deploy(a, rep).run()
 
