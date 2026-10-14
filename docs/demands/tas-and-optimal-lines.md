@@ -1,6 +1,6 @@
 # TAS, replay and optimal lines
 
-> **Speculation.** Not started. Nobody has checked whether the physics is deterministic, which is the condition for everything below.
+> **Especulação (2026-10-14).** Não há TAS nem busca de linha ótima implementada. A base no repo melhorou: Practice Mode enxuto (checkpoint), Debug Mode (`Ghost.setCars`, F9/F11), GhostLab até 15 fantasmas e `dr2rec`. **Determinismo da física:** ainda `UNKNOWN` (experimento proposto abaixo não consta como executado).
 
 ## The idea
 

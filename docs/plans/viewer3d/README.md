@@ -1,12 +1,12 @@
 # Viewer 3D nativo (MVP em 7 etapas)
 
-Leia antes: [README dos planos](../README.md) (regras gerais) e [formatos.md](formatos.md) (o que os arquivos exportados contêm).
+Leia antes: [README dos planos](../README.md) (regras gerais) e [formatos.md](formatos.md) (o que os arquivos exportados contêm). **Uso atual:** [tools/viewer3d/README.md](../../../tools/viewer3d/README.md) (DR2Hook Editor de Pistas).
 
-## Objetivo
+## Objetivo (MVP — concluído)
 
-Um **viewer/editor 3D nativo para Linux** (Windows depois), em C++ com GPU, que abre uma pista **já exportada** pelo Python e permite orbitar, ver o terreno com textura e os objetos instanciados, selecionar um objeto, movê-lo e gravar o `edits.json` que o `track/edit.py` já sabe aplicar.
+Um **viewer/editor 3D nativo** (C++/OpenGL), que abre uma pista **exportada** pelo Python, edita objetos e grava `edits.json` para o `track/edit.py`. O MVP das **7 etapas fechou**; o app evoluiu para editor completo com **Dear ImGui + ImGuizmo**, **Testar no jogo (F5)**, LiveLink, pacote `.dr2track` e porte do Ring (`ring_deploy.py`).
 
-**Aceite mínimo:** etapas 1 a 4 (janela, shader, câmera e o terreno real da Montalegre na GPU). **Aceite completo do MVP:** etapas 1 a 7. Se as etapas 1 a 6 fecharem cedo, o próximo candidato é testar a **Polônia** (9 milhões de vértices, o motivo de o app nativo existir), mas isso é depois do MVP.
+**Próximo candidato de performance:** pista de estresse / **Polônia** (LOD, streaming) — ver [melhorias_gpu.md](melhorias_gpu.md).
 
 ## Por que esta tecnologia
 
@@ -14,7 +14,7 @@ Um **viewer/editor 3D nativo para Linux** (Windows depois), em C++ com GPU, que 
 | --- | --- |
 | **SDL3 + OpenGL 3.3 core (GLEW)** | Já instalados na máquina do dono (SDL3 3.4.16, GLEW 2.3.1), funcionam no CachyOS e no Windows, RenderDoc depura. Nada a baixar. |
 | Renderer atrás de uma interface pequena | Trocar por bgfx, Vulkan ou wgpu depois sem reescrever o resto. |
-| **Sem ImGui no MVP** | O `vendor/imgui` do repositório só tem backends Win32/DX11; adicionar SDL3+OpenGL3 é um passo à parte. A interface do MVP é o título da janela e atalhos. |
+| **ImGui + docking** | Interface de editor em `third_party/imgui` (SDL3+OpenGL3) e gizmo em `third_party/imguizmo`. O plano original previa “sem ImGui no MVP”; isso foi superado após as etapas 1–7. |
 | **Python continua sendo o parser** | O app lê DR2M/DR2I/WebP/`track.json` que o Python já exporta (formato próprio, sem ambiguidade). Portar o PSSG para C++ é uma etapa cara que não é necessária para ver e editar a pista. |
 | **CMake próprio em `tools/viewer3d/`** | O `CMakeLists.txt` da raiz é o do hook de Windows (DLLs, MinGW/MSVC); misturar quebraria os dois. |
 | Edição = gravar `edits.json` | A lógica difícil (escrever `.nefs`, blocos de 64 KiB, clones de instância) já existe e é testada em Python. Não duplicar em C++. |
@@ -97,16 +97,15 @@ Converter o PPM para ver: `python3 -c "from PIL import Image; Image.open('arq.pp
 
 Melhorias de GPU já feitas e a fazer, com medidas e checklist para a RTX 4050: [melhorias_gpu.md](melhorias_gpu.md).
 
-Em ordem provável: (1) **Polônia** com LOD e streaming de blocos; (2) portar PSSG/NEFS para `dr2core` em C++ (mmap e cache em disco) comparando com o Python como oráculo; (3) ImGui (backends SDL3+OpenGL3) para painéis; (4) Windows nativo e empacotamento; (5) o Car Explorer no app nativo; (6) comunicação com o hook do jogo (canal local) para mostrar o carro no mapa. Nada disso entra no MVP.
+Em ordem provável: (1) **Polônia** com LOD e streaming de blocos; (2) portar PSSG/NEFS para `dr2core` em C++ (mmap e cache em disco); (3) Windows nativo e empacotamento; (4) Car Explorer no app nativo. ImGui, LiveLink e F5 **já estão feitos** (fora do escopo original do MVP).
 
 ## Estado
 
 | Etapa | Estado |
 | --- | --- |
-| 1 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
-| 2 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
-| 3 | concluída (Ubuntu 24.04, Xvfb, Mesa llvmpipe; falta a GPU do dono) |
-| 4 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
-| 5 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
-| 6 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
-| 7 | feita com a pista sintética (Mesa llvmpipe); falta conferir na Montalegre e na GPU do dono |
+| 1–7 | **Concluídas** (MVP). Medidas na RTX 4050 do dono e no llvmpipe (CI). |
+| Pós-MVP | Editor de pistas, F5, acerto/condições do AutoStage, sons, `.dr2track`, jogo ao vivo — ver [tools/viewer3d/README.md](../../../tools/viewer3d/README.md). |
+| GPU | Rodadas 3–4 em [melhorias_gpu.md](melhorias_gpu.md). |
+| Jogo | Ring portado; ver [track_loading.md](../../reverse_engineering/track_loading.md) §12. |
+
+**Pendências:** compressão BC no viewer; LOD Polônia; modo jogador no F5; replay do Ring no jogo (câmeras portadas, não validadas à mão).

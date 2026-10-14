@@ -1,6 +1,27 @@
 # Levar o mapa de testes para dentro do jogo
 
-Análise de 2026-10-06. **Nada aqui foi executado no jogo.** O que está marcado como fato foi lido em `docs/reverse_engineering/` ou no código; o resto é hipótese e diz como conferir.
+Análise iniciada em 2026-10-06; **atualizado em 2026-10-14** com o que já rodou no jogo e o que virou produto.
+
+## Estado em 2026-10-14 (leia isto primeiro)
+
+**CONFIRMADO no jogo (Linux + Proton, AutoStage + overlay):** o DR2Hook Ring carrega como `portugal / dr2hook_ring / route_0`, com terreno, colisão, objetos, `track.vis`, IA/progresso, vagas de largada, câmeras do replay, tela de carregamento e bot do benchmark; a câmera livre (F9) já voou sobre a pista inteira. O caminho de hoje é o **pacote `.dr2track`** (aba DR2Hook nas locations) mais a **overlay de desenvolvimento** montada pelo `ring_deploy.py` / **Testar no jogo (F5)** do editor — não é mais só redirecionar `.nefs` da Montalegre. Detalhes, linha do tempo e inventário do que ainda vem da hospedeira: [track_loading.md](../reverse_engineering/track_loading.md) §9–§13 e [Pistas próprias](../guides/custom_tracks.md).
+
+| Experimento / tema | Situação |
+| --- | --- |
+| E0–E2 | **Feitos** (inventário, AutoStage em várias pistas, redirect byte a byte). |
+| E3 / U1 (`.nefs` com SHA-256 em +4) | **Feito:** `montalegre_edit.nefs` carregou com hash recalculado (`nefs_write.py`). **Pendente à mão:** conferir visualmente o pórtico subido 40 m (F9 na largada). |
+| Ring na hospedeira (T2, transplante) | **Superado:** o Ring virou location própria; o transplante na Montalegre ficou só como histórico abaixo. |
+| Colisão / `track.vis` / objetos / carga | **Feitos** para o Ring (runs `col2`, `ringvis`, `dec3`, etc. em `track_loading.md`). |
+| Entrada no menu | **Feita** via `.dr2track` (não via `base.ctpk` no exe). |
+| Jogador dirige | **Não:** o AutoStage ainda abre o benchmark; modo “eu dirijo” continua desligado no F5. |
+| Core `exe+0x966a49` na carga | **Corrigido na `main`:** patches do GhostLab (limite de fantasmas / áudio) integrados em `ghost_lab.cpp` e `vehicle_system_patch.cpp` (merge `backup/ghost-limit-wip-2026-10-05`). Não é preciso core de worktree separado. |
+| F8 com corrida aberta | **CONFIRMADO:** recarregar o core durante a corrida pode derrubar o jogo (`GhostLab[crash]`). Reinicie o jogo ou use `ring_deploy.py --close` antes de testar de novo. |
+
+O restante deste arquivo é o **diário da investigação de outubro de 2026** (hipóteses, escada E0–E7, transplante na Montalegre). Serve de contexto; a fonte da verdade do que funciona hoje é `track_loading.md` e o código em `scripts/research/ring_deploy.py`.
+
+---
+
+Texto original da análise (2026-10-06). O que está marcado como fato foi lido em `docs/reverse_engineering/` ou no código; hipóteses antigas estão explicitadas.
 
 ## Objetivo
 
@@ -173,8 +194,8 @@ Ferramentas novas: `BlockPatch` em `tools/egodata/nefs_write.py` (grava só os b
 4. Só depois, os objetos do Ring (E4) reposicionando instâncias de `objects.ens`/`ornaments.bin`/`trees.bin`.
 
 **Armadilhas desta rodada**
-- O core compilado do HEAD **cai** na carga da pista (acesso nulo em `exe+0x966a49`). O core que vinha funcionando foi feito do branch `backup/ghost-limit-wip-2026-10-05` (tem a correção do GhostLab/áudio, ainda não integrada ao HEAD). Para testar, foi compilado um core a partir de uma worktree desse branch (`build/core_wip`, saída em `build/win-corewip/dr2hook_core.dll`) com as três mudanças do `cam` copiadas por cima, e instalado na pasta do jogo (backup do anterior: `dr2hook_core.dll.bak-before-cam-20261006`). Nada disso foi commitado no branch de trabalho além do `cam`.
-- **Não use F8 (recarregar o core) com o jogo em corrida:** derrubou o jogo (`GhostLab[crash]`). Reinicie o jogo a cada teste.
+- **Histórico (2026-10-06):** o core do HEAD caía na carga (`exe+0x966a49`) até integrar o trabalho do branch `backup/ghost-limit-wip-2026-10-05`. **Em 2026-10-14 isso já está na `main`** (ver § “Estado em 2026-10-14” acima).
+- **Não use F8 (recarregar o core) com o jogo em corrida:** derrubou o jogo (`GhostLab[crash]`). Reinicie o jogo a cada teste ou feche com `python3 scripts/research/ring_deploy.py --close`.
 - Linhas antigas em `dr2hook_cmd.txt` são executadas no próximo boot: um `key f9` esquecido liga a câmera livre durante a carga e derruba o jogo. Apague o arquivo antes de abrir.
 - O jogo pausou sozinho uma vez durante a captura de tela; `unpause` pelo canal remoto retoma, mas depois disso o `cam` não refletiu na imagem.
 
@@ -182,11 +203,19 @@ Ferramentas novas: `BlockPatch` em `tools/egodata/nefs_write.py` (grava só os b
 
 Desenhar o Ring **por cima** do jogo, na overlay do DR2Hook (que já tem o swapchain D3D11 hookado), usando a câmera livre para a visão. Não exige formato do jogo nem `.nefs`, nem decifrar colisão. Perde a iluminação, os materiais e a oclusão do jogo, e a projeção da câmera precisa ser lida do motor (hoje só a posição e a base da câmera livre são conhecidas). Serve para ver o mapa na janela do jogo, mas não é "o mapa dentro do jogo". Fica anotada como plano B, se o U1 der errado.
 
-## Decisões em aberto
+## Decisões em aberto (atualizado 2026-10-14)
 
-1. Qual hospedeira usar: NZ (sem risco de troca de pista, pacote maior) ou Montalegre.
-2. Se o redirecionamento do `CreateFileW` entra na `dxgi.dll` (exige reiniciar o jogo, junto do `LoadTrace`) ou no core (recarrega com F8, mas só funciona se for instalado antes da abertura do `.nefs`).
-3. Se o alvo é só ver o mapa (E4 a E6) ou dirigir nele (E7).
+1. **Hospedeira:** Montalegre rallycross (`track_alias` no pacote). A NZ ficou só como referência dos testes E1.
+2. **Entrega de arquivos:** overlay de pasta + `.dr2track` para o jogador; redirect de `.nefs` (`path_redirect.cpp`) continua útil para pesquisa (E2/E3), não é o fluxo do editor.
+3. **Alvo:** ver e portar pelo F5 já funciona; **dirigir** (E7 / modo jogador) e **replay no Ring** ainda faltam.
+4. **E3 visual:** subir o pórtico 40 m e olhar com F9 — não consta conferência manual nos docs.
+
+## Decisões resolvidas (registro)
+
+- U1: o jogo confere SHA-256 no cabeçalho NeFS em claro (+4); `replace_files` recalcula.
+- U2: redirect `CreateFileW` na `dxgi.dll` (**CONFIRMADO**, E2).
+- U3: AutoStage troca pista/rota sem o crash antigo de `twin_peaks/free_roam` (**CONFIRMADO**, E1).
+- Ring como pista nomeada: overlay + catálogo enxertado + pacote (**CONFIRMADO**, `track_loading.md` §10–§12).
 
 ## Não fazer
 

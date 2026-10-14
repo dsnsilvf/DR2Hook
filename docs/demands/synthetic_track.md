@@ -1,51 +1,49 @@
-# Synthetic track in the game
+# Pista sintética no jogo
 
-> **Update (2026-10-06/07): the Ring runs in the game.** It loads as `portugal / dr2hook_ring / route_0` through a folder overlay and AutoStage, without changing any `.nefs`. It has its own terrain, collision, objects, replay cameras, start grids and loading screen, and was driven by the benchmark bot and flown over with the free camera (F9). The editor's **Testar no jogo** (F5) ports it and opens the game on it. Details and runs: [track_loading.md](../reverse_engineering/track_loading.md) §9–§12 (Portuguese).
->
-> Still missing: an entry of its own in the game menus (it borrows the Montalegre package through `track_alias`) and a mode where the player drives (the benchmark car drives itself). The analysis below is the original plan from before those runs; the "out of reach" items were solved by the overlay route instead.
+> **CONFIRMADO (2026-10-06 a 2026-10-11):** o **DR2Hook Ring** roda no jogo como `portugal / dr2hook_ring / route_0`, com terreno, colisão, objetos, IA, vagas, câmeras de replay, tela de carga e entrada na **aba DR2Hook** via pacote `.dr2track`. O editor **Testar no jogo (F5)** faz o porte e abre a especial. Fonte detalhada: [track_loading.md](../reverse_engineering/track_loading.md) §9–§13 (português).
 
-> **Analysis of 2026-10-06:** the order of experiments, the open unknowns and the host-track choice are in [../plans/mapa_no_jogo.md](../plans/mapa_no_jogo.md) (Portuguese).
+> **Análise histórica da escada E0–E7:** [../plans/mapa_no_jogo.md](../plans/mapa_no_jogo.md) (atualizado em 2026-10-14 com o estado real).
 
-## The idea
+## A ideia
 
-Drive a track that DR2Hook generated, starting with the procedural "DR2Hook Ring".
+Dirigir (ou pelo menos ver) uma pista gerada pelo DR2Hook, começando pelo circuito procedural **DR2Hook Ring**.
 
-## What exists
+## O que existe
 
-| What | Grade | Source |
+| O quê | Grau | Fonte |
 | --- | --- | --- |
-| The generator writes the track in the Track Explorer export format (DR2M, DR2I, `track.json`) and both viewers open it. | `CONFIRMED` offline | [synthtrack.md](../tools/synthtrack.md) |
-| It also writes `objects.ens`, `trees.bin` and `ornaments.bin` in the layout the exporter reads and `track/edit.py` writes, and 16 power-of-two PNG textures. | `CONFIRMED` offline (tests) | `tools/synthtrack/tests/` |
-| `nefs_write.replace_files` can replace files in an existing `.nefs` if each new file keeps the same number of 64 KiB blocks. | `CONFIRMED` by re-reading the package; not loaded by the game | [track_formats.md](../reverse_engineering/track_formats.md#escrita-num-nefs) |
-| `egodata/pssg.py` can serialise a PSSG tree. | `CONFIRMED` for round trips in tests | `tools/egodata/tests/test_pssg_write.py` |
+| Gerador em formato do Track Explorer (DR2M, DR2I, `track.json`) e viewers | `CONFIRMED` offline | [synthtrack.md](../tools/synthtrack.md) |
+| `objects.ens`, `trees.bin`, `ornaments.bin`, PNGs potência de 2 | `CONFIRMED` (testes) | `tools/synthtrack/tests/` |
+| Ring no jogo (overlay + catálogo + alias Montalegre + colisão própria) | `CONFIRMED` no jogo | `track_loading.md` §10–§12 |
+| `.dr2track` instalado em `ctracks/` | `CONFIRMED` no jogo (Ring) | [custom_tracks.md](../guides/custom_tracks.md) |
+| `replace_files` em `.nefs` com hash NeFS | `CONFIRMED` no jogo (E3, um ornament) | [mapa_no_jogo.md](../plans/mapa_no_jogo.md), `nefs_write.py` |
 
-## Why a brand-new track is out of reach today
+## O que o plano antigo dizia “fora de alcance” — e como foi resolvido
 
-- **Registration.** Nobody knows how the game lists a location in menus and events. A new `locations/*.nefs` would not be offered.
-- **Collision.** `track.jpk` holds 480 `.vcqtc` quadtree tiles whose vertices are not decoded. Without it the car has nothing to drive on.
-- **Package size rule.** `replace_files` keeps the block count of each file. A different `tracksplit.pssg` almost never fits the original block count.
-- **AI and timing.** `progress_track.xml` and `ai_track.xml` are binary XML that the repo can read but not yet write.
+| Bloqueio antigo | Situação em 2026-10-14 |
+| --- | --- |
+| Registro no menu / catálogo | **Resolvido** com enxerto de `base.ctpk` no cache (`ctracks/_cache`) e pacote `.dr2track`, não com linha nova no exe. |
+| Colisão `.vcqtc` | **Resolvido para o Ring** com `track_jpk.py ring` e alinhamento à largada Montalegre (`start_transform`). Outras pistas: `UNKNOWN` até repetir o pipeline. |
+| `replace_files` e tamanho de bloco | **Contornado:** a pista nova não substitui o `tracksplit` inteiro da hospedeira; a overlay serve arquivos soltos. |
+| `progress_track` / `ai_track` binários | **Resolvido para o Ring** (`ring_route.py` + transformação). |
 
-## The plausible route: dress an existing track
+## O que ainda falta (Ring)
 
-Use the smallest stage, Montalegre rallycross (~1 GB), as a host, and change it step by step. Each step is tested in the game separately and only with the owner's go-ahead:
+| Item | Grau |
+| --- | --- |
+| Jogador dirige (não só o bot do benchmark) | `UNKNOWN` / não implementado |
+| Replay com câmeras do Ring no jogo | **Pendente à mão** (XML e `cameralines.cqtc` portados; falta corrida de replay) |
+| Oficina / pódio / lona no parque de serviço | Câmeras, holofotes e estepes **portados** (2026-10-11); lona e plataforma do pódio ainda **da Montalegre** — efeito no Ring **não conferido visualmente** |
+| Chuva com gotas na tela | `CONFIRMED` que luz/céu mudam; gotas **não** aparecem |
 
-1. **Objects.** Move, delete and copy objects already works through `edits.json` → `track/edit.py`. A first in-game test of an edited Montalegre would validate the whole write path. The synthetic barriers and trees could be placed as copies of existing Montalegre object types.
-2. **Textures.** Replace the pixels of existing textures (asphalt, grass, barriers) with the synthetic ones. The image keeps the original size and DXT format, so the PSSG and the package keep their size. This needs a DXT1/DXT5 encoder; there is none in the repo yet.
-3. **Terrain shape.** Move the vertices of `tracksplit.pssg` blocks (same vertex count, same size). Collision would not follow, so this only makes sense after the `.vcqtc` format is decoded.
-4. **Route.** Write `progress_track.xml` and `ai_track.xml` from `source/layout.json`. This needs a binary XML writer and a matching collision.
+## Rota “vestir a Montalegre” (plano B histórico)
 
-## First safe experiment
+Ainda válida para **pesquisa** (E4–E6 em `mapa_no_jogo.md`): trocar objetos/texturas/vértices dentro do mesmo `.nefs`. O produto escolhido foi **pista com nome próprio** na overlay.
 
-Steps 1 and 2 offline, with no game run:
+## Primeiro experimento seguro
 
-1. Pick a Montalegre texture of the same size as a synthetic one. Encode the synthetic PNG to the same DXT format.
-2. Write the new PSSG with `pssg.py` and check that it has the same size and the same number of 64 KiB blocks.
-3. Write a new `.nefs` in `build/uiview/saves/` with `replace_files`, re-read it, and compare every other file by hash.
-4. Open it in the Track Explorer and check that the texture changed.
+Offline: `python -m tools.synthtrack -o examples` e abrir `examples/tracks/synthetic__dr2hook_ring` no viewer3d. No jogo: instalar o `.dr2track` ou usar F5 (só Linux, só Ring).
 
-Loading that `.nefs` in the game is the next step and is the owner's decision.
+## Fora de escopo
 
-## Out of scope
-
-Redistributing the game's assets. The synthetic textures and geometry are generated and can be shared; an edited game package cannot.
+Redistribuir assets do jogo. Texturas e geometria geradas podem ser compartilhadas; pacotes `.nefs` derivados de pistas oficiais, não.

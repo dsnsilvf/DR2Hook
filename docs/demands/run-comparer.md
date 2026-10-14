@@ -1,6 +1,6 @@
 # Run comparer and in-game HTML
 
-> **Speculation.** Not started. Nobody has loaded two real runs and checked that they can be aligned.
+> **Especulação (2026-10-14).** Comparador de voltas não implementado. `dr2rec` e a telemetria UDP existem; offsets de `lap_distance` / tempo para alinhar duas voltas **não** estão fechados neste doc. Overlay ImGui no jogo: `CONFIRMED` (HUD sem HTML).
 
 ## The idea
 

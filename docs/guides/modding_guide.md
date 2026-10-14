@@ -247,6 +247,8 @@ Há dois reloads, e eles não fazem a mesma coisa.
 
 Para testar uma DLL nativa nova, substitua `dr2hook_core.dll` na pasta do jogo e pressione **F8**. Não substitua `dr2hook_core.N.dll`: esse é o arquivo que o processo mantém mapeado. O checkpoint que só existia em memória é descartado. Variáveis Lua também. Trocar `dxgi.dll` ainda exige reiniciar o jogo.
 
+**Evite F8 durante uma corrida** — já causou crash (`GhostLab[crash]`). Saia da especial ou feche o jogo (`ring_deploy.py --close` ao testar pelo editor).
+
 ---
 
 ## 5. Regras de Fair Play (Anti-Cheat Integrado)
@@ -269,7 +271,7 @@ O princípio nº 1 do DR2Hook é o **Fair Play First**:
 
 ## 6. Exemplo Completo: Mod de Treino (Practice Mode)
 
-Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote. As opções aparecem em **Pausa > DR2 Hook > aba Mods > Practice Mode**. As opções de pesquisa (número de carros fantasma, fantasma sólido, teclas F9 e F11) ficam no outro mod do pacote, `mods/debug_mode/main.lua` (**Debug Mode**).
+Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote. As opções aparecem em **Pausa > DR2 Hook > aba Mods > Practice Mode**. Desde 2026-10-14 o menu ficou **enxuto**: checkpoint (F5/F6/F7), modo de restauração, largada (`Race.setStartMode`), diferença ao fantasma e deslocamento de tempo do fantasma. **Debug Mode** (`mods/debug_mode/main.lua`) concentra pesquisa: quantos carros fantasma na tela (`Ghost.setCars`, 2–15), fantasma sólido e desligar F9/F11 (`Debug.setHotkey`).
 
 ```lua
 -- ========================================================================

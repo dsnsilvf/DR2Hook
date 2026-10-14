@@ -2,7 +2,7 @@
 
 Documentos escritos para **outra IA (ou pessoa) executar**, sem precisar da conversa que os originou. Cada plano diz o que mudar, em que ordem, como provar que funcionou e o que não fazer.
 
-Data: 2026-10-05. Estado do código no momento: `main` em `30acb27` ou posterior.
+Data: 2026-10-05 (índice); viewer 3D e Ring no jogo atualizados em 2026-10-14 na `main`.
 
 ## Índice
 
@@ -11,8 +11,8 @@ Data: 2026-10-05. Estado do código no momento: `main` em `30acb27` ou posterior
 | [01 — Python em camadas](01_python_camadas.md) | Separa formatos (core), conversão (assets), edição (edit) e aplicação (uiview) no lado Python | Médio | nada |
 | [02 — Web em módulos](02_web_modulos.md) | Divide `trackview.js`, `carview.js` e `content.js` por responsabilidade e extrai o GL comum | Médio | nada (melhor depois do 01) |
 | [03 — Documentação por ferramenta](03_docs_ferramentas.md) | `car_explorer.md`, `track_explorer.md`, `ui_screens.md`; o `uiview.md` vira visão geral | Baixo | nada |
-| [Viewer 3D nativo](viewer3d/README.md) | Visualizador/editor em C++ com GPU, em 7 etapas, lendo o que o Python já exporta | Alto | só do `track.json`/DR2M/DR2I atuais (ver [formatos](viewer3d/formatos.md)) |
-| [Mapa de testes no jogo](mapa_no_jogo.md) | Análise de como levar o DR2Hook Ring para o jogo (benchmark, redirecionamento do `.nefs`, pista hospedeira); só análise, nada testado | Alto | benchmark/AutoStage |
+| [Viewer 3D nativo](viewer3d/README.md) | **MVP concluído** (etapas 1–7 + editor ImGui, F5, LiveLink); melhorias de GPU em [melhorias_gpu.md](viewer3d/melhorias_gpu.md) | Médio (Polônia/LOD) | export Python atual |
+| [Mapa de testes no jogo](mapa_no_jogo.md) | Diário da escada E0–E7; **Ring já no jogo** — ver estado no topo do arquivo e `track_loading.md` | Baixo (histórico) | AutoStage, overlay, `.dr2track` |
 
 Ordem sugerida se for uma única IA: **03 → 01 → 02 → viewer3d**. Os planos 01, 02 e 03 mexem em arquivos diferentes e podem andar em paralelo em branches separadas, desde que 01 e 02 não alterem o mesmo arquivo ao mesmo tempo (o 02 só toca em `tools/uiview/web/`, o 01 só em Python).
 

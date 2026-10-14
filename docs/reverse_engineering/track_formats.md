@@ -1,6 +1,6 @@
 # Formatos de pista (`locations/*.nefs`)
 
-Levantamento de 2026-10-05, feito para o Track Explorer ([../UIVIEW.md](../tools/uiview.md)). Tudo aqui foi **verificado** lendo os arquivos do jogo e conferindo com o resultado exportado (Montalegre rallycross e Poland rally 01), salvo onde está marcado como não decifrado. Nada disto foi testado dentro do jogo.
+Levantamento de 2026-10-05, feito para o Track Explorer ([../tools/uiview.md](../tools/uiview.md)). Tudo aqui foi **verificado** lendo os arquivos do jogo e conferindo com o resultado exportado (Montalegre rallycross e Poland rally 01), salvo onde está marcado como não decifrado. **Carga no jogo:** o experimento E3 ([../plans/mapa_no_jogo.md](../plans/mapa_no_jogo.md)) confirmou um `.nefs` com **um** arquivo trocado (`route_0/ornaments.bin`) quando o **SHA-256 em +4** do cabeçalho NeFS em claro é recalculado (`nefs_write.with_header_hash`). O fluxo de pista nova do DR2Hook **não** depende de editar `.nefs` oficiais (overlay + `.dr2track`; ver [track_loading.md](track_loading.md)).
 
 ## Onde ficam
 
@@ -54,4 +54,6 @@ Decifrados depois (ver [track_loading.md](track_loading.md)): vértices dos `.vc
 
 ## Escrita num `.nefs`
 
-`tools/egodata/nefs_write.py` (`replace_files`): copia o volume uma vez, acrescenta os arquivos novos no fim e atualiza as tabelas; o arquivo novo precisa ter o mesmo número de blocos de 64 KiB. Edição de objetos: [../UIVIEW.md](../tools/uiview.md). **Aceitação pelo jogo: não testada.**
+`tools/egodata/nefs_write.py` (`replace_files`): copia o volume uma vez, acrescenta os arquivos novos no fim e atualiza as tabelas; o arquivo novo precisa ter o mesmo número de blocos de 64 KiB. Em pacotes de pista com cabeçalho NeFS em claro, o gravador recalcula o hash de +4 (obrigatório para abrir). Edição de objetos: [../tools/uiview.md](../tools/uiview.md).
+
+**Aceitação pelo jogo:** `CONFIRMADO` para o caso E3 (Montalegre, 1 byte em `ornaments.bin`, demais arquivos iguais em blocos). **Não** há bateria de testes para terreno, `tracksplit` ou pacotes de carro com intro RSA. **Pendente à mão:** conferência visual do objeto movido no E3.

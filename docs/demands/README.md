@@ -2,18 +2,18 @@
 
 Ideas people want from DR2Hook, kept apart from the reverse-engineering notes and from the roadmap that is already planned.
 
-> **Everything in this folder is speculation.** Nothing here is started, promised, or known to be possible. Each document says what makes the idea look possible, what is unknown, and what the first safe experiment would be. If an experiment fails, the idea gets marked as not feasible and stays here as a record.
+> **Ideias e status misturados.** Várias demandas ainda são só especulação; outras já têm pedaços no código (Ring no jogo, editor 3D, fantasmas, Debug Mode). Cada arquivo diz o grau de evidência, o que falta e o primeiro experimento seguro.
 
 | Demand | Status | Document |
 | --- | --- | --- |
 | Multiplayer through live ghost cars | Speculation, first experiment not run | [live-ghosts-multiplayer.md](live-ghosts-multiplayer.md) |
-| Map editor | Partly started: Track Explorer edits object placement offline; game acceptance untested | [map-editor.md](map-editor.md) |
+| Map editor | Em andamento: viewer3d + F5 no Ring; `.nefs` editado testado só no E3 (ornament); fluxo oficial é `.dr2track` | [map-editor.md](map-editor.md) |
 | Vehicle editor / custom cars | Speculation, not started (the Car Model Explorer reads car models) | [vehicle-editor.md](vehicle-editor.md) |
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
 | Quick car preview | Speculation, first experiment not run | [car-preview.md](car-preview.md) |
-| Synthetic track in the game | The DR2Hook Ring loads in the game through a folder overlay; no menu entry of its own yet | [synthetic_track.md](synthetic_track.md) |
-| TAS, replay and optimal lines | Speculation, determinism not tested | [tas-and-optimal-lines.md](tas-and-optimal-lines.md) |
-| Run comparer and in-game HTML | Speculation, UDP offsets not confirmed | [run-comparer.md](run-comparer.md) |
+| Synthetic track in the game | Ring no jogo (overlay + `.dr2track`, aba DR2Hook); jogador ainda não dirige | [synthetic_track.md](synthetic_track.md) |
+| TAS, replay and optimal lines | Speculation; base: Practice Mode, GhostLab, `dr2rec` | [tas-and-optimal-lines.md](tas-and-optimal-lines.md) |
+| Run comparer and in-game HTML | Speculation; overlay ImGui confirmado; offsets de volta ainda não fechados | [run-comparer.md](run-comparer.md) |
 
 ## How findings are labelled
 

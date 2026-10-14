@@ -54,10 +54,8 @@ O DR2Hook opera como uma biblioteca proxy manual (`dxgi.dll`). Sua instalação 
      - **Diagnostics:** Telemetria em tempo real (RPM real do motor, marcha ativa, velocidade km/h, posição XYZ, velocidade angular, suspensão).
      - **Mods:** Lista e status dos mods Lua carregados.
      - **Practice Mode:** Painel de controle de checkpoints e escolha de modo de restauração (**Normal** vs. **With Momentum**).
-   - **`F5`**: Salva o checkpoint atual (posição espacial, orientação, velocidade linear e velocidade angular).
-   - **`F6`**: Restaura o checkpoint salvo instantaneamente no modo **Normal** (parado, suspensão assentada).
-   - **`F7`**: Restaura o checkpoint com **With Momentum** (velocidade linear e angular do instante da gravação).
-   - **`F8`**: Recarrega `dr2hook_core.dll` do disco sem fechar o jogo. A `dxgi.dll` permanece carregada. O checkpoint que só existia em memória é descartado e os scripts Lua reiniciam (`onInit` roda de novo). O mesmo comando está no botão **Reload Native Core (F8)** da aba Mods. O botão **Reload Scripts (Hot-Reload)** dessa aba só reinicia o Lua.
+   - **`F5` / `F6` / `F7`** (com o mod **Practice Mode** ativo na especial): salvar checkpoint / restaurar parado / restaurar com momentum. No **DR2Hook Editor de Pistas**, **F5** abre **Testar no jogo** (porte do Ring) e **F6** pausa a corrida aberta pelo teste — não use esses atalhos esperando o Practice Mode se o editor acabou de lançar o jogo.
+   - **`F8`**: Recarrega `dr2hook_core.dll` do disco sem fechar o jogo. A `dxgi.dll` permanece carregada. O checkpoint que só existia em memória é descartado e os scripts Lua reiniciam (`onInit` roda de novo). O mesmo comando está no botão **Reload Native Core (F8)** da aba Mods. O botão **Reload Scripts (Hot-Reload)** dessa aba só reinicia o Lua. **Aviso:** com uma **corrida em andamento**, o F8 pode derrubar o jogo (`GhostLab[crash]`). Prefira sair da especial ou fechar o processo com calma; ao testar pelo editor, use `python3 scripts/research/ring_deploy.py --close`.
 6. **Outros atalhos do core:**
    - **`F9`**: câmera livre na especial (mouse olha, WASD move, Espaço/Q sobem e descem, Ctrl congela o movimento do teclado, `+`/`-` mudam a velocidade, Shift multiplica por 4).
    - **`F11`**: insta crash (destrói o carro, só offline), para estudar o fluxo de dano terminal.
