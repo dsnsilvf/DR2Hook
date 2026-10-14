@@ -12,6 +12,8 @@ Ideas people want from DR2Hook, kept apart from the reverse-engineering notes an
 | Level editor and modeling | Speculation, scope not decided | [level-editor-and-modeling.md](level-editor-and-modeling.md) |
 | Quick car preview | Speculation, first experiment not run | [car-preview.md](car-preview.md) |
 | Synthetic track in the game | Offline generator exists (`tools/synthtrack`); nothing tried in the game | [synthetic_track.md](synthetic_track.md) |
+| TAS, replay and optimal lines | Speculation, determinism not tested | [tas-and-optimal-lines.md](tas-and-optimal-lines.md) |
+| Run comparer and in-game HTML | Speculation, UDP offsets not confirmed | [run-comparer.md](run-comparer.md) |
 
 ## How findings are labelled
 
