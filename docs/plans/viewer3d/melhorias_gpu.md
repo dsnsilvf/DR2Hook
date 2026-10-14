@@ -16,7 +16,7 @@ Nota das 3 rodadas de avaliação ([relatório final](../../reviews/viewer3d_rel
 | Erros de GL por quadro avisam, aparecem na barra de status e não fecham o editor | `gl::warn` | Testado com erro injetado por `LD_PRELOAD` |
 | A chave do corte das instâncias não inclui mais o zoom | `render/instances.cpp` `cull` | 10 cliques de roda: 0 recortes (antes, 1 por clique) |
 
-## Feito (rodada 4, branch `feat/viewer3d-melhorias`)
+## Feito (rodada 4, integrado na `main` após merge `feat/viewer3d-melhorias`)
 
 Medido na RTX 4050 do dono (não mais no llvmpipe).
 

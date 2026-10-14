@@ -70,9 +70,9 @@ To run the Python tool tests: `bash scripts/dev/test_tools.sh`.
 | --- | --- |
 | Loader, F8 reload, overlay, native menus, Lua mods | `SafetyGuard` (offline-only writes) is not enforced yet |
 | Practice Mode checkpoints (position and orientation) | Restoring with momentum has not been re-checked in the game |
-| Free camera, up to 15 ghosts, fast boot | More than 15 ghosts crash the stage load |
-| Track Editor; the Ring loads, drives and is seen in the game | The Ring has no menu entry of its own (it borrows Montalegre's package) and the player cannot drive it yet (the benchmark bot does) |
-| Car and Track Explorers in the browser | Edited `.nefs` files of the original stages have not been tried in the game |
+| Free camera, up to 15 ghosts, fast boot, DR2Hook tab for `.dr2track` packages | More than 15 ghosts crash the stage load |
+| Track Editor; the Ring loads, drives and is seen in the game | Player cannot drive the Ring yet (benchmark bot); replay cameras on the Ring not validated in a full replay run |
+| Car and Track Explorers in the browser | Full edited stage `.nefs` in-game only tested for E3 (one ornament byte + header hash), not as the shipping path |
 
 ## Online play
 

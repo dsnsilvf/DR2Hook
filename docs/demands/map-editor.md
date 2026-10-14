@@ -1,35 +1,32 @@
-# Map editor
+# Editor de mapas
 
-> **Partly started (2026-10-05).** The files are now read and the objects can be edited offline, but **nobody has checked whether the game accepts changed stage data.** The rest of this page is the original plan.
+> **Em andamento (2026-10-14).** O **DR2Hook Editor de Pistas** (`tools/viewer3d`) já edita pistas exportadas e o Ring sintético; o **Testar no jogo (F5)** porta o Ring e abre o jogo. Aceitar **`.nefs` editados de pistas oficiais** no jogo foi validado num experimento pontual (E3, hash NeFS); o fluxo de produto é overlay + `.dr2track`, não substituir pacotes do jogo.
 
-## What exists now
+## O que existe hoje
 
-The **Track Explorer** ([docs/tools/uiview.md](../tools/uiview.md)) exports a stage from `locations/*.nefs` and shows terrain, objects, trees, ornaments, track limits, and the AI line. It can move, rotate, delete, and duplicate objects and write the result into a **new** `.nefs`. The formats are in [track_formats.md](../reverse_engineering/track_formats.md). Known gaps: stage collision (`track.jpk`) is not decoded and does not change; the edited package has not been tried in the game; creating new routes or editing terrain is not started.
-
-## The idea
-
-Create or change stages: move objects, change a route, or build a new one.
-
-## Why it might be possible
-
-| What we know | Grade | Source |
+| Peça | Grau | Onde |
 | --- | --- | --- |
-| The `egodata` tool already lists and extracts the game's archives (NEFS) and converts its binary XML (`.bin`) to text. | `CONFIRMED` that the tool exists and reads those formats | [`tools/egodata`](../../tools/egodata/) |
-| The native pause-menu screen works by changing the game's UI data at boot, and the game accepted it. | `CONFIRMED` for UI data | [UI Data](../reverse_engineering/ui_data.md) |
+| Exportar pista do jogo, ver terreno/objetos/IA e gravar `edits.json` | `CONFIRMED` offline | [Track Explorer](../tools/uiview.md), `python -m tools.uiview.track` |
+| Aplicar `edits.json` num **novo** `.nefs` (mesmo número de blocos de 64 KiB, hash NeFS recalculado) | `CONFIRMED` por re-leitura e por E3 no jogo (um byte em `ornaments.bin`) | `tools/uiview/track/edit.py`, [track_formats.md](../reverse_engineering/track_formats.md) |
+| Editor 3D nativo: mover/girar/apagar, histórico, gizmo, câmeras, vagas, paleta, **F5** | `CONFIRMED` no editor; F5 validado no Ring | [tools/viewer3d/README.md](../../tools/viewer3d/README.md) |
+| Pista nova no jogo (Ring) sem mexer em `.nefs` oficiais | `CONFIRMED` no jogo | [track_loading.md](../reverse_engineering/track_loading.md) §10–§13, [custom_tracks.md](../guides/custom_tracks.md) |
+| Pacote `.dr2track`, aba DR2Hook, card e alfinete | `CONFIRMED` no jogo (Ring) | [location_select.md](../reverse_engineering/location_select.md) |
 
-That shows the game can load changed data in at least one area. It does not say anything about stage or track data.
+## A ideia (escopo completo)
 
-## What is not known
+Criar ou mudar especiais: objetos, rotas, terreno, colisão e registro no jogo — para qualquer pista exportada, não só o Ring.
 
-- Where stage geometry, surfaces, objects, and routes are stored, and in which formats.
-- Whether those formats can be read, written back, and loaded by the game.
-- Whether the game checks the integrity of stage files.
-- How a changed stage would be shipped to other players without redistributing the game's own files.
+## O que ainda falta
 
-## First safe experiment
+- **Terreno e colisão genéricos:** decodificador/encoder de `.vcqtc` e pipeline estável fora do Ring (`track_jpk.py` cobre o Ring alinhado à Montalegre).
+- **Qualquer pista como `.dr2track`:** só o Ring tem porte completo (`track_package.py` + inventário em `track_inventory.py`).
+- **Edição direta de `.nefs` no jogo** como produto: possível em teoria (E3); não é o caminho documentado para mods (sem redistribuir assets).
+- **Jogador na pista custom:** benchmark/AutoStage ainda; modo livre pendente.
 
-Use `egodata` (read-only) to list the archives and look for stage-related files and their formats. Write down what exists. No game files change.
+## Primeiro experimento seguro (ainda válido)
 
-## Out of scope
+Listar arquivos com `egodata` em modo leitura. Para escrever, usar `build/uiview/saves/` e só carregar no jogo com OK explícito do dono.
 
-Redistributing the game's original assets.
+## Fora de escopo
+
+Redistribuir assets originais do jogo.
