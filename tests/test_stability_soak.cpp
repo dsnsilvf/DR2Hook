@@ -104,9 +104,11 @@ void TestSoakLongSessionAccelerated10k() {
   const auto &loadedMods = dr2hook::ModManager::GetLoadedMods();
   TEST_ASSERT(!loadedMods.empty(),
               "Mod de treino oficial (practice_mode) carregado");
-  if (!loadedMods.empty()) {
-    TEST_ASSERT(loadedMods[0].enabled, "Mod practice_mode ativo");
+  bool practiceEnabled = false;
+  for (const auto &mod : loadedMods) {
+    practiceEnabled = practiceEnabled || (mod.id == "dr2.practice_mode" && mod.enabled);
   }
+  TEST_ASSERT(practiceEnabled, "Mod practice_mode ativo");
 
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = ImVec2(1920.0f, 1080.0f);

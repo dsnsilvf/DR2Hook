@@ -1,3 +1,5 @@
+#include "dr2hook/ghost_lab.h"
+#include "dr2hook/hotkeys.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/memory.h"
 #include "dr2hook/player.h"
@@ -566,13 +568,8 @@ void TestPracticeModeNativeMenu() {
       "Restore mode: Normal",
       "Clear checkpoint on new stage: On",
       "Race start: Normal",
-      "Indestructible tyres: Off",
-      "Indestructible car: Off",
       "Live gap to ghost: On",
-      "Extra ghost copies: Off",
-      "Ghost copy spacing: 2 s",
       "Ghost head start: 0 s",
-      "Solid ghost car: Off",
       "Notifications: On",
   };
   TEST_ASSERT(entries.size() == mods.size() && entries[practice].name == "Practice Mode",
@@ -609,15 +606,15 @@ void TestPracticeModeNativeMenu() {
   dr2hook::ModManager::DispatchMenuEvent(practice, 2, 1);
   dr2hook::ModManager::DispatchMenuEvent(practice, 4, -1);
   dr2hook::ModManager::DispatchMenuEvent(practice, 5, -1);
-  dr2hook::ModManager::DispatchMenuEvent(practice, 12, 7);
+  dr2hook::ModManager::DispatchMenuEvent(practice, 7, 7);
   const auto after = dr2hook::ModManager::MenuSnapshot();
   const auto afterLabels = labels(after[practice]);
   TEST_ASSERT(afterLabels[2] == "Restore mode: Momentum", "combo escolhe o valor do choice");
   TEST_ASSERT(afterLabels[3] == "Clear checkpoint on new stage: Off", "combo desliga o toggle");
   TEST_ASSERT(afterLabels[4] == "Race start: No countdown",
               "A avanca o modo de largada sem quebrar o mod fora do jogo");
-  TEST_ASSERT(afterLabels[5] == "Indestructible tyres: On", "A avanca o toggle");
-  TEST_ASSERT(afterLabels[12] == "Notifications: On", "indice fora dos valores ignorado");
+  TEST_ASSERT(afterLabels[5] == "Live gap to ghost: Off", "A avanca o toggle");
+  TEST_ASSERT(afterLabels[7] == "Notifications: On", "indice fora dos valores ignorado");
   TEST_ASSERT(after[practice].options[2].ValueNames() ==
                   std::vector<std::string>({"Normal", "Momentum"}),
               "valores do combo no snapshot");
@@ -630,6 +627,80 @@ void TestPracticeModeNativeMenu() {
   dr2hook::ModManager::Shutdown();
   TEST_ASSERT(dr2hook::ModMenu::OptionsOf("dr2.practice_mode") == nullptr,
               "shutdown limpa as opcoes");
+}
+
+void RemoveRealModSettings(); // definida no runner, abaixo
+
+// mods/debug_mode/main.lua: opcoes no menu, contador de fantasmas e teclas F9/F11.
+void TestDebugModeNativeMenu() {
+  std::cout << "[RUN] TestDebugModeNativeMenu..." << std::endl;
+
+  // O onInit do Practice Mode (carregado junto) consulta o Safety.
+  dr2hook::MockMemoryAccessor mock;
+  dr2hook::MemoryScanner scanner(&mock);
+  constexpr uintptr_t vehicleAddr = 0x140700000;
+  constexpr uintptr_t sessionModeAddr = 0x140800000;
+  mock.SetValue(vehicleAddr, dr2hook::CarState{});
+  mock.SetValue(sessionModeAddr,
+                static_cast<uint32_t>(dr2hook::GameSessionMode::DirtFish));
+  dr2hook::Player::Configure(&scanner, vehicleAddr);
+  dr2hook::SafetyGuard::Configure(&scanner, sessionModeAddr);
+
+  TEST_ASSERT(dr2hook::ModManager::Initialize("mods"), "ModManager inicializa");
+  const auto &mods = dr2hook::ModManager::GetLoadedMods();
+  size_t debug = mods.size();
+  for (size_t i = 0; i < mods.size(); ++i) {
+    if (mods[i].id == "dr2.debug_mode") {
+      debug = i;
+    }
+  }
+  TEST_ASSERT(debug < mods.size() && mods[debug].enabled, "Debug Mode carregado e ativo");
+  if (debug >= mods.size()) {
+    dr2hook::ModManager::Shutdown();
+    return;
+  }
+
+  const auto labelsOf = [](const dr2hook::ModMenuEntry &entry) {
+    std::vector<std::string> out;
+    for (const dr2hook::ModOption &option : entry.options) {
+      out.push_back(option.DisplayLabel());
+    }
+    return out;
+  };
+  const std::vector<std::string> expected = {
+      "Ghost cars on screen: Off",
+      "Ghost spacing: 1 s",
+      "Solid ghost car: Off",
+      "Free camera key (F9): On",
+      "Insta crash key (F11): On",
+  };
+  const auto entries = dr2hook::ModManager::MenuSnapshot();
+  TEST_ASSERT(entries.size() == mods.size() && entries[debug].name == "Debug Mode" &&
+                  labelsOf(entries[debug]) == expected,
+              "opcoes do Debug Mode, na ordem declarada");
+  TEST_ASSERT(dr2hook::Hotkeys::freeCamera.load() && dr2hook::Hotkeys::instaCrash.load(),
+              "F9 e F11 ligadas por padrao");
+
+  dr2hook::ModManager::DispatchMenuEvent(debug, 0, 8); // "9"
+  dr2hook::ModManager::DispatchMenuEvent(debug, 3, -1);
+  dr2hook::ModManager::DispatchMenuEvent(debug, 4, -1);
+  const auto afterLabels = labelsOf(dr2hook::ModManager::MenuSnapshot()[debug]);
+  TEST_ASSERT(afterLabels[0] == "Ghost cars on screen: 9", "combo escolhe o numero de fantasmas");
+  TEST_ASSERT(!dr2hook::Hotkeys::freeCamera.load(), "toggle desliga o F9");
+  TEST_ASSERT(!dr2hook::Hotkeys::instaCrash.load(), "toggle desliga o F11");
+#if defined(_WIN32)
+  TEST_ASSERT(dr2hook::GhostLab::WantedCars() == 9, "Ghost.setCars pede 9 carros");
+#endif
+
+  dr2hook::ModManager::DispatchMenuEvent(debug, 0, 0); // Off
+#if defined(_WIN32)
+  TEST_ASSERT(dr2hook::GhostLab::WantedCars() == 0, "Off volta ao padrao do jogo");
+#endif
+
+  dr2hook::ModManager::Shutdown();
+  dr2hook::Hotkeys::freeCamera.store(true);
+  dr2hook::Hotkeys::instaCrash.store(true);
+  RemoveRealModSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -721,9 +792,11 @@ void TestConcurrentEventDispatch() {
 // testes esperam.
 void RemoveRealModSettings() {
   std::error_code ignored;
-  std::filesystem::remove(std::filesystem::path("mods") / "practice_mode" /
-                              dr2hook::ModManager::kSettingsFileName,
-                          ignored);
+  for (const char *mod : {"practice_mode", "debug_mode"}) {
+    std::filesystem::remove(std::filesystem::path("mods") / mod /
+                                dr2hook::ModManager::kSettingsFileName,
+                            ignored);
+  }
 }
 
 void TestModSettingsPersistence() {
@@ -754,6 +827,7 @@ void TestModSettingsPersistence() {
   std::ifstream saved(modDir / dr2hook::ModManager::kSettingsFileName);
   std::stringstream text;
   text << saved.rdbuf();
+  saved.close(); // aberto, o Windows nao deixa apagar a pasta no fim
   TEST_ASSERT(text.str().find("fast=on") != std::string::npos &&
                   text.str().find("mode=C") != std::string::npos &&
                   text.str().find("go=") == std::string::npos,
@@ -799,6 +873,7 @@ int main() {
   TestPracticeModeModEndToEnd();
   TestMenuBindings();
   TestPracticeModeNativeMenu();
+  TestDebugModeNativeMenu();
   TestConcurrentEventDispatch();
   TestModSettingsPersistence();
   RemoveRealModSettings();
