@@ -51,6 +51,12 @@ public:
   // thread do jogo, entao o Reiniciar zera sozinha.
   static int SpawnClone();
 
+  // Quantos carros fantasma o jogo cria na proxima carga da especial pelo menu (0 = o
+  // padrao do jogo; 2..15 = o original mais copias automaticas). Vem do Debug Mode.
+  // O dr2hook_ghost_cars.txt, se existir, continua valendo por cima (pesquisa).
+  static void SetWantedCars(int cars);
+  static int WantedCars();
+
   // Modo de teste: existe dr2hook_ghost_cars.txt ao lado do exe. So nele o F7
   // vira "copiar fantasma"; sem o arquivo o F7 segue sendo o do checkpoint.
   static bool TestModeActive();

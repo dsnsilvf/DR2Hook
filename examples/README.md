@@ -26,7 +26,7 @@ O que tem em cada arquivo está em [`docs/tools/synthtrack.md`](../docs/tools/sy
 - `track.json`, `*.bin` e `tex/` estão no formato exportado que os viewers leem;
 - `source/` está no formato de origem do jogo (`objects.ens`, `trees.bin`, `ornaments.bin`, PNGs).
 
-**Não é uma pista do jogo:** faltam colisão, `tracksplit.pssg`, dados de progresso e de IA e o registro nos menus. Nunca foi testada no jogo.
+**Ela roda no jogo.** O `scripts/research/ring_deploy.py`, ou o **Testar no jogo** (F5) do editor, gera o terreno, a colisão, os objetos, as câmeras do replay, as vagas e a tela de carregamento. Depois copia tudo para a overlay de pastas e abre o jogo direto no Ring pelo AutoStage, sem mexer em nenhum `.nefs`. Ainda não tem entrada própria nos menus do jogo, e o carro do teste é o do benchmark, que anda sozinho. Detalhes: [`track_loading.md`](../docs/reverse_engineering/track_loading.md) §9–§12. O `game_transform.json` desta pasta é gravado pelo porte: é o giro e o deslocamento do Ring no jogo, que o editor usa no jogo ao vivo.
 
 ### Gerar de novo
 

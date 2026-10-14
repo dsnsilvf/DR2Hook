@@ -1,6 +1,7 @@
 #include "dr2hook/script/lua_engine.h"
 #include "dr2hook/cutscene_probe.h"
 #include "dr2hook/ghost_lab.h"
+#include "dr2hook/hotkeys.h"
 #include "dr2hook/logger.h"
 #include "dr2hook/script/mod_manager.h"
 #include "dr2hook/script/mod_menu.h"
@@ -523,6 +524,31 @@ static int Lua_Ghost_setHud(lua_State *L) {
   return 0;
 }
 
+// Ghost.setCars(n): carros fantasma na proxima carga da especial (0 = padrao do
+// jogo, 2..15). Devolve quantos valem agora (o arquivo de pesquisa tem precedencia).
+static int Lua_Ghost_setCars(lua_State *L) {
+  dr2hook::GhostLab::SetWantedCars(static_cast<int>(luaL_checkinteger(L, 1)));
+  lua_pushinteger(L, dr2hook::GhostLab::WantedCars());
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Bindings nativos para Debug (teclas de depuracao)
+// ---------------------------------------------------------------------------
+// Debug.setHotkey("free_camera" | "insta_crash", ligada)
+static int Lua_Debug_setHotkey(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  const bool on = lua_toboolean(L, 2) != 0;
+  if (std::strcmp(name, "free_camera") == 0) {
+    dr2hook::Hotkeys::freeCamera.store(on);
+  } else if (std::strcmp(name, "insta_crash") == 0) {
+    dr2hook::Hotkeys::instaCrash.store(on);
+  } else {
+    return luaL_error(L, "Debug.setHotkey: tecla desconhecida '%s'", name);
+  }
+  return 0;
+}
+
 static int Lua_Race_setStartMode(lua_State *L) {
   const char *mode = luaL_checkstring(L, 1);
   if (!CutsceneProbe::SetStartMode(mode)) {
@@ -812,7 +838,7 @@ void LuaEngine::RegisterBindings() {
   lua_setglobal(s_L, "Race");
 
   // Tabela Ghost
-  lua_createtable(s_L, 0, 5);
+  lua_createtable(s_L, 0, 6);
   lua_pushcfunction(s_L, Lua_Ghost_status);
   lua_setfield(s_L, -2, "status");
   lua_pushcfunction(s_L, Lua_Ghost_clone);
@@ -823,7 +849,15 @@ void LuaEngine::RegisterBindings() {
   lua_setfield(s_L, -2, "setTimeOffset");
   lua_pushcfunction(s_L, Lua_Ghost_setHud);
   lua_setfield(s_L, -2, "setHud");
+  lua_pushcfunction(s_L, Lua_Ghost_setCars);
+  lua_setfield(s_L, -2, "setCars");
   lua_setglobal(s_L, "Ghost");
+
+  // Tabela Debug
+  lua_createtable(s_L, 0, 1);
+  lua_pushcfunction(s_L, Lua_Debug_setHotkey);
+  lua_setfield(s_L, -2, "setHotkey");
+  lua_setglobal(s_L, "Debug");
 
   // Tabela UI
   lua_createtable(s_L, 0, 1);

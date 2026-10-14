@@ -85,26 +85,12 @@ local function selectedStartMode()
     return value
 end
 
-local function comingSoon(feature)
-    return function(enabled)
-        notify(feature .. (enabled and " enabled" or " disabled") .. " (coming soon)", 2.5)
-    end
-end
-
--- Fantasma (GhostLab no core). As copias usam os slots livres do jogo; so
--- os slots que ja tem carro criado aparecem na tela.
-local ghostCopies = { "Off", "1", "2", "3", "4" }
-local ghostSpacing = { "1 s", "2 s", "5 s", "10 s" }
+-- Fantasma (GhostLab no core). Quantos carros fantasma, o fantasma solido e as
+-- teclas de pesquisa ficam no mod Debug Mode.
 local ghostShift = { "0 s", "+1 s", "+2 s", "+5 s", "-1 s", "-2 s", "-5 s" }
 
 local function seconds(label)
     return tonumber((label or "0"):match("([+-]?%d+)")) or 0
-end
-
-local function applyGhostCopies()
-    local _, copies = Menu.get("ghost_copies")
-    local _, spacing = Menu.get("ghost_copy_spacing")
-    Ghost.clone(copies == "Off" and 0 or tonumber(copies), seconds(spacing))
 end
 
 local function applyGhostShift()
@@ -121,20 +107,10 @@ Menu.choice("restore_mode", "Restore mode", restoreModes, 1)
 Menu.toggle("clear_on_stage_start", "Clear checkpoint on new stage", true)
 Menu.choice("race_start", "Race start", startModes, 1,
     function(_, value) applyStartMode(value, true) end)
-Menu.toggle("indestructible_tyres", "Indestructible tyres", false,
-    comingSoon("Indestructible tyres"))
-Menu.toggle("indestructible_car", "Indestructible car", false,
-    comingSoon("Indestructible car"))
 Menu.toggle("ghost_gap", "Live gap to ghost", true,
     function(enabled) Ghost.setHud(enabled) end)
-Menu.choice("ghost_copies", "Extra ghost copies", ghostCopies, 1,
-    function() applyGhostCopies() end)
-Menu.choice("ghost_copy_spacing", "Ghost copy spacing", ghostSpacing, 2,
-    function() applyGhostCopies() end)
 Menu.choice("ghost_time_shift", "Ghost head start", ghostShift, 1,
     function() applyGhostShift() end)
-Menu.toggle("solid_ghost", "Solid ghost car", false,
-    function(enabled) Ghost.setOpaque(enabled) end)
 Menu.toggle("notifications", "Notifications", true)
 
 -- Texto do painel da direita para a linha em foco.
@@ -154,28 +130,17 @@ Menu.describe("race_start",
     .. "*No countdown:* hold the handbrake and go at once.\n"
     .. "*Automatic:* go as soon as the car is on the line.\n"
     .. "*On throttle:* go when you press the throttle.")
-Menu.describe("indestructible_tyres", "Coming soon: tyres that never wear or puncture.")
-Menu.describe("indestructible_car", "Coming soon: no damage to the car.")
 Menu.describe("ghost_gap",
     "Shows at the top of the screen how far you are from the ghost.\n\n"
     .. "*Red:* seconds behind. *Green:* seconds ahead. The metres are the distance along the road.")
-Menu.describe("ghost_copies",
-    "Adds copies of the loaded ghost, each one further behind. "
-    .. "Only shows copies the game already has a car for.")
-Menu.describe("ghost_copy_spacing", "Time between each extra ghost copy.")
 Menu.describe("ghost_time_shift",
     "Moves every ghost in time. *+2 s:* the ghost runs 2 seconds ahead of its real run.")
-Menu.describe("solid_ghost",
-    "Draws the ghost as a normal, solid car with shadows. "
-    .. "Takes effect when the stage is loaded or restarted.")
 Menu.describe("notifications", "Shows on-screen messages for checkpoints and race start options.")
 
 function onInit()
     applyStartMode(selectedStartMode(), true)
     Ghost.setHud(Menu.get("ghost_gap"))
-    Ghost.setOpaque(Menu.get("solid_ghost"))
     applyGhostShift()
-    applyGhostCopies()
     print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")
 end
 
@@ -184,7 +149,6 @@ function onStageLoad(stage)
 end
 
 function onStageStart(stage)
-    applyGhostCopies() -- o jogo recria os slots a cada especial
     if stage.restart then
         return
     end

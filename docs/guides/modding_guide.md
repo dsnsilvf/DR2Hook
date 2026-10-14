@@ -185,8 +185,16 @@ Carros fantasma (GhostLab). Detalhes de como o jogo guarda e reproduz fantasmas:
 | `Ghost.setOpaque(enabled)` | `boolean` | `nil` | Fantasma sólido em vez de translúcido. |
 | `Ghost.setTimeOffset(seconds)` | `number` | `nil` | Desloca o fantasma no tempo (vantagem ou atraso). |
 | `Ghost.setHud(enabled)` | `boolean` | `nil` | Mostra ou esconde a diferença ao vivo no topo da tela. |
+| `Ghost.setCars(n)` | inteiro: `0` (ou `1`) = padrão do jogo, `2` a `15` | `integer` | Quantos carros fantasma o jogo cria na **próxima carga da especial pelo menu** (o original e cópias automáticas, espaçadas pelo último `spacing` de `Ghost.clone`). Precisa de um fantasma carregado. Retorna quantos valem agora: se `dr2hook_ghost_cars.txt` existir, ele tem precedência. |
 
-Cópias além das que o jogo cria sozinho dependem do arquivo `dr2hook_ghost_cars.txt` (ver [install.md](install.md)). O máximo estável é **15 fantasmas + o jogador**.
+O jogo cria poucos carros fantasma sozinho; `Ghost.clone` só mostra cópias nos carros que já existem. Para mais carros na tela, use `Ghost.setCars` (ou, na pesquisa, o arquivo `dr2hook_ghost_cars.txt`, ver [install.md](install.md)). O máximo estável é **15 fantasmas + o jogador**.
+
+### Módulo `Debug`
+Teclas de pesquisa do core.
+
+| Função | Parâmetros | Retorno | Descrição |
+| :--- | :--- | :--- | :--- |
+| `Debug.setHotkey(name, enabled)` | `name`: `"free_camera"` (F9) ou `"insta_crash"` (F11). `enabled` boolean | `nil` | Liga ou desliga a tecla física. Desligada, ela segue para o jogo; o F9 ainda desliga uma câmera livre já ligada, e o comando remoto `key` continua valendo. Volta a ligada no F8 (o `onInit` dos mods reaplica). Nome desconhecido gera erro de Lua. |
 
 ### Módulo `UI`
 Permite emitir mensagens e avisos visuais na tela através do sistema de notificações HUD do Dear ImGui.
@@ -212,8 +220,8 @@ Uma opção além da 24ª, `values` vazio, `button` sem função e `Menu.*` cham
 Nas descrições (`Menu.describe`), `\n` quebra a linha. Negrito: `*texto*` (ou `**texto**`) sai em DIN negrito no painel; `\\*` mostra um asterisco. Ex.: `Menu.describe("race_start", "*Normal:* hold the handbrake")`. Avançado: um texto que já começa com `{v}` passa direto para a marcação do jogo (`{s:<estilo>}`, ids de `frontend/configs/text_styles.xml`; o painel usa `_22_roboto_cnd`).
 
 ```lua
-Menu.toggle("indestructible_tyres", "Indestructible tyres", false, function(enabled)
-    UI.notify("Tyres: " .. tostring(enabled), 2.0)
+Menu.toggle("free_camera_key", "Free camera key (F9)", true, function(enabled)
+    Debug.setHotkey("free_camera", enabled)
 end)
 Menu.choice("restore_mode", "Restore mode", {"Normal", "Momentum"}, 1)
 Menu.describe("restore_mode", "Normal: the car comes back stopped. Momentum: it keeps its speed.")
@@ -261,7 +269,7 @@ O princípio nº 1 do DR2Hook é o **Fair Play First**:
 
 ## 6. Exemplo Completo: Mod de Treino (Practice Mode)
 
-Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote. As opções aparecem em **Pausa > DR2 Hook > aba Mods > Practice Mode**. "Indestructible tyres" e "Indestructible car" ainda só mostram um aviso.
+Abaixo está a implementação real do `mods/practice_mode/main.lua` incluído no pacote. As opções aparecem em **Pausa > DR2 Hook > aba Mods > Practice Mode**. As opções de pesquisa (número de carros fantasma, fantasma sólido, teclas F9 e F11) ficam no outro mod do pacote, `mods/debug_mode/main.lua` (**Debug Mode**).
 
 ```lua
 -- ========================================================================
@@ -322,10 +330,46 @@ local function selectedRestoreMode()
     return value == "Momentum" and "momentum" or "normal"
 end
 
-local function comingSoon(feature)
-    return function(enabled)
-        notify(feature .. (enabled and " enabled" or " disabled") .. " (coming soon)", 2.5)
+-- Largada no reinicio. Os nomes do menu dizem o que acontece; Race.* usa os
+-- ids internos. Reaplicada a cada especial, quando o modo da sessao ja e
+-- conhecido; `quiet` evita avisos fora da especial.
+local startModes = { "Normal", "No countdown", "Automatic", "On throttle" }
+local startModeIds = {
+    ["Normal"] = "normal",
+    ["No countdown"] = "no_countdown",
+    ["Automatic"] = "automatic",
+    ["On throttle"] = "on_throttle",
+}
+
+local function applyStartMode(label, quiet)
+    local mode = startModeIds[label] or "normal"
+    if mode ~= "normal" and Safety.isRestrictedMode() then
+        if not quiet then
+            notify("Race start options blocked in competitive modes!", 3.0)
+        end
+        mode = "normal"
     end
+    if not Race.setStartMode(mode) and mode ~= "normal" and not quiet then
+        notify("Race start options unavailable (hook not loaded).", 3.0)
+    end
+end
+
+local function selectedStartMode()
+    local _, value = Menu.get("race_start")
+    return value
+end
+
+-- Fantasma (GhostLab no core). Quantos carros fantasma, o fantasma solido e as
+-- teclas de pesquisa ficam no mod Debug Mode.
+local ghostShift = { "0 s", "+1 s", "+2 s", "+5 s", "-1 s", "-2 s", "-5 s" }
+
+local function seconds(label)
+    return tonumber((label or "0"):match("([+-]?%d+)")) or 0
+end
+
+local function applyGhostShift()
+    local _, shift = Menu.get("ghost_time_shift")
+    Ghost.setTimeOffset(seconds(shift))
 end
 
 -- Native menu: Pause > DR2 Hook > Mods > Practice Mode
@@ -335,17 +379,53 @@ Menu.button("restore_checkpoint", "Restore checkpoint", function()
 end)
 Menu.choice("restore_mode", "Restore mode", restoreModes, 1)
 Menu.toggle("clear_on_stage_start", "Clear checkpoint on new stage", true)
-Menu.toggle("indestructible_tyres", "Indestructible tyres", false,
-    comingSoon("Indestructible tyres"))
-Menu.toggle("indestructible_car", "Indestructible car", false,
-    comingSoon("Indestructible car"))
+Menu.choice("race_start", "Race start", startModes, 1,
+    function(_, value) applyStartMode(value, true) end)
+Menu.toggle("ghost_gap", "Live gap to ghost", true,
+    function(enabled) Ghost.setHud(enabled) end)
+Menu.choice("ghost_time_shift", "Ghost head start", ghostShift, 1,
+    function() applyGhostShift() end)
 Menu.toggle("notifications", "Notifications", true)
 
+-- Texto do painel da direita para a linha em foco.
+Menu.describe("save_checkpoint",
+    "Saves the car's position, rotation and speed right now. Shortcut: *F5*.")
+Menu.describe("restore_checkpoint",
+    "Puts the car back at the saved checkpoint, using the restore mode below. "
+    .. "Shortcuts: *F6* (normal) and *F7* (with momentum).")
+Menu.describe("restore_mode",
+    "*Normal:* the car comes back stopped, with the suspension settled.\n"
+    .. "*Momentum:* it keeps the speed and spin it had when saved.")
+Menu.describe("clear_on_stage_start",
+    "Forgets the checkpoint when a new stage starts. Restarting the same stage keeps it.")
+Menu.describe("race_start",
+    "How every start works, restarts included.\n\n"
+    .. "*Normal:* hold the handbrake and wait for the 5 lights.\n"
+    .. "*No countdown:* hold the handbrake and go at once.\n"
+    .. "*Automatic:* go as soon as the car is on the line.\n"
+    .. "*On throttle:* go when you press the throttle.")
+Menu.describe("ghost_gap",
+    "Shows at the top of the screen how far you are from the ghost.\n\n"
+    .. "*Red:* seconds behind. *Green:* seconds ahead. The metres are the distance along the road.")
+Menu.describe("ghost_time_shift",
+    "Moves every ghost in time. *+2 s:* the ghost runs 2 seconds ahead of its real run.")
+Menu.describe("notifications", "Shows on-screen messages for checkpoints and race start options.")
+
 function onInit()
+    applyStartMode(selectedStartMode(), true)
+    Ghost.setHud(Menu.get("ghost_gap"))
+    applyGhostShift()
     print("[Practice Mode] Loaded! Press F5 to save checkpoint, F6 to restore, F7 for momentum.")
 end
 
+function onStageLoad(stage)
+    applyStartMode(selectedStartMode(), false)
+end
+
 function onStageStart(stage)
+    if stage.restart then
+        return
+    end
     if Menu.get("clear_on_stage_start") then
         savedState = nil
     end

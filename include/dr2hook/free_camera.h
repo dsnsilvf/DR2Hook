@@ -20,6 +20,8 @@ public:
   static void OnFrame(HWND hwnd);
   // 1 quando a mensagem foi consumida e não deve seguir para o jogo.
   static int OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  // true com a câmera livre ligada.
+  static bool Enabled();
   // Comandos remotos (`cam`): posição do olho e alvo em metros do mundo. A pose só é
   // aplicada com a câmera livre ligada (F9, ou `key f9`).
   static std::string RemoteLookAt(float ex, float ey, float ez, float tx, float ty, float tz);
@@ -27,7 +29,6 @@ public:
   // Elo com o editor (LiveLink): ligar/desligar sem o F9 (`who` vai para o log, ex. " (editor)"),
   // olho e frente em metros do mundo (aplicados no próximo tick; só com a câmera livre ligada)
   // e quantos passos o mouse/teclado do jogo já deram nela (sobe quando o jogador a move).
-  static bool Enabled();
   static void SetEnabled(bool enable, const char *who);
   static bool RemoteLook(const float eye[3], const float forward[3]);
   static uint32_t LocalMoves();
